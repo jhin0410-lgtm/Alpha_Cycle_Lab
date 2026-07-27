@@ -5,14 +5,13 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
 import yaml
-
 
 PATH_SUMMARY_COLUMNS = [
     "scenario",
@@ -48,6 +47,13 @@ def _finite(value: float, label: str) -> float:
     if not math.isfinite(converted):
         raise ValueError(f"{label} must be finite")
     return converted
+
+
+def _number(value: Any, label: str) -> float:
+    try:
+        return _finite(float(value), label)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be numeric and finite") from exc
 
 
 @dataclass(frozen=True)
@@ -119,7 +125,8 @@ class StressConfig:
     factor_scenarios: tuple[FactorStressScenario, ...] = ()
 
     def __post_init__(self) -> None:
-        names = [scenario.name for scenario in (*self.path_scenarios, *self.factor_scenarios)]
+        names = [scenario.name for scenario in self.path_scenarios]
+        names.extend(scenario.name for scenario in self.factor_scenarios)
         folded = [name.casefold() for name in names]
         if len(folded) != len(set(folded)):
             raise ValueError("Scenario names must be unique across the stress configuration")
@@ -140,11 +147,16 @@ class StressTestResult:
 def _parse_date(value: Any, label: str) -> date | None:
     if value is None:
         return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Invalid {label}: {value}")
     try:
-        parsed = pd.to_datetime(value, errors="raise")
-    except (TypeError, ValueError) as exc:
+        return date.fromisoformat(value.strip())
+    except ValueError as exc:
         raise ValueError(f"Invalid {label}: {value}") from exc
-    return parsed.date()
 
 
 def _mapping_list(raw: Any, label: str) -> list[dict[str, Any]]:
@@ -177,10 +189,19 @@ def load_stress_config(path: str | Path) -> StressConfig:
         path_scenarios.append(
             PathStressScenario(
                 name=str(item.get("name", "")),
-                recurring_shift_bps=float(item.get("recurring_shift_bps", 0.0)),
-                volatility_multiplier=float(item.get("volatility_multiplier", 1.0)),
-                cost_drag_bps=float(item.get("cost_drag_bps", 0.0)),
-                one_time_shock=float(item.get("one_time_shock", 0.0)),
+                recurring_shift_bps=_number(
+                    item.get("recurring_shift_bps", 0.0),
+                    "recurring_shift_bps",
+                ),
+                volatility_multiplier=_number(
+                    item.get("volatility_multiplier", 1.0),
+                    "volatility_multiplier",
+                ),
+                cost_drag_bps=_number(item.get("cost_drag_bps", 0.0), "cost_drag_bps"),
+                one_time_shock=_number(
+                    item.get("one_time_shock", 0.0),
+                    "one_time_shock",
+                ),
                 shock_date=_parse_date(item.get("shock_date"), "shock_date"),
             )
         )
@@ -190,10 +211,14 @@ def load_stress_config(path: str | Path) -> StressConfig:
         shocks = item.get("shocks")
         if not isinstance(shocks, dict):
             raise ValueError("Factor scenario shocks must be a YAML mapping")
+        normalized_shocks = {
+            str(key): _number(value, f"shock for {key}")
+            for key, value in shocks.items()
+        }
         factor_scenarios.append(
             FactorStressScenario(
                 name=str(item.get("name", "")),
-                shocks={str(key): float(value) for key, value in shocks.items()},
+                shocks=normalized_shocks,
             )
         )
     return StressConfig(tuple(path_scenarios), tuple(factor_scenarios))
@@ -332,14 +357,18 @@ def _factor_stress_rows(
     raw_betas = factor_attribution.get("betas")
     if not isinstance(raw_betas, dict):
         raise ValueError("Factor attribution summary does not contain betas")
-    betas = {str(key): float(value) for key, value in raw_betas.items()}
-    alpha = _finite(float(factor_attribution.get("alpha_periodic", 0.0)), "alpha_periodic")
+    betas = {
+        str(key): _number(value, f"beta for {key}")
+        for key, value in raw_betas.items()
+    }
+    alpha = _number(factor_attribution.get("alpha_periodic", 0.0), "alpha_periodic")
     rows: list[dict[str, object]] = []
     for scenario in scenarios:
         unknown = sorted(set(scenario.shocks) - set(betas))
         if unknown:
             raise ValueError(
-                f"Factor scenario {scenario.name} references unknown factors: {', '.join(unknown)}"
+                f"Factor scenario {scenario.name} references unknown factors: "
+                f"{', '.join(unknown)}"
             )
         contributions = {
             factor: betas[factor] * shock
@@ -351,7 +380,16 @@ def _factor_stress_rows(
             raise ValueError(
                 f"Factor scenario {scenario.name} produced an invalid simple return: {estimated}"
             )
-        annualized = (1.0 + estimated) ** periods_per_year - 1.0
+        try:
+            annualized = (1.0 + estimated) ** periods_per_year - 1.0
+        except OverflowError as exc:
+            raise ValueError(
+                f"Factor scenario {scenario.name} annualized return overflowed"
+            ) from exc
+        if not math.isfinite(annualized):
+            raise ValueError(
+                f"Factor scenario {scenario.name} annualized return must be finite"
+            )
         rows.append(
             {
                 "scenario": scenario.name,
