@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
 
@@ -96,8 +96,7 @@ def _optional_decimal(value: Any) -> Decimal | None:
 def _optional_date(value: Any) -> date | None:
     if pd.isna(value):
         return None
-    parsed = pd.to_datetime(value, errors="raise")
-    return parsed.date()
+    return pd.Timestamp(value).date()
 
 
 def validate_corporate_actions(
@@ -154,7 +153,7 @@ def validate_corporate_actions(
         elif action_type is CorporateActionType.STOCK_DIVIDEND:
             if ratio is None or ratio <= 0:
                 raise ValueError("Stock dividends require a positive ratio")
-        if row.record_date is not None and row.pay_date is not None:
+        if not pd.isna(row.record_date) and not pd.isna(row.pay_date):
             if row.pay_date < row.record_date:
                 raise ValueError("pay_date cannot precede record_date")
         if calendar is not None and not calendar.is_session(row.effective_date):
@@ -210,8 +209,8 @@ class CorporateActionStore:
         return CorporateAction(
             ticker=str(row["ticker"]),
             action_type=CorporateActionType(str(row["action_type"])),
-            effective_date=row["effective_date"],
-            available_date=row["available_date"],
+            effective_date=cast(date, row["effective_date"]),
+            available_date=cast(date, row["available_date"]),
             source=str(row["source"]),
             revision_id=str(row["revision_id"]),
             ratio=_optional_decimal(row["ratio"]),
@@ -286,7 +285,8 @@ class UniverseMembershipStore:
                 | (session < self._data["member_to"])
             )
         ]
-        return tuple(sorted(rows["ticker"].astype(str).unique()))
+        tickers = (str(value) for value in rows["ticker"].tolist())
+        return tuple(sorted(set(tickers)))
 
     def is_member(
         self,
