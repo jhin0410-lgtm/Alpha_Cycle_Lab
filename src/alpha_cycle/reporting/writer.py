@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from alpha_cycle.backtest.engine import BacktestResult
+from alpha_cycle.reporting.attribution import AttributionResult
 
 ORDER_COLUMNS = [
     "order_id",
@@ -66,6 +67,15 @@ CORPORATE_ACTION_COLUMNS = [
 ]
 
 
+def _attribution_payload(attribution: AttributionResult) -> dict[str, Any]:
+    return {
+        "benchmark_id": attribution.benchmark_id,
+        "alignment_policy": attribution.alignment_policy.value,
+        "benchmark_metrics": attribution.benchmark_metrics,
+        "factor_attribution": attribution.factor_attribution,
+    }
+
+
 def write_outputs(
     output_dir: Path,
     result: BacktestResult,
@@ -73,6 +83,7 @@ def write_outputs(
     *,
     strategy_name: str | None = None,
     initial_cash: Decimal | None = None,
+    attribution: AttributionResult | None = None,
 ) -> list[Path]:
     """Create all documented CSV, JSON, and Markdown outputs."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -99,19 +110,45 @@ def write_outputs(
             columns=CORPORATE_ACTION_COLUMNS,
         ),
     }
+    if attribution is not None:
+        files["benchmark_alignment.csv"] = attribution.aligned_returns.copy()
+
     written: list[Path] = []
     for name, frame in files.items():
         path = output_dir / name
         frame.to_csv(path, index=False)
         written.append(path)
+
     metrics_path = output_dir / "metrics.json"
     metrics_path.write_text(
         json.dumps(metrics, indent=2, sort_keys=True, ensure_ascii=False),
         encoding="utf-8",
     )
     written.append(metrics_path)
+
+    attribution_lines = ""
+    if attribution is not None:
+        attribution_path = output_dir / "attribution_summary.json"
+        attribution_path.write_text(
+            json.dumps(
+                _attribution_payload(attribution),
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        written.append(attribution_path)
+        attribution_lines = (
+            "\n## Benchmark and Factor Attribution\n\n"
+            f"- Benchmark: {attribution.benchmark_id}\n"
+            f"- Alignment policy: {attribution.alignment_policy.value}\n"
+            f"- Aligned observations: {len(attribution.aligned_returns)}\n"
+            f"- Factor model: {'enabled' if attribution.factor_attribution else 'not provided'}\n"
+        )
+
     report_path = output_dir / "backtest_report.md"
-    metric_lines = "\n".join(f"- `{key}`: {value:.6f}" for key, value in metrics.items())
+    metric_lines = "\n".join(f"- `{key}`: {float(value):.6f}" for key, value in metrics.items())
     report_path.write_text(
         "# Backtest Report\n\n"
         "Research simulation only; this is not investment advice or a performance claim.\n\n"
@@ -122,7 +159,8 @@ def write_outputs(
         f"- Fills: {len(result.fills)}\n"
         f"- Corporate actions applied: {len(result.corporate_actions)}\n\n"
         "## Metrics\n\n"
-        f"{metric_lines}\n",
+        f"{metric_lines}\n"
+        f"{attribution_lines}",
         encoding="utf-8",
     )
     written.append(report_path)
