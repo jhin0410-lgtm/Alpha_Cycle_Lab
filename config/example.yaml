@@ -5,6 +5,11 @@ backtest:
   rebalance_frequency: monthly
   periods_per_year: 252
   risk_free_rate: 0.0
+execution:
+  order_type: market
+  time_in_force: day
+  limit_offset_bps: 0
+  max_volume_participation: 1.0
 costs:
   buy_commission_rate: 0.0
   sell_commission_rate: 0.0
@@ -21,4 +26,3 @@ risk:
   max_order_value: null
   max_daily_loss: 0.05
   max_portfolio_drawdown: 0.20
-
