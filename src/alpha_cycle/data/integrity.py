@@ -130,11 +130,14 @@ def validate_corporate_actions(
     duplicate_key = ["ticker", "action_type", "effective_date"]
     if data.duplicated(duplicate_key).any():
         raise ValueError("Duplicate corporate-action event detected")
-    for row in data.itertuples(index=False):
-        action_type = CorporateActionType(str(row.action_type))
-        ratio = _optional_decimal(row.ratio)
-        cash_amount = _optional_decimal(row.cash_amount)
-        currency = None if pd.isna(row.currency) else str(row.currency).strip()
+    for _, row in data.iterrows():
+        action_type = CorporateActionType(str(row["action_type"]))
+        ratio = _optional_decimal(row["ratio"])
+        cash_amount = _optional_decimal(row["cash_amount"])
+        currency = None if pd.isna(row["currency"]) else str(row["currency"]).strip()
+        effective_date = cast(date, row["effective_date"])
+        record_date = _optional_date(row["record_date"])
+        pay_date = _optional_date(row["pay_date"])
         if action_type in {
             CorporateActionType.SPLIT,
             CorporateActionType.REVERSE_SPLIT,
@@ -153,13 +156,13 @@ def validate_corporate_actions(
         elif action_type is CorporateActionType.STOCK_DIVIDEND:
             if ratio is None or ratio <= 0:
                 raise ValueError("Stock dividends require a positive ratio")
-        if not pd.isna(row.record_date) and not pd.isna(row.pay_date):
-            if row.pay_date < row.record_date:
+        if record_date is not None and pay_date is not None:
+            if pay_date < record_date:
                 raise ValueError("pay_date cannot precede record_date")
-        if calendar is not None and not calendar.is_session(row.effective_date):
+        if calendar is not None and not calendar.is_session(effective_date):
             raise ValueError(
                 "Corporate action effective date is not a trading session: "
-                f"{row.effective_date}"
+                f"{effective_date}"
             )
     return data.loc[:, canonical_columns].sort_values(
         ["effective_date", "ticker", "action_type", "revision_id"],
@@ -248,15 +251,17 @@ def validate_universe_membership(frame: pd.DataFrame) -> pd.DataFrame:
     for _, group in ordered.groupby(["universe", "ticker"], sort=True):
         previous_end: date | None = None
         first_interval = True
-        for row in group.itertuples(index=False):
+        for _, row in group.iterrows():
+            member_from = cast(date, row["member_from"])
+            member_to = _optional_date(row["member_to"])
             if not first_interval:
                 if previous_end is None:
                     raise ValueError(
                         "Open-ended membership cannot be followed by another interval"
                     )
-                if row.member_from < previous_end:
+                if member_from < previous_end:
                     raise ValueError("Overlapping universe membership intervals detected")
-            previous_end = None if pd.isna(row.member_to) else row.member_to
+            previous_end = member_to
             first_interval = False
     return ordered
 
