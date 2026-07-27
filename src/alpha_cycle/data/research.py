@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
@@ -62,13 +63,26 @@ class MacroDataAdapter(Protocol):
 
 
 def _required_text(data: pd.DataFrame, column: str) -> None:
+    if data[column].isna().any():
+        raise ValueError(f"{column} cannot be missing")
     values = data[column].astype(str).str.strip()
     if values.eq("").any():
         raise ValueError(f"{column} cannot be empty")
     data[column] = values
 
 
+def _optional_dates(series: pd.Series[Any]) -> pd.Series[Any]:
+    def parse(value: Any) -> date | pd._libs.tslibs.nattype.NaTType:
+        if pd.isna(value):
+            return pd.NaT
+        return pd.Timestamp(value).date()
+
+    return series.map(parse)
+
+
 def _validate_revision_columns(data: pd.DataFrame) -> None:
+    if data[list(COMMON_REVISION_COLUMNS)].isna().any().any():
+        raise ValueError("Revision required values cannot be missing")
     for column in ("source", "revision_id"):
         _required_text(data, column)
     data["available_date"] = pd.to_datetime(
@@ -133,11 +147,21 @@ def validate_financial_statements(frame: pd.DataFrame) -> pd.DataFrame:
     canonical = [*FINANCIAL_REQUIRED, *FINANCIAL_OPTIONAL]
     if data.empty:
         return data.loc[:, canonical]
+    if data[list(FINANCIAL_REQUIRED)].isna().any().any():
+        raise ValueError("Financial required values cannot be missing")
     for column in ("ticker", "metric", "fiscal_period", "unit"):
         _required_text(data, column)
     data["period_end"] = pd.to_datetime(data["period_end"], errors="raise").dt.date
-    data["period_start"] = pd.to_datetime(data["period_start"], errors="coerce").dt.date
+    data["period_start"] = _optional_dates(data["period_start"])
     data["value"] = pd.to_numeric(data["value"], errors="raise")
+    if not data["value"].map(math.isfinite).all():
+        raise ValueError("Financial value must be finite")
+    currency_present = data["currency"].notna()
+    if currency_present.any():
+        currencies = data.loc[currency_present, "currency"].astype(str).str.strip()
+        if currencies.eq("").any():
+            raise ValueError("currency cannot be empty when provided")
+        data.loc[currency_present, "currency"] = currencies
     _validate_revision_columns(data)
     for _, row in data.iterrows():
         period_end = cast(date, row["period_end"])
@@ -167,12 +191,16 @@ def validate_macro_series(frame: pd.DataFrame) -> pd.DataFrame:
     data = frame.copy()
     if data.empty:
         return data.loc[:, list(MACRO_REQUIRED)]
+    if data[list(MACRO_REQUIRED)].isna().any().any():
+        raise ValueError("Macro required values cannot be missing")
     for column in ("series_id", "frequency", "unit"):
         _required_text(data, column)
     data["observation_date"] = pd.to_datetime(
         data["observation_date"], errors="raise"
     ).dt.date
     data["value"] = pd.to_numeric(data["value"], errors="raise")
+    if not data["value"].map(math.isfinite).all():
+        raise ValueError("Macro value must be finite")
     _validate_revision_columns(data)
     for _, row in data.iterrows():
         observation = cast(date, row["observation_date"])
@@ -275,7 +303,7 @@ class CsvMacroDataAdapter:
 
 @dataclass(frozen=True)
 class ResearchSnapshot:
-    """Immutable container of copies visible to a strategy on one evaluation date."""
+    """Immutable container of copies visible to research code on one evaluation date."""
 
     evaluation_date: date
     financials: pd.DataFrame
@@ -302,12 +330,12 @@ class ResearchDataPortal:
         financial_frame = (
             self.financials.as_of(evaluation_date, policy=self.revision_policy)
             if self.financials is not None
-            else pd.DataFrame(columns=FINANCIAL_REQUIRED)
+            else pd.DataFrame(columns=list(FINANCIAL_REQUIRED))
         )
         macro_frame = (
             self.macro.as_of(evaluation_date, policy=self.revision_policy)
             if self.macro is not None
-            else pd.DataFrame(columns=MACRO_REQUIRED)
+            else pd.DataFrame(columns=list(MACRO_REQUIRED))
         )
         return ResearchSnapshot(
             evaluation_date=evaluation_date,
