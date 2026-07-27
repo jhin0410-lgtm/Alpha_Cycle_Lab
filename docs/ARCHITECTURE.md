@@ -4,14 +4,16 @@
 
 ```text
 TradingCalendar
-→ MarketDataFeed / PriceBasis
+→ MarketDataFeed / PriceBasis / is_halted
 → CorporateActionStore
 → UniverseMembershipStore
 → Strategy
 → RebalanceSchedule
 → TargetPosition
+→ Order lifecycle queue
 → RiskManager
 → SimulatedBroker
+→ Fill(s)
 → Portfolio
 → Reporting
 ```
@@ -26,14 +28,27 @@ TradingCalendar
 포트폴리오 수량·평균원가·마지막 평가가격에 반영합니다. cash dividend, stock dividend,
 delisting은 안전한 회계 정책이 구현될 때까지 실행을 중단합니다.
 
-`next_open` 목표는 큐에 보관되었다가 다음 실제 거래 세션의 장 시작 시가로 주문화됩니다.
-마지막 거래일 목표는 실행 가격이 없으므로 체결되지 않습니다. `same_close`는 전략이 당일
-종가를 본 뒤 그 종가로 체결한다는 강한 가정이므로 사용자가 명시해야 합니다.
+`next_open` 목표는 큐에 보관되었다가 다음 실제 거래 세션에 주문으로 생성됩니다.
+`same_close`는 전략이 당일 종가를 본 뒤 주문을 생성한다는 강한 가정이므로 사용자가
+명시해야 합니다. 이미 열린 GTC 주문은 신규 목표 주문보다 먼저 다음 세션에서 체결을
+시도하며, 신규 목표 수량 계산은 열린 주문의 잔량을 예상 보유수량에 포함해 중복 주문을
+방지합니다.
+
+주문은 원수량과 `filled_quantity`, `remaining_quantity`를 분리합니다. DAY 주문은 해당
+일봉의 한 번의 체결 시도 후 잔량이 만료되고, GTC 주문은 `pending` 또는
+`partially_filled` 상태로 다음 세션에 이월됩니다. 여러 주문은 종목별 일일 거래량 참여
+한도를 공유합니다. 한 주문은 여러 `Fill`을 만들 수 있으며 각 체결에는 고유 `fill_id`가
+부여됩니다.
+
+시장가 주문은 선택한 open/close 기준가격에 슬리피지를 적용합니다. 지정가 주문은 일봉의
+high/low로 지정가 도달 여부만 판정합니다. 정확한 장중 체결 순서는 알 수 없으므로 지정가
+체결의 감사 timestamp는 해당 세션 close를 사용합니다. `is_halted=true`인 세션은 체결을
+만들지 않으며 DAY 잔량은 만료되고 GTC 잔량은 유지됩니다.
 
 포트폴리오는 `Decimal` 현금·원가·비용과 정수 수량을 사용합니다. 분할은 총 원가와 현금,
 실현손익을 바꾸지 않습니다. fractional share가 생기는 병합은 임의 반올림하지 않고
-중단합니다. 성과 비율은 pandas 입출력 경계 뒤에서 float로 계산합니다. 주문 ID, 정렬,
-전략 동률 처리와 감사 출력은 모두 결정론적입니다.
+중단합니다. 성과 비율은 pandas 입출력 경계 뒤에서 float로 계산합니다. 주문 ID, fill ID,
+정렬, 전략 동률 처리와 감사 출력은 모두 결정론적입니다.
 
 `BrokerAdapter`는 향후 확장 경계입니다. 현재 실행 가능한 구현은 네트워크를 쓰지 않는
 `SimulatedBroker`뿐입니다. `KISBrokerAdapter`는 문서화된 안전 스텁이고 언제나 예외를

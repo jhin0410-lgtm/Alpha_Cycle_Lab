@@ -57,16 +57,22 @@ class RiskManager:
         daily_order_notional: Decimal,
         peak_equity: Decimal,
         day_start_equity: Decimal,
+        proposed_quantity: int | None = None,
     ) -> RiskDecision:
-        """Evaluate one order against position, exposure, liquidity, and loss limits."""
+        """Evaluate the next proposed fill rather than the untouched order total."""
         if self.kill_switch and self.kill_switch.is_active():
             return RiskDecision(False, "kill_switch", "Kill switch is active")
         equity = portfolio.total_equity
         if equity <= 0:
             return RiskDecision(False, "non_positive_equity", "Portfolio equity is not positive")
-        if order.quantity <= 0:
-            return RiskDecision(False, "invalid_quantity", "Order quantity must be positive")
-        if self.config.max_order_value is not None and order.notional > self.config.max_order_value:
+        quantity = order.remaining_quantity if proposed_quantity is None else proposed_quantity
+        if quantity <= 0 or quantity > order.remaining_quantity:
+            return RiskDecision(False, "invalid_quantity", "Proposed quantity must be positive")
+        attempt_notional = order.reference_price * quantity
+        if (
+            self.config.max_order_value is not None
+            and attempt_notional > self.config.max_order_value
+        ):
             return RiskDecision(False, "max_order_value", "Order exceeds ticker order-value cap")
         current_position = portfolio.positions.get(order.ticker)
         is_new_position = (
@@ -79,16 +85,16 @@ class RiskManager:
         if is_new_position and open_positions >= self.config.max_positions:
             return RiskDecision(False, "max_positions", "Maximum position count exceeded")
         if trading_value <= 0 or (
-            order.notional / trading_value
+            attempt_notional / trading_value
             > Decimal(str(self.config.max_order_pct_of_trading_value))
         ):
             return RiskDecision(False, "liquidity", "Order exceeds trading-value participation cap")
         if (
-            daily_order_notional + order.notional
+            daily_order_notional + attempt_notional
         ) / equity > Decimal(str(self.config.max_daily_turnover)):
             return RiskDecision(False, "daily_turnover", "Daily turnover limit exceeded")
         current_value = portfolio.market_value(order.ticker)
-        signed = order.notional if order.side is Side.BUY else -order.notional
+        signed = attempt_notional if order.side is Side.BUY else -attempt_notional
         resulting_value = max(Decimal("0"), current_value + signed)
         if resulting_value / equity > Decimal(str(self.config.max_single_position)):
             return RiskDecision(False, "single_position", "Single-position limit exceeded")
@@ -102,7 +108,7 @@ class RiskManager:
         if day_start_equity > 0 and (
             day_start_equity - equity
         ) / day_start_equity > Decimal(str(self.config.max_daily_loss)):
-            return RiskDecision(False, "daily_loss", "Daily loss limit exceeded")
+            return RiskDecision(False, "daily_loss", "Portfolio daily-loss limit exceeded")
         if peak_equity > 0 and (
             peak_equity - equity
         ) / peak_equity > Decimal(str(self.config.max_portfolio_drawdown)):

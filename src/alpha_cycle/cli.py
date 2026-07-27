@@ -64,7 +64,11 @@ def _run_backtest(args: argparse.Namespace) -> None:
         feed,
         strategy,
         portfolio,
-        SimulatedBroker(config.commission, config.slippage),
+        SimulatedBroker(
+            config.commission,
+            config.slippage,
+            max_volume_participation=config.backtest.max_volume_participation,
+        ),
         RiskManager(config.risk),
         config.backtest,
         calendar=calendar,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 import pandas as pd
 
@@ -20,7 +21,7 @@ REQUIRED_COLUMNS = (
     "volume",
     "trading_value",
 )
-OPTIONAL_COLUMNS = ("adjusted_close", "market", "sector", "theme")
+OPTIONAL_COLUMNS = ("adjusted_close", "market", "sector", "theme", "is_halted")
 NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume", "trading_value")
 
 
@@ -34,6 +35,19 @@ class ValidationReport:
     end_date: date
     periods_by_ticker: dict[str, tuple[date, date, int]]
     age_days: int | None
+
+
+def _parse_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"true", "1", "yes", "y"}:
+        return True
+    if normalized in {"false", "0", "no", "n"}:
+        return False
+    raise ValueError(f"Invalid is_halted value: {value}")
 
 
 def validate_ohlcv(
@@ -61,16 +75,14 @@ def validate_ohlcv(
             raise ValueError(f"Negative values in {column}")
     if (data[["open", "high", "low", "close"]] <= 0).any().any():
         raise ValueError("Prices must be greater than zero")
-    if (
-        data["high"]
-        < data[["open", "close", "low"]].max(axis=1)
-    ).any():
+    if (data["high"] < data[["open", "close", "low"]].max(axis=1)).any():
         raise ValueError("high is below open, close, or low")
-    if (
-        data["low"]
-        > data[["open", "close", "high"]].min(axis=1)
-    ).any():
+    if (data["low"] > data[["open", "close", "high"]].min(axis=1)).any():
         raise ValueError("low is above open, close, or high")
+    if "is_halted" in data.columns:
+        if data["is_halted"].isna().any():
+            raise ValueError("is_halted cannot contain missing values")
+        data["is_halted"] = data["is_halted"].map(_parse_bool)
 
     data["ticker"] = data["ticker"].astype(str)
     data = data.sort_values(["date", "ticker"], kind="stable").reset_index(drop=True)

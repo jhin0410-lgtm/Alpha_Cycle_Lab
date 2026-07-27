@@ -3,12 +3,13 @@
 ## OHLCV
 
 필수 열은 `date,ticker,open,high,low,close,volume,trading_value`입니다.
-`adjusted_close,market,sector,theme`은 선택입니다. 날짜-종목 중복, 결측, 음수,
-0 이하 가격, 비정상 high/low를 거부합니다. 검증 결과에는 전체 기간, 종목별 시작·종료
-날짜와 행 수, 요청 시 최신성 차이가 포함됩니다. 데이터는 날짜·종목 순으로 안정 정렬됩니다.
+`adjusted_close,market,sector,theme,is_halted`는 선택입니다. 날짜-종목 중복, 결측, 음수,
+0 이하 가격, 비정상 high/low를 거부합니다. `is_halted`는 boolean, 0/1 또는 명확한
+true/false 문자열만 허용합니다. 검증 결과에는 전체 기간, 종목별 시작·종료 날짜와 행 수,
+요청 시 최신성 차이가 포함됩니다. 데이터는 날짜·종목 순으로 안정 정렬됩니다.
 
 날짜는 캘린더가 제공된 경우 반드시 실제 거래 세션이어야 합니다. 거래일은 ISO 날짜 형식으로
-저장하고, 체결/주문 timestamp는 ISO 8601 with timezone offset 형식으로 저장합니다.
+저장하고, 체결 timestamp는 ISO 8601 with timezone offset 형식으로 저장합니다.
 예: `2024-01-03T09:00:00+09:00`.
 
 ## Price Basis
@@ -20,6 +21,50 @@
 `adjusted_close`가 있어도 `close`를 자동 대체하지 않습니다. 백테스트 엔진은 실행과
 포트폴리오 평가에 `raw`만 허용합니다. 조정 가격과 기업행동 이벤트를 동시에 적용해
 이중 조정하지 않습니다.
+
+## Orders
+
+`orders.csv`는 주문당 한 행을 사용합니다.
+
+```text
+order_id,created_at,ticker,side,quantity,reference_price,status,rejection_reason,
+order_type,time_in_force,limit_price,filled_quantity,remaining_quantity,
+last_attempt_at,last_attempt_reason
+```
+
+- `order_type`: `market` 또는 `limit`
+- `time_in_force`: `day` 또는 `gtc`
+- `status`: `pending`, `partially_filled`, `filled`, `rejected`, `cancelled`, `expired`
+- `quantity`: 주문 원수량이며 변경되지 않음
+- `filled_quantity`: 모든 Fill의 누적 수량
+- `remaining_quantity = quantity - filled_quantity`
+- limit 주문은 양수 `limit_price`가 필수이고 market 주문은 limit_price를 가질 수 없음
+- DAY 주문은 해당 일봉의 한 번의 시도 후 잔량이 expired가 됨
+- GTC 주문은 잔량이 있으면 다음 데이터 세션으로 이월됨
+
+## Fills
+
+`fills.csv`는 개별 부분체결당 한 행을 사용합니다.
+
+```text
+fill_id,order_id,timestamp,ticker,side,quantity,price,commission,tax,slippage
+```
+
+`fill_id`는 전체 백테스트에서 고유하고 `order_id`는 여러 행에 반복될 수 있습니다. 각 Fill의
+수수료·세금·슬리피지는 해당 부분체결 수량에 대해서만 계산합니다. 일봉 지정가 체결은 실제
+장중 시각을 알 수 없으므로 세션 close timestamp를 사용합니다.
+
+## Execution Capacity and Halts
+
+종목별 세션 체결 한도는 다음과 같습니다.
+
+```text
+floor(volume * max_volume_participation)
+```
+
+같은 종목의 여러 주문은 이 수량을 공유합니다. `is_halted=true`인 행은 체결 가능 수량을
+사용하지 않고 모든 주문 시도를 차단합니다. 거래정지 여부를 가격 변화나 거래량 0만으로
+추정하지 않습니다.
 
 ## Corporate Actions
 
@@ -84,10 +129,12 @@ information_date까지 공개된 ticker만 정렬된 tuple로 반환합니다. �
 
 ## Audit Outputs
 
-기존 출력에 `corporate_actions.csv`가 추가됩니다. 기업행동이 없어도 다음 헤더를 가진
-빈 파일을 생성합니다.
+기업행동이 없어도 `corporate_actions.csv`는 다음 헤더를 가진 빈 파일을 생성합니다.
 
 ```text
 effective_date,ticker,action_type,ratio,quantity_before,quantity_after,
 average_cost_before,average_cost_after,cash_effect,status,reason
 ```
+
+주문이나 체결이 없어도 `orders.csv`, `fills.csv`, `trades.csv`는 위 계약의 헤더를
+유지합니다.

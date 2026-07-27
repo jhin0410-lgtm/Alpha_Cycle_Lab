@@ -12,6 +12,45 @@ import pandas as pd
 
 from alpha_cycle.backtest.engine import BacktestResult
 
+ORDER_COLUMNS = [
+    "order_id",
+    "created_at",
+    "ticker",
+    "side",
+    "quantity",
+    "reference_price",
+    "status",
+    "rejection_reason",
+    "order_type",
+    "time_in_force",
+    "limit_price",
+    "filled_quantity",
+    "remaining_quantity",
+    "last_attempt_at",
+    "last_attempt_reason",
+]
+FILL_COLUMNS = [
+    "fill_id",
+    "order_id",
+    "timestamp",
+    "ticker",
+    "side",
+    "quantity",
+    "price",
+    "commission",
+    "tax",
+    "slippage",
+]
+TRADE_COLUMNS = [
+    "fill_id",
+    "order_id",
+    "date",
+    "ticker",
+    "side",
+    "quantity",
+    "price",
+    "gross_value",
+]
 CORPORATE_ACTION_COLUMNS = [
     "effective_date",
     "ticker",
@@ -37,25 +76,24 @@ def write_outputs(
 ) -> list[Path]:
     """Create all documented CSV, JSON, and Markdown outputs."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    fill_rows = [
+        {
+            **asdict(fill),
+            "timestamp": fill.timestamp.isoformat(),
+            "side": fill.side.value,
+            "price": str(fill.price),
+            "commission": str(fill.commission),
+            "tax": str(fill.tax),
+            "slippage": str(fill.slippage),
+        }
+        for fill in result.fills
+    ]
     files = {
         "equity_curve.csv": pd.DataFrame(result.equity_curve),
         "positions.csv": pd.DataFrame(result.positions),
-        "orders.csv": pd.DataFrame(result.orders),
-        "fills.csv": pd.DataFrame(
-            [
-                {
-                    **asdict(fill),
-                    "timestamp": fill.timestamp.isoformat(),
-                    "side": fill.side.value,
-                    "price": str(fill.price),
-                    "commission": str(fill.commission),
-                    "tax": str(fill.tax),
-                    "slippage": str(fill.slippage),
-                }
-                for fill in result.fills
-            ]
-        ),
-        "trades.csv": pd.DataFrame(result.trades),
+        "orders.csv": pd.DataFrame(result.orders, columns=ORDER_COLUMNS),
+        "fills.csv": pd.DataFrame(fill_rows, columns=FILL_COLUMNS),
+        "trades.csv": pd.DataFrame(result.trades, columns=TRADE_COLUMNS),
         "corporate_actions.csv": pd.DataFrame(
             result.corporate_actions,
             columns=CORPORATE_ACTION_COLUMNS,
@@ -80,6 +118,8 @@ def write_outputs(
         "## Parameters\n\n"
         f"- Strategy: {strategy_name or 'unknown'}\n"
         f"- Initial cash: {initial_cash if initial_cash is not None else 'default'}\n"
+        f"- Orders: {len(result.orders)}\n"
+        f"- Fills: {len(result.fills)}\n"
         f"- Corporate actions applied: {len(result.corporate_actions)}\n\n"
         "## Metrics\n\n"
         f"{metric_lines}\n",
