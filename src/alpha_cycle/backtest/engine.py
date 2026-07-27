@@ -12,7 +12,11 @@ import pandas as pd
 
 from alpha_cycle.brokers.simulated import SimulatedBroker
 from alpha_cycle.calendar.base import TradingCalendar
-from alpha_cycle.calendar.rebalance import MonthlyRebalanceSchedule, WeeklyRebalanceSchedule
+from alpha_cycle.calendar.rebalance import (
+    MonthlyRebalanceSchedule,
+    RebalanceSchedule,
+    WeeklyRebalanceSchedule,
+)
 from alpha_cycle.data.market import MarketDataFeed
 from alpha_cycle.domain.models import Fill, Order, OrderStatus, Side, TargetPosition
 from alpha_cycle.portfolio.portfolio import Portfolio
@@ -71,12 +75,14 @@ class BacktestEngine:
         self.broker = broker
         self.risk = risk_manager
         self.config = config
-        self.calendar = calendar or getattr(feed, "calendar", None)
-        self._rebalance_schedule = self._build_rebalance_schedule(config)
+        self.calendar = calendar or feed.calendar
+        self._rebalance_schedule: RebalanceSchedule | None = self._build_rebalance_schedule(
+            config
+        )
         self._order_sequence = 0
 
     @staticmethod
-    def _build_rebalance_schedule(config: BacktestConfig):
+    def _build_rebalance_schedule(config: BacktestConfig) -> RebalanceSchedule | None:
         frequency = (config.rebalance_frequency or "every_session").lower()
         if frequency == "every_session":
             return None
@@ -183,11 +189,13 @@ class BacktestEngine:
             )
 
     def _should_rebalance(self, event_date: date) -> bool:
-        if self._rebalance_schedule is None:
+        schedule = self._rebalance_schedule
+        calendar = self.calendar
+        if schedule is None:
             return True
-        if self.calendar is None:
+        if calendar is None:
             return True
-        return self._rebalance_schedule.should_rebalance(event_date, self.calendar)
+        return bool(schedule.should_rebalance(event_date, calendar))
 
     def _execution_timestamp(self, event_date: date, *, close: bool) -> datetime:
         if self.calendar is None:
