@@ -15,17 +15,23 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - name: Capture Ruff auto-fix
+      - name: Apply Ruff auto-fix for diagnostics
+        run: ruff check . --fix
+      - name: Run mypy diagnostics
+        id: mypy
         shell: bash
         run: |
-          ruff check . --fix || true
-          git diff > ruff-fix.diff
-          ruff check . > ruff.log 2>&1
+          set +e
+          mypy > mypy.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          cat mypy.log
+          exit 0
       - uses: actions/upload-artifact@v4
         with:
-          name: ruff-fix-${{ matrix.python-version }}
-          path: |
-            ruff-fix.diff
-            ruff.log
-      - run: mypy
+          name: mypy-diagnostics-${{ matrix.python-version }}
+          path: mypy.log
+      - name: Enforce mypy result
+        shell: bash
+        run: exit "${{ steps.mypy.outputs.status }}"
       - run: pytest
