@@ -1,0 +1,24 @@
+# All rates below are illustrative research settings, not current broker/market rates.
+backtest:
+  initial_cash: 80000000
+  execution_price: next_open
+  rebalance_frequency: monthly
+  periods_per_year: 252
+  risk_free_rate: 0.0
+costs:
+  buy_commission_rate: 0.0
+  sell_commission_rate: 0.0
+  sell_tax_rate: 0.0
+  slippage_bps: 5
+  fixed_slippage: 0.0
+portfolio:
+  max_positions: 10
+  max_single_position: 0.25
+  max_gross_exposure: 1.0
+risk:
+  max_daily_turnover: 0.40
+  max_order_pct_of_trading_value: 0.01
+  max_order_value: null
+  max_daily_loss: 0.05
+  max_portfolio_drawdown: 0.20
+

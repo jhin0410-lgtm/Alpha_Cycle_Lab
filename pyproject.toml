@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpha-cycle-lab"
+version = "0.1.0"
+description = "Deterministic event-driven research backtesting core"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "License under review; see LICENSE"}
+dependencies = [
+  "pandas>=2.2,<4",
+  "PyYAML>=6.0,<7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.14,<2",
+  "pandas-stubs>=2.2",
+  "pytest>=8.3,<10",
+  "ruff>=0.9,<1",
+  "types-PyYAML>=6.0",
+]
+
+[project.scripts]
+alpha-cycle = "alpha_cycle.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["alpha_cycle"]
+mypy_path = "src"
+

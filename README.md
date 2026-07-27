@@ -1,0 +1,66 @@
+# Alpha Cycle Lab
+
+개인 투자 연구를 위한 결정론적 이벤트 기반 백테스트 코어입니다. Python 3.12와
+`src` 레이아웃을 사용하며, 전략·주문·위험관리·체결·포트폴리오 회계를 분리합니다.
+
+> 이 프로젝트는 교육 및 연구 목적이며 투자 추천 프로그램이 아닙니다. 실전 주문 기능은
+> 없고 의도적으로 비활성화되어 있습니다. 포함된 예제 전략과 fixture의 결과는 실제 성과
+> 주장이 아니며 미래 수익을 보장하지 않습니다.
+
+## 현재 구현 범위
+
+- 일봉 OHLCV 계약, 정합성·기간·최신성 검사와 시간순 피드
+- `available_date`로 공개 시점을 강제하는 Point-in-Time 계약
+- 목표 비중 기반 장기 전용 다종목 포트폴리오와 정수 주식 주문
+- 다음 거래일 시가(기본) 또는 명시적 당일 종가 체결
+- 매수/매도 수수료, 매도세, 고정/비율 슬리피지
+- 단일종목, 총익스포저, 회전율, 유동성, 일손실, 낙폭 제한과 구조화된 거절
+- 연구 검증용 Buy-and-Hold 및 횡단면 모멘텀 예제
+- 성과지표와 7개 감사 출력 파일, YAML 설정, CLI
+- 추상 `BrokerAdapter`, 로컬 `SimulatedBroker`, 항상 비활성인 KIS 안전 스텁
+
+공매도, 레버리지, 실시간 데이터, 실전 증권사 주문, 자동매매는 지원하지 않습니다.
+
+## 설치와 실행
+
+```bash
+python -m pip install -e ".[dev]"
+python -m alpha_cycle.cli backtest --input data/sample/prices.csv --strategy momentum --initial-cash 80000000 --config config/example.yaml --output outputs/momentum_test
+```
+
+Windows PowerShell과 POSIX 셸 모두에서 위 한 줄 명령을 사용할 수 있습니다. 예제 CSV는
+프로그램 검증용 합성 데이터일 뿐입니다. 실행 후 `equity_curve.csv`, `positions.csv`,
+`orders.csv`, `fills.csv`, `trades.csv`, `metrics.json`, `backtest_report.md`가 생성됩니다.
+
+```bash
+python -m pytest
+python -m ruff check .
+python -m mypy
+```
+
+## 주요 한계
+
+백테스트는 데이터에 존재하는 종목만 보므로 survivorship bias가 남을 수 있습니다.
+Point-in-Time 계약과 다음 날 체결은 look-ahead bias를 줄이지만 원천 데이터의 실제 공개
+시각까지 보증하지 않습니다. 체결은 일봉 기반 단순 모델이고 시장 충격, 호가, 거래정지,
+부분체결을 재현하지 않습니다. 거래비용 설정은 예시이며 특정 시장이나 증권사의 현재
+요율이 아닙니다. 날짜는 입력의 거래일(시간대 없는 ISO 날짜), 체결 시각은 감사용 UTC
+09:00으로 기록합니다.
+
+## 구조
+
+```text
+src/alpha_cycle/
+  data/ domain/ strategies/ portfolio/ risk/
+  backtest/ brokers/ reporting/ cli.py config.py
+tests/
+  unit/ integration/
+config/  data/sample/  docs/  .github/workflows/
+```
+
+설계 상세는 [ARCHITECTURE](docs/ARCHITECTURE.md), 가정은
+[BACKTEST_ASSUMPTIONS](docs/BACKTEST_ASSUMPTIONS.md), 데이터 계약은
+[DATA_CONTRACTS](docs/DATA_CONTRACTS.md), 공개 저장소 지침은
+[SECURITY](docs/SECURITY.md)를 참고하십시오. 향후 계획은 [ROADMAP](docs/ROADMAP.md)에
+정리되어 있습니다.
+
