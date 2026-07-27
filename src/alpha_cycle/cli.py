@@ -41,7 +41,10 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--top-k", type=int, default=4)
     backtest.add_argument("--rebalance-every", type=int, default=1)
     backtest.add_argument("--benchmark", type=Path, help="long-form benchmark return CSV")
-    backtest.add_argument("--benchmark-id", help="benchmark identifier when CSV has multiple series")
+    backtest.add_argument(
+        "--benchmark-id",
+        help="benchmark identifier when CSV has multiple series",
+    )
     backtest.add_argument("--factors", type=Path, help="long-form factor return CSV")
     backtest.add_argument(
         "--alignment-policy",
