@@ -32,7 +32,10 @@ def load_config(path: Path | None = None, *, initial_cash: Decimal | None = None
     """Load supported YAML keys with safe research-only defaults."""
     raw: dict[str, Any] = {}
     if path is not None:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise ValueError(f"Invalid YAML configuration: {exc}") from exc
         if loaded is not None and not isinstance(loaded, dict):
             raise ValueError("Configuration root must be a YAML mapping")
         raw = loaded or {}
