@@ -89,7 +89,10 @@ def test_strict_alignment_rejects_missing_dates_and_inner_drops_them() -> None:
 
 def test_multiple_benchmarks_require_explicit_identifier() -> None:
     benchmark = pd.concat(
-        [benchmark_frame([0.01, 0.02], benchmark="KOSPI"), benchmark_frame([0.0, 0.01], benchmark="KOSDAQ")],
+        [
+            benchmark_frame([0.01, 0.02], benchmark="KOSPI"),
+            benchmark_frame([0.0, 0.01], benchmark="KOSDAQ"),
+        ],
         ignore_index=True,
     )
     with pytest.raises(ValueError, match="benchmark-id"):
