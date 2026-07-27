@@ -22,6 +22,57 @@ true/false 문자열만 허용합니다. 검증 결과에는 전체 기간, 종�
 포트폴리오 평가에 `raw`만 허용합니다. 조정 가격과 기업행동 이벤트를 동시에 적용해
 이중 조정하지 않습니다.
 
+## Financial Statements
+
+필수 열은 다음과 같습니다.
+
+```text
+ticker,metric,period_end,fiscal_period,value,unit,
+available_date,retrieved_at,source,revision_id,revision_sequence
+```
+
+선택 열은 `period_start,currency`입니다. 자연키는
+`ticker,metric,period_end,fiscal_period`입니다.
+
+- `available_date >= period_end`
+- `retrieved_at >= available_date`
+- `revision_sequence`는 0 이상의 정수
+- 같은 자연키에서 revision_sequence와 revision_id는 각각 고유
+- revision_sequence가 증가할수록 available_date가 과거로 역행할 수 없음
+- period_start가 있으면 `period_start <= period_end`
+
+`FinancialStatementStore.as_of(D, policy=...)`는 D까지 공개된 revision만 사용합니다.
+`ticker`와 `metric` 필터를 선택적으로 적용할 수 있습니다.
+
+## Macro Series
+
+필수 열은 다음과 같습니다.
+
+```text
+series_id,observation_date,frequency,value,unit,
+available_date,retrieved_at,source,revision_id,revision_sequence
+```
+
+자연키는 `series_id,observation_date`입니다.
+
+- `available_date >= observation_date`
+- `retrieved_at >= available_date`
+- revision_sequence와 revision_id는 자연키 안에서 각각 고유
+- 수정 순서가 증가할 때 공개일이 과거로 역행할 수 없음
+
+`MacroSeriesStore.as_of(D, policy=...)`는 D까지 공개된 revision만 반환하며 series_id로
+필터링할 수 있습니다.
+
+## Revision Policy
+
+- `first_release`: 평가일까지 공개된 값 중 자연키별 최초 공개 revision을 고정
+- `latest_known`: 평가일까지 공개된 값 중 자연키별 최신 revision을 선택
+
+어느 정책도 평가일 이후 공개되는 수정치를 과거에 소급 노출하지 않습니다.
+`ResearchDataPortal.snapshot(D)`는 재무와 거시 저장소에 동일한 정책을 적용하고 방어적
+복사본을 반환합니다. 현재 `CsvFinancialDataAdapter`와 `CsvMacroDataAdapter`는 로컬 파일만
+읽으며 네트워크를 사용하지 않습니다.
+
 ## Orders
 
 `orders.csv`는 주문당 한 행을 사용합니다.
@@ -120,12 +171,13 @@ strict 모드에서는 `available_date <= member_from`을 요구합니다.
 information_date까지 공개된 ticker만 정렬된 tuple로 반환합니다. 현재 구성종목을 과거
 전체 기간에 소급 적용하지 않습니다.
 
-## Point-in-Time
+## Generic Point-in-Time
 
 필수 열은 `observation_date,available_date,retrieved_at,source,revision_id`입니다.
 `available_date`는 관측일보다 빠를 수 없습니다. `PointInTimeStore.as_of(D)`는
 `available_date <= D`인 행만 복사해 반환하므로 미래 공개 데이터를 차단합니다.
-실제 공개 시각과 개정 이력의 품질은 공급자가 보증해야 합니다.
+수정치 선택이 필요한 재무·거시 데이터는 위 전용 저장소와 revision_sequence 계약을
+사용합니다. 실제 공개 시각과 개정 이력의 품질은 공급자가 보증해야 합니다.
 
 ## Audit Outputs
 
