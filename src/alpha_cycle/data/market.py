@@ -92,12 +92,12 @@ class MarketDataFeed:
         self.data, self.report = validate_ohlcv(data)
         self._dates = sorted(self.data["date"].unique())
         self.calendar = calendar
-        if self.calendar is not None:
-            self._validate_calendar_dates()
+        if calendar is not None:
+            self._validate_calendar_dates(calendar)
 
-    def _validate_calendar_dates(self) -> None:
+    def _validate_calendar_dates(self, calendar: TradingCalendar) -> None:
         for event_date in self._dates:
-            if not self.calendar.is_session(event_date):
+            if not calendar.is_session(event_date):
                 raise ValueError(f"Market data contains non-trading session date {event_date}")
         for previous, current in zip(self._dates, self._dates[1:], strict=False):
             if current <= previous:
@@ -120,4 +120,3 @@ class MarketDataFeed:
     def history_through(self, event_date: date) -> pd.DataFrame:
         """Return only information available on or before the event date."""
         return self.data.loc[self.data["date"] <= event_date].copy()
-
