@@ -14,6 +14,7 @@ import yaml
 from alpha_cycle.backtest.engine import BacktestConfig, ExecutionPrice
 from alpha_cycle.brokers.simulated import CommissionModel, SlippageModel
 from alpha_cycle.calendar.sessions import ExplicitTradingCalendar
+from alpha_cycle.domain.models import OrderType, TimeInForce
 from alpha_cycle.risk.manager import RiskConfig
 
 
@@ -58,6 +59,7 @@ def load_config(path: Path | None = None, *, initial_cash: Decimal | None = None
             raise ValueError("Configuration root must be a YAML mapping")
         raw = loaded or {}
     backtest = raw.get("backtest", {})
+    execution = raw.get("execution", {})
     costs = raw.get("costs", {})
     portfolio = raw.get("portfolio", {})
     risk = raw.get("risk", {})
@@ -85,6 +87,13 @@ def load_config(path: Path | None = None, *, initial_cash: Decimal | None = None
             risk_free_rate=float(backtest.get("risk_free_rate", 0.0)),
             rebalance_frequency=str(backtest.get("rebalance_frequency", "every_session")),
             rebalance_anchor=str(backtest.get("rebalance_anchor", "first_session")),
+            order_type=OrderType(execution.get("order_type", "market")),
+            time_in_force=TimeInForce(execution.get("time_in_force", "day")),
+            limit_offset_bps=_decimal(execution.get("limit_offset_bps")),
+            max_volume_participation=_decimal(
+                execution.get("max_volume_participation"),
+                "1",
+            ),
         ),
         commission=CommissionModel(
             buy_rate=_decimal(costs.get("buy_commission_rate")),
