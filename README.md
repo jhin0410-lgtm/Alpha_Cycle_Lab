@@ -14,6 +14,7 @@
 - 재무·거시 데이터의 초도치/최신 수정치 revision 정책과 로컬 CSV 어댑터
 - 벤치마크 날짜 정렬, 추적오차·정보비율·베타·상관계수
 - 다중팩터 OLS 기반 알파·팩터 베타·설명력·잔차 변동성 귀속
+- 결정론적 수익률 경로 스트레스, 팩터 베타 충격, 브레이크이븐 분석
 - RAW, SPLIT_ADJUSTED, TOTAL_RETURN_ADJUSTED 가격 기준 구분
 - 시점별 투자 유니버스와 미래 구성종목 비노출
 - split/reverse split의 수량·평균원가 회계 및 감사 출력
@@ -25,7 +26,7 @@
 - 매수/매도 수수료, 매도세, 고정/비율 슬리피지
 - 단일종목, 총익스포저, 회전율, 유동성, 일손실, 낙폭 제한과 구조화된 거절
 - 연구 검증용 Buy-and-Hold 및 횡단면 모멘텀 예제
-- 기본 8개 감사 출력과 선택적 귀속 출력 2개, YAML 설정, CLI
+- 기본 8개 감사 출력, 선택적 귀속 출력 2개, 선택적 스트레스 출력 4개
 - 추상 `BrokerAdapter`, 로컬 `SimulatedBroker`, 항상 비활성인 KIS 안전 스텁
 - 명시적 거래 캘린더와 `Asia/Seoul` 세션 기반 체결/리밸런싱 지원
 
@@ -55,6 +56,18 @@ ECOS, FRED 등 외부 API를 자동 호출하지 않습니다. 원천 데이터�
 팩터 베타, R², 잔차 변동성 및 평균 팩터 기여도를 제공합니다. 이는 통계적 설명이며 인과관계나
 미래 알파를 증명하지 않습니다. 팩터 정의·통화·시간대·수익률 기준은 사용자가 동일하게 맞춰야
 합니다.
+
+## 시나리오·스트레스 테스트
+
+`--stress-config`는 백테스트 종료 후 전략의 일별 단순수익률 경로에 명시적 충격을 적용합니다.
+경로 시나리오는 기간별 수익률 이동, 변동성 배수, 비용 드래그와 특정 날짜의 일회성 충격을
+조합합니다. 결측 날짜를 추정하거나 임의의 거시경제-주가 관계를 만들지 않으며, 충격 적용 후
+수익률이 -100% 이하가 되면 실행을 중단합니다.
+
+팩터 시나리오는 앞 단계에서 추정한 OLS 알파와 팩터 베타에 사용자가 지정한 1기간 팩터 충격을
+적용합니다. 브레이크이븐 분석은 기존 경로의 누적수익을 지우는 일회성 수익률과 기간별 반복 비용
+드래그를 계산합니다. 이 결과는 기계적 민감도 분석이며 실제 위기 시 가격경로, 상관관계 변화,
+유동성 고갈 또는 비선형 손실을 예측하지 않습니다.
 
 ## 주문 수명주기 정책
 
@@ -95,11 +108,19 @@ python -m alpha_cycle.cli backtest --input data/sample/prices.csv --strategy mom
 python -m alpha_cycle.cli backtest --input data/sample/prices.csv --strategy momentum --initial-cash 80000000 --config config/example.yaml --benchmark data/sample/benchmark_returns.csv --benchmark-id KOSPI --factors data/sample/factor_returns.csv --alignment-policy strict --min-factor-observations 20 --output outputs/momentum_attribution
 ```
 
-Windows PowerShell과 POSIX 셸 모두에서 위 한 줄 명령을 사용할 수 있습니다. 예제 CSV는
-프로그램 검증용 합성 데이터일 뿐입니다. 기본 실행 후 `equity_curve.csv`, `positions.csv`,
-`orders.csv`, `fills.csv`, `trades.csv`, `corporate_actions.csv`, `metrics.json`,
-`backtest_report.md`가 생성됩니다. 벤치마크를 제공하면 `benchmark_alignment.csv`와
-`attribution_summary.json`이 추가됩니다.
+경로 및 팩터 스트레스까지 실행하는 예시는 다음과 같습니다.
+
+```bash
+python -m alpha_cycle.cli backtest --input data/sample/prices.csv --strategy momentum --initial-cash 80000000 --config config/example.yaml --benchmark data/sample/benchmark_returns.csv --benchmark-id KOSPI --factors data/sample/factor_returns.csv --stress-config config/stress_example.yaml --output outputs/momentum_stress
+```
+
+Windows PowerShell과 POSIX 셸 모두에서 위 한 줄 명령을 사용할 수 있습니다. 예제 CSV와
+stress YAML은 프로그램 검증용 합성 입력일 뿐입니다. 기본 실행 후 `equity_curve.csv`,
+`positions.csv`, `orders.csv`, `fills.csv`, `trades.csv`, `corporate_actions.csv`,
+`metrics.json`, `backtest_report.md`가 생성됩니다. 벤치마크를 제공하면
+`benchmark_alignment.csv`와 `attribution_summary.json`이 추가됩니다. 스트레스 설정을
+제공하면 `stress_scenarios.csv`, `stress_paths.csv`, `factor_stress.csv`,
+`stress_summary.json`이 추가됩니다.
 
 ```bash
 python -m pytest
@@ -119,6 +140,10 @@ python -m mypy
 동일 날짜의 단순수익률이 비교 가능하다고 가정하며, 비동기 시장·환율·휴장일·팩터 구축 오류를
 자동 보정하지 않습니다. 회귀계수는 표본과 팩터 선택에 민감하고 인과관계를 의미하지 않습니다.
 
+스트레스 테스트는 과거 경로의 기계적 변형과 고정 팩터 베타를 사용합니다. 위기 시 베타,
+상관관계, 변동성, 거래비용이 동시에 비선형적으로 변할 수 있으며 현재 모형은 이러한 내생적
+변화를 자동 추정하지 않습니다. 결과는 손실 한도나 미래 최악 손실의 보증값이 아닙니다.
+
 체결은 일봉 기반 단순 모델이고 실제 호가, 주문 우선순위, 장중 체결 순서, 동적 시장 충격을
 재현하지 않습니다. 거래비용 설정은 예시이며 특정 시장이나 증권사의 현재 요율이 아닙니다.
 기본 시장 시간대는 `Asia/Seoul`입니다. 공식 KRX 휴장일·기업행동·구성종목 자동 다운로드는
@@ -129,7 +154,7 @@ python -m mypy
 ```text
 src/alpha_cycle/
   data/ domain/ strategies/ portfolio/ risk/
-  backtest/ brokers/ reporting/ calendar/ cli.py config.py
+  backtest/ brokers/ reporting/ scenarios/ calendar/ cli.py config.py
 tests/
   unit/ integration/
 config/  data/sample/  docs/  .github/workflows/
