@@ -12,6 +12,8 @@
    - 완료: 재무·거시 스키마, first_release/latest_known, 로컬 CSV 어댑터, 동기화 snapshot
    - 남음: DART·ECOS·FRED 등 공식 공급자 어댑터와 장중 공개시각 정밀화
 5. 벤치마크 정렬 및 팩터 귀속
+   - 완료: strict/inner 날짜 정렬, 상대성과 지표, 다중팩터 OLS, 감사 출력
+   - 남음: 통화·비동기 시장 정렬, 표준 팩터 공급자, rolling attribution
 6. 시나리오·스트레스 테스트
 7. 재현 가능한 Paper Trading 저장 계층
 8. 독립 보안검토 후에만 KIS 모의투자 어댑터 검토
