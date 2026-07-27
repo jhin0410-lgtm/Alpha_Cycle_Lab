@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "License under review; see LICENSE"}
 dependencies = [
+  "numpy>=1.26,<3",
   "pandas>=2.2,<4",
   "PyYAML>=6.0,<7",
 ]
@@ -46,4 +47,3 @@ python_version = "3.12"
 strict = true
 packages = ["alpha_cycle"]
 mypy_path = "src"
-
