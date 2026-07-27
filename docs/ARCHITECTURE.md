@@ -19,6 +19,8 @@ TradingCalendar
 → Fill(s)
 → Portfolio
 → Reporting
+   ├─ benchmark alignment / factor attribution
+   └─ scenario path stress / factor stress / breakeven
 ```
 
 전략 인터페이스에는 브로커가 전달되지 않으므로 직접 주문할 수 없습니다.
@@ -55,10 +57,21 @@ high/low로 지정가 도달 여부만 판정합니다. 정확한 장중 체결 
 체결의 감사 timestamp는 해당 세션 close를 사용합니다. `is_halted=true`인 세션은 체결을
 만들지 않으며 DAY 잔량은 만료되고 GTC 잔량은 유지됩니다.
 
+백테스트 종료 후 `strategy_returns_from_result()`가 equity audit trail을 일별 단순수익률로
+변환합니다. 벤치마크·팩터 계층은 이 경로를 외부 수익률과 정렬하며 결측값을 forward-fill하지
+않습니다. 스트레스 계층은 같은 전략 수익률 경로를 입력으로 받아 명시적 수익률 이동,
+변동성 배수, 반복 비용 및 특정 날짜 일회성 충격을 적용합니다. 원본 equity curve나 포트폴리오
+회계를 수정하지 않고 별도 감사 산출물을 생성합니다.
+
+팩터 스트레스는 `calculate_factor_attribution()`이 추정한 고정 OLS alpha와 beta를 입력으로
+사용합니다. 사용자가 지정한 factor shock과 beta의 곱을 합산해 1기간 추정 수익률을 만들며,
+포지션별 재평가나 위기 시 beta 변화를 추정하지 않습니다. 브레이크이븐 계산은 원본 수익률
+경로의 terminal growth를 1로 만드는 일회성 수익률과 기간별 비용 드래그를 수치적으로 계산합니다.
+
 포트폴리오는 `Decimal` 현금·원가·비용과 정수 수량을 사용합니다. 분할은 총 원가와 현금,
 실현손익을 바꾸지 않습니다. fractional share가 생기는 병합은 임의 반올림하지 않고
-중단합니다. 성과 비율은 pandas 입출력 경계 뒤에서 float로 계산합니다. 주문 ID, fill ID,
-정렬, 전략 동률 처리와 감사 출력은 모두 결정론적입니다.
+중단합니다. 성과 비율과 스트레스 계산은 pandas 입출력 경계 뒤에서 float로 계산합니다.
+주문 ID, fill ID, 정렬, 전략 동률 처리와 감사 출력은 모두 결정론적입니다.
 
 `BrokerAdapter`는 향후 확장 경계입니다. 현재 실행 가능한 구현은 네트워크를 쓰지 않는
 `SimulatedBroker`뿐입니다. `KISBrokerAdapter`는 문서화된 안전 스텁이고 언제나 예외를
