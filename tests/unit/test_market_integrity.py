@@ -11,6 +11,7 @@ from alpha_cycle.backtest.engine import BacktestConfig, BacktestEngine, Executio
 from alpha_cycle.brokers.simulated import SimulatedBroker
 from alpha_cycle.data.integrity import (
     CorporateActionStore,
+    CorporateActionType,
     PriceBasis,
     UniverseMembershipStore,
     validate_corporate_actions,
@@ -119,8 +120,9 @@ def _seed_position(portfolio: Portfolio) -> None:
 def test_price_basis_is_explicit_and_adjusted_close_does_not_replace_close() -> None:
     feed = MarketDataFeed(_prices())
     assert feed.price_basis is PriceBasis.RAW
-    assert feed.bars_on(date(2024, 1, 3)).loc[0, "close"] == 100
-    assert feed.bars_on(date(2024, 1, 3)).loc[0, "adjusted_close"] == 1000
+    bars = feed.bars_on(date(2024, 1, 3))
+    assert bars.loc[0, "close"] == 100
+    assert bars.loc[0, "adjusted_close"] == 1000
 
     adjusted_feed = MarketDataFeed(
         _prices(),
@@ -228,7 +230,7 @@ def test_portfolio_split_preserves_cash_pnl_and_cost_basis() -> None:
         "AAA",
         Decimal("2"),
         date(2024, 1, 3),
-        action_type=actions_type("split"),
+        action_type=CorporateActionType.SPLIT,
     )
 
     assert application.quantity_after == 20
@@ -239,12 +241,6 @@ def test_portfolio_split_preserves_cash_pnl_and_cost_basis() -> None:
     assert portfolio.last_prices["AAA"] == Decimal("50")
 
 
-def actions_type(value: str):
-    from alpha_cycle.data.integrity import CorporateActionType
-
-    return CorporateActionType(value)
-
-
 def test_fractional_reverse_split_is_rejected() -> None:
     portfolio = Portfolio(Decimal("10000"))
     _seed_position(portfolio)
@@ -253,7 +249,7 @@ def test_fractional_reverse_split_is_rejected() -> None:
             "AAA",
             Decimal("0.15"),
             date(2024, 1, 3),
-            action_type=actions_type("reverse_split"),
+            action_type=CorporateActionType.REVERSE_SPLIT,
         )
 
 
@@ -333,5 +329,8 @@ def test_engine_stops_on_unsupported_corporate_action() -> None:
         BacktestConfig(),
         corporate_actions=CorporateActionStore(dividend),
     )
-    with pytest.raises(ValueError, match="Unsupported corporate action cash_dividend"):
+    with pytest.raises(
+        ValueError,
+        match="Unsupported corporate action cash_dividend",
+    ):
         engine.run()
