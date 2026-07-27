@@ -161,6 +161,7 @@ def test_release_and_retrieval_chronology_is_enforced() -> None:
 
 def test_non_integer_revision_sequence_is_rejected() -> None:
     broken = macro_frame()
+    broken["revision_sequence"] = broken["revision_sequence"].astype(float)
     broken.loc[0, "revision_sequence"] = 0.5
     with pytest.raises(ValueError, match="non-negative integer"):
         validate_macro_series(broken)
@@ -182,7 +183,8 @@ def test_csv_adapters_validate_local_files(tmp_path: Path) -> None:
     macro = CsvMacroDataAdapter(macro_path).load()
     assert len(financials) == 3
     assert len(macro) == 3
-    assert str(macro["retrieved_at"].dtype) == "datetime64[ns, UTC]"
+    assert isinstance(macro["retrieved_at"].dtype, pd.DatetimeTZDtype)
+    assert str(macro["retrieved_at"].dt.tz) == "UTC"
 
 
 def test_portal_builds_synchronized_defensive_snapshots() -> None:
