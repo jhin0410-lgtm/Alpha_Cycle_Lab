@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime, time
 from decimal import ROUND_FLOOR, Decimal
 from enum import StrEnum
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from alpha_cycle.brokers.simulated import SimulatedBroker
+from alpha_cycle.calendar.base import TradingCalendar
+from alpha_cycle.calendar.rebalance import MonthlyRebalanceSchedule, WeeklyRebalanceSchedule
 from alpha_cycle.data.market import MarketDataFeed
 from alpha_cycle.domain.models import Fill, Order, OrderStatus, Side, TargetPosition
 from alpha_cycle.portfolio.portfolio import Portfolio
@@ -32,6 +35,8 @@ class BacktestConfig:
     execution_price: ExecutionPrice = ExecutionPrice.NEXT_OPEN
     periods_per_year: int = 252
     risk_free_rate: float = 0.0
+    rebalance_frequency: str = "every_session"
+    rebalance_anchor: str = "first_session"
 
 
 @dataclass
@@ -57,6 +62,8 @@ class BacktestEngine:
         broker: SimulatedBroker,
         risk_manager: RiskManager,
         config: BacktestConfig,
+        *,
+        calendar: TradingCalendar | None = None,
     ) -> None:
         self.feed = feed
         self.strategy = strategy
@@ -64,7 +71,20 @@ class BacktestEngine:
         self.broker = broker
         self.risk = risk_manager
         self.config = config
+        self.calendar = calendar or getattr(feed, "calendar", None)
+        self._rebalance_schedule = self._build_rebalance_schedule(config)
         self._order_sequence = 0
+
+    @staticmethod
+    def _build_rebalance_schedule(config: BacktestConfig):
+        frequency = (config.rebalance_frequency or "every_session").lower()
+        if frequency == "every_session":
+            return None
+        if frequency == "weekly":
+            return WeeklyRebalanceSchedule(anchor=config.rebalance_anchor)
+        if frequency == "monthly":
+            return MonthlyRebalanceSchedule(anchor=config.rebalance_anchor)
+        raise ValueError(f"Unsupported rebalance_frequency: {config.rebalance_frequency}")
 
     @staticmethod
     def _decimal(value: object) -> Decimal:
@@ -119,6 +139,8 @@ class BacktestEngine:
         result: BacktestResult,
         peak_equity: Decimal,
         day_start_equity: Decimal,
+        *,
+        execution_timestamp: datetime | None = None,
     ) -> None:
         bars_by_ticker = {str(row["ticker"]): row for _, row in bars.iterrows()}
         daily_notional = Decimal("0")
@@ -141,7 +163,11 @@ class BacktestEngine:
                     order.rejection_reason = decision.code
                 else:
                     fill = self.broker.execute(
-                        order, self._decimal(row[price_column]), event_date, self.portfolio
+                        order,
+                        self._decimal(row[price_column]),
+                        event_date,
+                        self.portfolio,
+                        execution_timestamp=execution_timestamp,
                     )
                     if fill is not None:
                         result.fills.append(fill)
@@ -156,31 +182,83 @@ class BacktestEngine:
                 }
             )
 
+    def _should_rebalance(self, event_date: date) -> bool:
+        if self._rebalance_schedule is None:
+            return True
+        if self.calendar is None:
+            return True
+        return self._rebalance_schedule.should_rebalance(event_date, self.calendar)
+
+    def _execution_timestamp(self, event_date: date, *, close: bool) -> datetime:
+        if self.calendar is None:
+            return datetime.combine(event_date, time(9, 0), tzinfo=ZoneInfo("Asia/Seoul"))
+        if close:
+            return self.calendar.session_close(event_date)
+        return self.calendar.session_open(event_date)
+
     def run(self) -> BacktestResult:
         """Run all events in chronological order without future-row access."""
         result = BacktestResult()
-        pending_targets: list[TargetPosition] | None = None
+        pending_targets: tuple[list[TargetPosition], date] | None = None
         peak_equity = self.portfolio.total_equity
         for event_date in self.feed.dates:
             bars = self.feed.bars_on(event_date)
             day_start = self.portfolio.total_equity
             if pending_targets is not None:
-                orders = self._orders_from_targets(pending_targets, event_date, bars, "open")
-                self._process_orders(
-                    orders, event_date, bars, "open", result, peak_equity, day_start
-                )
-                pending_targets = None
+                pending_targets_list, pending_execution_date = pending_targets
+                if event_date == pending_execution_date:
+                    execution_bars = self.feed.bars_on(pending_execution_date)
+                    if not execution_bars.empty:
+                        orders = self._orders_from_targets(
+                            pending_targets_list, event_date, execution_bars, "open"
+                        )
+                        self._process_orders(
+                            orders,
+                            pending_execution_date,
+                            execution_bars,
+                            "open",
+                            result,
+                            peak_equity,
+                            day_start,
+                            execution_timestamp=self._execution_timestamp(
+                                pending_execution_date, close=False
+                            ),
+                        )
+                    pending_targets = None
 
             history = self.feed.history_through(event_date)
-            targets = self.strategy.generate_targets(event_date, history)
+            if self._should_rebalance(event_date):
+                targets = self.strategy.generate_targets(event_date, history)
+            else:
+                targets = None
             if targets is not None:
                 if self.config.execution_price is ExecutionPrice.SAME_CLOSE:
                     orders = self._orders_from_targets(targets, event_date, bars, "close")
                     self._process_orders(
-                        orders, event_date, bars, "close", result, peak_equity, day_start
+                        orders,
+                        event_date,
+                        bars,
+                        "close",
+                        result,
+                        peak_equity,
+                        day_start,
+                        execution_timestamp=self._execution_timestamp(event_date, close=True),
                     )
                 else:
-                    pending_targets = targets
+                    if self.calendar is None:
+                        index = self.feed.dates.index(event_date)
+                        next_event_date = (
+                            self.feed.dates[index + 1]
+                            if index + 1 < len(self.feed.dates)
+                            else None
+                        )
+                    else:
+                        try:
+                            next_event_date = self.calendar.next_session(event_date)
+                        except ValueError:
+                            next_event_date = None
+                    if next_event_date is not None:
+                        pending_targets = (targets, next_event_date)
 
             close_prices = {
                 str(row["ticker"]): self._decimal(row["close"]) for _, row in bars.iterrows()

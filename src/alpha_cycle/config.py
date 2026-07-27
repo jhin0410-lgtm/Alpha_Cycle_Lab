@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import yaml
 
 from alpha_cycle.backtest.engine import BacktestConfig, ExecutionPrice
 from alpha_cycle.brokers.simulated import CommissionModel, SlippageModel
+from alpha_cycle.calendar.sessions import ExplicitTradingCalendar
 from alpha_cycle.risk.manager import RiskConfig
 
 
@@ -22,10 +25,25 @@ class AppConfig:
     commission: CommissionModel
     slippage: SlippageModel
     risk: RiskConfig
+    calendar: ExplicitTradingCalendar | None = None
 
 
 def _decimal(value: Any, default: str = "0") -> Decimal:
     return Decimal(str(default if value is None else value))
+
+
+def _parse_time(value: Any) -> time:
+    if not isinstance(value, str) or not value:
+        raise ValueError("Time values must be non-empty strings")
+    try:
+        hour_text, minute_text = value.split(":", 1)
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError as exc:
+        raise ValueError(f"Invalid time value: {value}") from exc
+    if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+        raise ValueError(f"Invalid time value: {value}")
+    return time(hour, minute)
 
 
 def load_config(path: Path | None = None, *, initial_cash: Decimal | None = None) -> AppConfig:
@@ -43,13 +61,30 @@ def load_config(path: Path | None = None, *, initial_cash: Decimal | None = None
     costs = raw.get("costs", {})
     portfolio = raw.get("portfolio", {})
     risk = raw.get("risk", {})
+    calendar_config = raw.get("calendar", {})
     cash = initial_cash or _decimal(backtest.get("initial_cash"), "100000000")
+    calendar = None
+    if calendar_config:
+        try:
+            timezone_name = str(calendar_config.get("timezone", "Asia/Seoul"))
+            timezone = ZoneInfo(timezone_name)
+        except Exception as exc:  # pragma: no cover - defensive user-facing path
+            raise ValueError(f"Invalid timezone: {calendar_config.get('timezone')}") from exc
+        calendar = ExplicitTradingCalendar(
+            name=str(calendar_config.get("name", "CUSTOM")),
+            sessions=[],
+            timezone=timezone,
+            open_time=_parse_time(calendar_config.get("session_open", "09:00")),
+            close_time=_parse_time(calendar_config.get("session_close", "15:30")),
+        )
     return AppConfig(
         backtest=BacktestConfig(
             initial_cash=cash,
             execution_price=ExecutionPrice(backtest.get("execution_price", "next_open")),
             periods_per_year=int(backtest.get("periods_per_year", 252)),
             risk_free_rate=float(backtest.get("risk_free_rate", 0.0)),
+            rebalance_frequency=str(backtest.get("rebalance_frequency", "every_session")),
+            rebalance_anchor=str(backtest.get("rebalance_anchor", "first_session")),
         ),
         commission=CommissionModel(
             buy_rate=_decimal(costs.get("buy_commission_rate")),
@@ -78,4 +113,5 @@ def load_config(path: Path | None = None, *, initial_cash: Decimal | None = None
             max_daily_loss=float(risk.get("max_daily_loss", 1.0)),
             max_portfolio_drawdown=float(risk.get("max_portfolio_drawdown", 1.0)),
         ),
+        calendar=calendar,
     )

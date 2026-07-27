@@ -7,6 +7,8 @@ from datetime import date
 
 import pandas as pd
 
+from alpha_cycle.calendar.base import TradingCalendar
+
 REQUIRED_COLUMNS = (
     "date",
     "ticker",
@@ -86,14 +88,25 @@ def validate_ohlcv(
 class MarketDataFeed:
     """Chronological market bars that never expose rows after the current event."""
 
-    def __init__(self, data: pd.DataFrame) -> None:
+    def __init__(self, data: pd.DataFrame, *, calendar: TradingCalendar | None = None) -> None:
         self.data, self.report = validate_ohlcv(data)
         self._dates = sorted(self.data["date"].unique())
+        self.calendar = calendar
+        if self.calendar is not None:
+            self._validate_calendar_dates()
+
+    def _validate_calendar_dates(self) -> None:
+        for event_date in self._dates:
+            if not self.calendar.is_session(event_date):
+                raise ValueError(f"Market data contains non-trading session date {event_date}")
+        for previous, current in zip(self._dates, self._dates[1:], strict=False):
+            if current <= previous:
+                raise ValueError("Market data dates must be strictly increasing")
 
     @classmethod
-    def from_csv(cls, path: str) -> MarketDataFeed:
+    def from_csv(cls, path: str, *, calendar: TradingCalendar | None = None) -> MarketDataFeed:
         """Load and validate a CSV file."""
-        return cls(pd.read_csv(path))
+        return cls(pd.read_csv(path), calendar=calendar)
 
     @property
     def dates(self) -> list[date]:

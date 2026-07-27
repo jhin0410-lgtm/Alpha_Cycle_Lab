@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from alpha_cycle.domain.models import Fill, Order, OrderStatus, Side
@@ -50,7 +50,13 @@ class BrokerAdapter(ABC):
 
     @abstractmethod
     def execute(
-        self, order: Order, market_price: Decimal, event_date: date, portfolio: Portfolio
+        self,
+        order: Order,
+        market_price: Decimal,
+        event_date: date,
+        portfolio: Portfolio,
+        *,
+        execution_timestamp: datetime | None = None,
     ) -> Fill | None:
         """Attempt one execution and return a fill or rejection."""
 
@@ -67,7 +73,13 @@ class SimulatedBroker(BrokerAdapter):
         self.slippage = slippage or SlippageModel()
 
     def execute(
-        self, order: Order, market_price: Decimal, event_date: date, portfolio: Portfolio
+        self,
+        order: Order,
+        market_price: Decimal,
+        event_date: date,
+        portfolio: Portfolio,
+        *,
+        execution_timestamp: datetime | None = None,
     ) -> Fill | None:
         """Fill an order at the supplied event price after local cash/holding checks."""
         execution_price = self.slippage.execution_price(order.side, market_price)
@@ -84,9 +96,14 @@ class SimulatedBroker(BrokerAdapter):
             order.rejection_reason = "insufficient_position"
             return None
         raw_slippage = abs(execution_price - market_price) * order.quantity
+        timestamp = execution_timestamp
+        if timestamp is None:
+            timestamp = datetime.combine(event_date, time(9, 0), tzinfo=None)
+            if timestamp.tzinfo is None:
+                timestamp = datetime.combine(event_date, time(9, 0), tzinfo=None)
         fill = Fill(
             order_id=order.order_id,
-            timestamp=datetime.combine(event_date, time(9), tzinfo=UTC),
+            timestamp=timestamp,
             ticker=order.ticker,
             side=order.side,
             quantity=order.quantity,
@@ -106,7 +123,13 @@ class KISBrokerAdapter(BrokerAdapter):
     live_trading_enabled = False
 
     def execute(
-        self, order: Order, market_price: Decimal, event_date: date, portfolio: Portfolio
+        self,
+        order: Order,
+        market_price: Decimal,
+        event_date: date,
+        portfolio: Portfolio,
+        *,
+        execution_timestamp: datetime | None = None,
     ) -> Fill | None:
         """Reject because live trading is outside this project version."""
         raise RuntimeError("Live KIS order execution is intentionally disabled")
