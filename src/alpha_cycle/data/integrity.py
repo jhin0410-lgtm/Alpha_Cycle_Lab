@@ -113,8 +113,9 @@ def validate_corporate_actions(
     for column in CORPORATE_ACTION_OPTIONAL:
         if column not in data.columns:
             data[column] = pd.NA
+    canonical_columns = [*CORPORATE_ACTION_REQUIRED, *CORPORATE_ACTION_OPTIONAL]
     if data.empty:
-        return data.loc[:, [*CORPORATE_ACTION_REQUIRED, *CORPORATE_ACTION_OPTIONAL]]
+        return data.loc[:, canonical_columns]
     for column in ("ticker", "source", "revision_id"):
         _required_text(data, column)
     for column in ("effective_date", "available_date", "record_date", "pay_date"):
@@ -158,10 +159,10 @@ def validate_corporate_actions(
                 raise ValueError("pay_date cannot precede record_date")
         if calendar is not None and not calendar.is_session(row.effective_date):
             raise ValueError(
-                f"Corporate action effective date is not a trading session: "
+                "Corporate action effective date is not a trading session: "
                 f"{row.effective_date}"
             )
-    return data.sort_values(
+    return data.loc[:, canonical_columns].sort_values(
         ["effective_date", "ticker", "action_type", "revision_id"],
         kind="stable",
     ).reset_index(drop=True)
@@ -245,18 +246,19 @@ def validate_universe_membership(frame: pd.DataFrame) -> pd.DataFrame:
         kind="stable",
         na_position="last",
     ).reset_index(drop=True)
-    for (_, _), group in ordered.groupby(["universe", "ticker"], sort=True):
+    for _, group in ordered.groupby(["universe", "ticker"], sort=True):
         previous_end: date | None = None
+        first_interval = True
         for row in group.itertuples(index=False):
-            if previous_end is None and row.Index if False else False:
-                pass
-            if previous_end is not None and row.member_from < previous_end:
-                raise ValueError("Overlapping universe membership intervals detected")
-            if previous_end is None and len(group) > 1:
-                first = group.iloc[0]
-                if pd.isna(first["member_to"]):
-                    raise ValueError("Open-ended membership cannot be followed by another interval")
-            previous_end = row.member_to
+            if not first_interval:
+                if previous_end is None:
+                    raise ValueError(
+                        "Open-ended membership cannot be followed by another interval"
+                    )
+                if row.member_from < previous_end:
+                    raise ValueError("Overlapping universe membership intervals detected")
+            previous_end = None if pd.isna(row.member_to) else row.member_to
+            first_interval = False
     return ordered
 
 
