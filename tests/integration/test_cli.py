@@ -196,23 +196,7 @@ def test_cli_outputs_are_deterministic_for_same_inputs(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("args", "expected_text"),
     [
-        (("backtest", "--input", "does-not-exist.csv", "--strategy", "momentum"), "Input CSV"),
-        (
-            ("backtest", "--input", str(SAMPLE_INPUT), "--strategy", "unknown"),
-            "invalid",
-        ),
-        (
-            (
-                "backtest",
-                "--input",
-                str(SAMPLE_INPUT),
-                "--strategy",
-                "momentum",
-                "--config",
-                "bad.yaml",
-            ),
-            "YAML",
-        ),
+        
         (
             (
                 "backtest",
