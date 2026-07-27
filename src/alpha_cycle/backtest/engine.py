@@ -24,7 +24,15 @@ from alpha_cycle.data.integrity import (
     UniverseMembershipStore,
 )
 from alpha_cycle.data.market import MarketDataFeed
-from alpha_cycle.domain.models import Fill, Order, OrderStatus, Side, TargetPosition
+from alpha_cycle.domain.models import (
+    Fill,
+    Order,
+    OrderStatus,
+    OrderType,
+    Side,
+    TargetPosition,
+    TimeInForce,
+)
 from alpha_cycle.portfolio.portfolio import Portfolio
 from alpha_cycle.risk.manager import RiskManager
 from alpha_cycle.strategies.protocol import Strategy
@@ -39,7 +47,7 @@ class ExecutionPrice(StrEnum):
 
 @dataclass(frozen=True)
 class BacktestConfig:
-    """Core simulation configuration."""
+    """Core simulation and order-lifecycle configuration."""
 
     initial_cash: Decimal = Decimal("100000000")
     execution_price: ExecutionPrice = ExecutionPrice.NEXT_OPEN
@@ -47,6 +55,18 @@ class BacktestConfig:
     risk_free_rate: float = 0.0
     rebalance_frequency: str = "every_session"
     rebalance_anchor: str = "first_session"
+    order_type: OrderType = OrderType.MARKET
+    time_in_force: TimeInForce = TimeInForce.DAY
+    limit_offset_bps: Decimal = Decimal("0")
+    max_volume_participation: Decimal = Decimal("1")
+
+    def __post_init__(self) -> None:
+        if self.initial_cash <= 0:
+            raise ValueError("initial_cash must be positive")
+        if self.limit_offset_bps < 0:
+            raise ValueError("limit_offset_bps cannot be negative")
+        if not Decimal("0") < self.max_volume_participation <= Decimal("1"):
+            raise ValueError("max_volume_participation must be greater than 0 and at most 1")
 
 
 @dataclass
@@ -63,7 +83,7 @@ class BacktestResult:
 
 
 class BacktestEngine:
-    """Coordinate feed, strategy, integrity, risk, broker, and portfolio layers."""
+    """Coordinate feed, strategy, integrity, orders, risk, broker, and portfolio."""
 
     def __init__(
         self,
@@ -85,6 +105,10 @@ class BacktestEngine:
             )
         if (universe_store is None) != (universe_name is None):
             raise ValueError("universe_store and universe_name must be provided together")
+        if broker.max_volume_participation != config.max_volume_participation:
+            raise ValueError(
+                "Broker and BacktestConfig max_volume_participation must match"
+            )
         self.feed = feed
         self.strategy = strategy
         self.portfolio = portfolio
@@ -133,6 +157,26 @@ class BacktestEngine:
         self._order_sequence += 1
         return f"O{self._order_sequence:08d}"
 
+    def _limit_price(self, side: Side, reference_price: Decimal) -> Decimal | None:
+        if self.config.order_type is OrderType.MARKET:
+            return None
+        offset = self.config.limit_offset_bps / Decimal("10000")
+        multiplier = Decimal("1") - offset if side is Side.BUY else Decimal("1") + offset
+        price = reference_price * multiplier
+        if price <= 0:
+            raise ValueError("Configured limit offset produces a non-positive price")
+        return price
+
+    def _projected_quantity(self, ticker: str, working_orders: list[Order]) -> int:
+        held = self.portfolio.positions.get(ticker)
+        projected = held.quantity if held else 0
+        for order in working_orders:
+            if not order.is_open or order.ticker != ticker:
+                continue
+            signed = order.remaining_quantity if order.side is Side.BUY else -order.remaining_quantity
+            projected += signed
+        return max(projected, 0)
+
     def _orders_from_targets(
         self,
         targets: list[TargetPosition],
@@ -141,7 +185,9 @@ class BacktestEngine:
         price_column: str,
         *,
         active_universe: set[str] | None = None,
+        working_orders: list[Order] | None = None,
     ) -> list[Order]:
+        open_orders = working_orders or []
         price_map = {
             str(row["ticker"]): self._decimal(row[price_column])
             for _, row in bars.iterrows()
@@ -152,30 +198,31 @@ class BacktestEngine:
         equity = self.portfolio.total_equity
         orders: list[Order] = []
         for ticker in all_tickers:
-            outside_universe = (
-                active_universe is not None and ticker not in active_universe
-            )
+            outside_universe = active_universe is not None and ticker not in active_universe
             if outside_universe and ticker not in target_map:
                 continue
             price = price_map.get(ticker)
             if price is None:
                 continue
-            held = self.portfolio.positions.get(ticker)
-            current_quantity = held.quantity if held else 0
             desired_value = equity * self._decimal(target_map.get(ticker, 0.0))
             desired_quantity = int(
                 (desired_value / price).to_integral_value(rounding=ROUND_FLOOR)
             )
-            delta = desired_quantity - current_quantity
+            projected_quantity = self._projected_quantity(ticker, open_orders)
+            delta = desired_quantity - projected_quantity
             if delta == 0:
                 continue
+            side = Side.BUY if delta > 0 else Side.SELL
             order = Order(
                 order_id=self._next_order_id(),
                 created_at=event_date,
                 ticker=ticker,
-                side=Side.BUY if delta > 0 else Side.SELL,
+                side=side,
                 quantity=abs(delta),
                 reference_price=price,
+                order_type=self.config.order_type,
+                time_in_force=self.config.time_in_force,
+                limit_price=self._limit_price(side, price),
             )
             if outside_universe:
                 order.status = OrderStatus.REJECTED
@@ -190,7 +237,20 @@ class BacktestEngine:
             "created_at": order.created_at.isoformat(),
             "side": order.side.value,
             "status": order.status.value,
+            "order_type": order.order_type.value,
+            "time_in_force": order.time_in_force.value,
             "reference_price": str(order.reference_price),
+            "limit_price": str(order.limit_price) if order.limit_price is not None else None,
+            "last_attempt_at": (
+                order.last_attempt_at.isoformat() if order.last_attempt_at is not None else None
+            ),
+            "remaining_quantity": order.remaining_quantity,
+        }
+
+    def _session_volume_capacity(self, bars: pd.DataFrame) -> dict[str, int]:
+        return {
+            str(row["ticker"]): self.broker.volume_capacity(row["volume"])
+            for _, row in bars.iterrows()
         }
 
     def _process_orders(
@@ -202,43 +262,87 @@ class BacktestEngine:
         result: BacktestResult,
         peak_equity: Decimal,
         day_start_equity: Decimal,
+        daily_notional: Decimal,
+        volume_remaining: dict[str, int],
         *,
-        execution_timestamp: datetime | None = None,
-    ) -> None:
+        open_timestamp: datetime,
+        close_timestamp: datetime,
+    ) -> tuple[list[Order], Decimal]:
         bars_by_ticker = {str(row["ticker"]): row for _, row in bars.iterrows()}
-        daily_notional = Decimal("0")
-        for order in orders:
-            if order.status is OrderStatus.REJECTED:
-                result.orders.append(self._order_record(order))
+        surviving: list[Order] = []
+        for order in sorted(orders, key=lambda item: (item.created_at, item.order_id)):
+            if not order.is_open:
                 continue
             row = bars_by_ticker.get(order.ticker)
             if row is None:
-                order.status = OrderStatus.REJECTED
-                order.rejection_reason = "missing_execution_bar"
+                order.record_attempt(event_date, "missing_execution_bar")
             else:
-                decision = self.risk.evaluate(
-                    order,
-                    self.portfolio,
-                    trading_value=self._decimal(row["trading_value"]),
-                    daily_order_notional=daily_notional,
-                    peak_equity=peak_equity,
-                    day_start_equity=day_start_equity,
-                )
-                if not decision.approved:
-                    order.status = OrderStatus.REJECTED
-                    order.rejection_reason = decision.code
-                else:
+                available_quantity = volume_remaining.get(order.ticker, 0)
+                halted = bool(row.get("is_halted", False))
+                proposed_quantity = min(order.remaining_quantity, available_quantity)
+                if halted or proposed_quantity <= 0:
                     fill = self.broker.execute(
                         order,
                         self._decimal(row[price_column]),
                         event_date,
                         self.portfolio,
-                        execution_timestamp=execution_timestamp,
+                        execution_timestamp=(
+                            close_timestamp
+                            if order.order_type is OrderType.LIMIT
+                            else open_timestamp
+                        ),
+                        high_price=self._decimal(row["high"]),
+                        low_price=self._decimal(row["low"]),
+                        available_quantity=available_quantity,
+                        is_halted=halted,
                     )
-                    if fill is not None:
-                        result.fills.append(fill)
-                        daily_notional += fill.gross_value
-            result.orders.append(self._order_record(order))
+                else:
+                    decision = self.risk.evaluate(
+                        order,
+                        self.portfolio,
+                        trading_value=self._decimal(row["trading_value"]),
+                        daily_order_notional=daily_notional,
+                        peak_equity=peak_equity,
+                        day_start_equity=day_start_equity,
+                        proposed_quantity=proposed_quantity,
+                    )
+                    if not decision.approved:
+                        order.record_attempt(event_date, decision.code)
+                        if order.filled_quantity == 0:
+                            order.status = OrderStatus.REJECTED
+                            order.rejection_reason = decision.code
+                        fill = None
+                    else:
+                        fill = self.broker.execute(
+                            order,
+                            self._decimal(row[price_column]),
+                            event_date,
+                            self.portfolio,
+                            execution_timestamp=(
+                                close_timestamp
+                                if order.order_type is OrderType.LIMIT
+                                else open_timestamp
+                            ),
+                            high_price=self._decimal(row["high"]),
+                            low_price=self._decimal(row["low"]),
+                            available_quantity=available_quantity,
+                            is_halted=False,
+                        )
+                if fill is not None:
+                    result.fills.append(fill)
+                    daily_notional += fill.gross_value
+                    volume_remaining[order.ticker] = max(
+                        volume_remaining.get(order.ticker, 0) - fill.quantity,
+                        0,
+                    )
+            if order.is_open and order.time_in_force is TimeInForce.DAY:
+                order.expire(
+                    event_date,
+                    order.last_attempt_reason or "day_order_expired",
+                )
+            if order.is_open:
+                surviving.append(order)
+        return surviving, daily_notional
 
     def _apply_corporate_actions(
         self,
@@ -291,81 +395,105 @@ class BacktestEngine:
     def _should_rebalance(self, event_date: date) -> bool:
         schedule = self._rebalance_schedule
         calendar = self.calendar
-        if schedule is None:
-            return True
-        if calendar is None:
+        if schedule is None or calendar is None:
             return True
         return bool(schedule.should_rebalance(event_date, calendar))
 
     def _execution_timestamp(self, event_date: date, *, close: bool) -> datetime:
         if self.calendar is None:
-            return datetime.combine(event_date, time(9, 0), tzinfo=ZoneInfo("Asia/Seoul"))
+            session_time = time(15, 30) if close else time(9, 0)
+            return datetime.combine(
+                event_date,
+                session_time,
+                tzinfo=ZoneInfo("Asia/Seoul"),
+            )
         if close:
             return self.calendar.session_close(event_date)
         return self.calendar.session_open(event_date)
 
     def run(self) -> BacktestResult:
-        """Run all events in chronological order without future-row access."""
+        """Run all events chronologically without exposing future rows."""
         result = BacktestResult()
         pending_targets: tuple[list[TargetPosition], date] | None = None
+        working_orders: list[Order] = []
+        all_orders: list[Order] = []
         peak_equity = self.portfolio.total_equity
+
         for event_date in self.feed.dates:
             self._apply_corporate_actions(event_date, result)
             bars = self.feed.bars_on(event_date)
             day_start = self.portfolio.total_equity
             active_universe = self._active_universe(event_date)
+            volume_remaining = self._session_volume_capacity(bars)
+            daily_notional = Decimal("0")
+            open_timestamp = self._execution_timestamp(event_date, close=False)
+            close_timestamp = self._execution_timestamp(event_date, close=True)
+
+            open_attempt_orders = list(working_orders)
+            working_orders = []
             if pending_targets is not None:
                 pending_targets_list, pending_execution_date = pending_targets
                 if event_date == pending_execution_date:
-                    execution_bars = self.feed.bars_on(pending_execution_date)
-                    if not execution_bars.empty:
-                        orders = self._orders_from_targets(
-                            pending_targets_list,
-                            event_date,
-                            execution_bars,
-                            "open",
-                            active_universe=active_universe,
-                        )
-                        self._process_orders(
-                            orders,
-                            pending_execution_date,
-                            execution_bars,
-                            "open",
-                            result,
-                            peak_equity,
-                            day_start,
-                            execution_timestamp=self._execution_timestamp(
-                                pending_execution_date, close=False
-                            ),
-                        )
+                    new_orders = self._orders_from_targets(
+                        pending_targets_list,
+                        event_date,
+                        bars,
+                        "open",
+                        active_universe=active_universe,
+                        working_orders=open_attempt_orders,
+                    )
+                    all_orders.extend(new_orders)
+                    open_attempt_orders.extend(new_orders)
                     pending_targets = None
+
+            if open_attempt_orders:
+                working_orders, daily_notional = self._process_orders(
+                    open_attempt_orders,
+                    event_date,
+                    bars,
+                    "open",
+                    result,
+                    peak_equity,
+                    day_start,
+                    daily_notional,
+                    volume_remaining,
+                    open_timestamp=open_timestamp,
+                    close_timestamp=close_timestamp,
+                )
 
             history = self.feed.history_through(event_date)
             if active_universe is not None:
                 history = history.loc[history["ticker"].isin(active_universe)].copy()
-            if self._should_rebalance(event_date):
-                targets = self.strategy.generate_targets(event_date, history)
-            else:
-                targets = None
+            targets = (
+                self.strategy.generate_targets(event_date, history)
+                if self._should_rebalance(event_date)
+                else None
+            )
             if targets is not None:
                 if self.config.execution_price is ExecutionPrice.SAME_CLOSE:
-                    orders = self._orders_from_targets(
+                    new_orders = self._orders_from_targets(
                         targets,
                         event_date,
                         bars,
                         "close",
                         active_universe=active_universe,
+                        working_orders=working_orders,
                     )
-                    self._process_orders(
-                        orders,
+                    all_orders.extend(new_orders)
+                    same_close_survivors, daily_notional = self._process_orders(
+                        new_orders,
                         event_date,
                         bars,
                         "close",
                         result,
                         peak_equity,
                         day_start,
-                        execution_timestamp=self._execution_timestamp(event_date, close=True),
+                        daily_notional,
+                        volume_remaining,
+                        open_timestamp=close_timestamp,
+                        close_timestamp=close_timestamp,
                     )
+                    working_orders.extend(same_close_survivors)
                 else:
                     if self.calendar is None:
                         index = self.feed.dates.index(event_date)
@@ -400,6 +528,7 @@ class BacktestEngine:
                 }
             )
             result.positions.extend(self.portfolio.snapshot(event_date))
+
         average_equity = sum(
             (Decimal(str(row["equity"])) for row in result.equity_curve),
             start=Decimal("0"),
@@ -409,8 +538,11 @@ class BacktestEngine:
             if average_equity
             else 0.0
         )
+        result.orders = [self._order_record(order) for order in all_orders]
         result.trades = [
             {
+                "fill_id": fill.fill_id,
+                "order_id": fill.order_id,
                 "date": fill.timestamp.date().isoformat(),
                 "ticker": fill.ticker,
                 "side": fill.side.value,
