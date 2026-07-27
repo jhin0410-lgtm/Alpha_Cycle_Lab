@@ -3,6 +3,13 @@
 - 입력 날짜는 거래소 현지 거래일을 나타내는 날짜값이며, 거래 세션은 `Asia/Seoul` 기준의 시간대 있는 세션으로 정의됩니다.
 - 신호일과 체결일은 분리됩니다. 기본 `next_open` 실행은 신호 세션의 다음 실제 거래 세션에 주문을 생성합니다.
 - `same_close`를 명시적으로 선택한 경우에만 신호 세션의 장 종료 가격을 주문 기준가격으로 사용합니다.
+- 재무·거시 데이터는 `available_date <= evaluation_date`인 행만 평가일 스냅샷에 포함됩니다.
+- `first_release`는 자연키별 최초 공개 revision을 사용하고 이후 수정치를 소급 반영하지 않습니다.
+- `latest_known`은 평가일까지 공개된 revision 중 가장 최근 값을 사용하며 미래 수정치는 포함하지 않습니다.
+- `revision_sequence`가 증가할수록 `available_date`가 과거로 역행할 수 없습니다.
+- `retrieved_at`은 `available_date`보다 빠를 수 없으며 UTC timestamp로 정규화합니다.
+- 공시·경제지표의 실제 장중 공개 순서와 공급자별 정의 차이는 원천 데이터가 보증해야 합니다.
+- 현재 재무·거시 어댑터는 로컬 CSV/DataFrame만 지원하고 외부 API를 호출하지 않습니다.
 - 지원 주문 유형은 market과 limit, 유효기간은 DAY와 GTC입니다.
 - DAY 주문은 한 일봉에서 한 번의 체결 기회를 사용한 뒤 남은 수량이 만료됩니다.
 - GTC 주문은 pending 또는 partially_filled 상태로 다음 데이터 세션에 이월됩니다.

@@ -9,6 +9,8 @@
    - 완료: market/limit, DAY/GTC, 거래량 기반 부분체결, `is_halted`, 복수 Fill
    - 남음: 호가창·체결 우선순위·장중 주문 수정과 취소 이벤트
 4. PIT 재무·거시 데이터 어댑터와 revision 정책
+   - 완료: 재무·거시 스키마, first_release/latest_known, 로컬 CSV 어댑터, 동기화 snapshot
+   - 남음: DART·ECOS·FRED 등 공식 공급자 어댑터와 장중 공개시각 정밀화
 5. 벤치마크 정렬 및 팩터 귀속
 6. 시나리오·스트레스 테스트
 7. 재현 가능한 Paper Trading 저장 계층

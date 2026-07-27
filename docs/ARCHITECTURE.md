@@ -7,6 +7,9 @@ TradingCalendar
 → MarketDataFeed / PriceBasis / is_halted
 → CorporateActionStore
 → UniverseMembershipStore
+→ ResearchDataPortal
+   ├─ FinancialStatementStore
+   └─ MacroSeriesStore
 → Strategy
 → RebalanceSchedule
 → TargetPosition
@@ -23,6 +26,13 @@ TradingCalendar
 시점별 유니버스가 주입되면 전략이 받는 history는 해당 세션에 알려진 active ticker로만
 제한됩니다. 미래 편입 이력은 `available_date` 조건 때문에 과거 전략 입력에 노출되지
 않습니다.
+
+`ResearchDataPortal`은 가격 피드와 독립적인 연구 데이터 경계입니다. 재무·거시 저장소는
+자연키별 초도치와 수정치를 모두 보존하고, 평가일의 `available_date` 이전에 공개된 행만
+선택합니다. `first_release`는 최초 공개값을 고정하고 `latest_known`은 평가일 당시까지 알려진
+최신 수정치를 사용합니다. 두 저장소의 결과는 하나의 `ResearchSnapshot`으로 복사되어
+전략 또는 연구 코드에 전달될 수 있습니다. 외부 API 호출은 어댑터 경계 밖에 있으며 현재
+구현은 로컬 CSV/DataFrame만 읽습니다.
 
 기업행동은 각 세션의 주문 처리 전에 적용됩니다. 현재 `split`과 `reverse_split`만
 포트폴리오 수량·평균원가·마지막 평가가격에 반영합니다. cash dividend, stock dividend,
