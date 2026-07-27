@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import math
-import statistics
 from dataclasses import dataclass
-from datetime import date
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -193,7 +191,9 @@ def align_returns(
     required_columns = ["benchmark_return", *factor_columns]
     missing_mask = aligned[required_columns].isna().any(axis=1)
     if policy is AlignmentPolicy.STRICT and missing_mask.any():
-        missing_dates = ", ".join(str(value) for value in aligned.loc[missing_mask, "date"].tolist())
+        missing_dates = ", ".join(
+            str(value) for value in aligned.loc[missing_mask, "date"].tolist()
+        )
         raise ValueError(f"Missing benchmark or factor returns for strategy dates: {missing_dates}")
     if policy is AlignmentPolicy.INNER:
         aligned = aligned.loc[~missing_mask].copy()
@@ -249,7 +249,9 @@ def calculate_benchmark_metrics(
     )
     correlation = (
         float(strategy.corr(benchmark))
-        if observations > 1 and float(strategy.std(ddof=1)) != 0.0 and benchmark_variance != 0.0
+        if observations > 1
+        and float(strategy.std(ddof=1)) != 0.0
+        and benchmark_variance != 0.0
         else 0.0
     )
     return {
