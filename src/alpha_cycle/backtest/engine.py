@@ -161,7 +161,9 @@ class BacktestEngine:
         if self.config.order_type is OrderType.MARKET:
             return None
         offset = self.config.limit_offset_bps / Decimal("10000")
-        multiplier = Decimal("1") - offset if side is Side.BUY else Decimal("1") + offset
+        multiplier = (
+            Decimal("1") - offset if side is Side.BUY else Decimal("1") + offset
+        )
         price = reference_price * multiplier
         if price <= 0:
             raise ValueError("Configured limit offset produces a non-positive price")
@@ -173,7 +175,11 @@ class BacktestEngine:
         for order in working_orders:
             if not order.is_open or order.ticker != ticker:
                 continue
-            signed = order.remaining_quantity if order.side is Side.BUY else -order.remaining_quantity
+            signed = (
+                order.remaining_quantity
+                if order.side is Side.BUY
+                else -order.remaining_quantity
+            )
             projected += signed
         return max(projected, 0)
 
