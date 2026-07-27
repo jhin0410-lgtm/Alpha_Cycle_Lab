@@ -28,8 +28,8 @@ class WeeklyRebalanceSchedule:
             raise ValueError("Only first_session anchor is supported")
         if not calendar.is_session(session):
             raise ValueError(f"{session} is not a trading session")
-        month_start = date(session.year, session.month, 1)
-        first_session = calendar.next_session(month_start - timedelta(days=1))
+        week_start = session - timedelta(days=session.weekday())
+        first_session = calendar.next_session(week_start - timedelta(days=1))
         return session == first_session
 
 
