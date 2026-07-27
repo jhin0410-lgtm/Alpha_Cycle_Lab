@@ -8,6 +8,7 @@ from datetime import date
 import pandas as pd
 
 from alpha_cycle.calendar.base import TradingCalendar
+from alpha_cycle.data.integrity import PriceBasis
 
 REQUIRED_COLUMNS = (
     "date",
@@ -88,7 +89,17 @@ def validate_ohlcv(
 class MarketDataFeed:
     """Chronological market bars that never expose rows after the current event."""
 
-    def __init__(self, data: pd.DataFrame, *, calendar: TradingCalendar | None = None) -> None:
+    def __init__(
+        self,
+        data: pd.DataFrame,
+        *,
+        calendar: TradingCalendar | None = None,
+        price_basis: PriceBasis | str = PriceBasis.RAW,
+    ) -> None:
+        try:
+            self.price_basis = PriceBasis(price_basis)
+        except ValueError as exc:
+            raise ValueError(f"Unsupported price basis: {price_basis}") from exc
         self.data, self.report = validate_ohlcv(data)
         self._dates = sorted(self.data["date"].unique())
         self.calendar = calendar
@@ -104,9 +115,15 @@ class MarketDataFeed:
                 raise ValueError("Market data dates must be strictly increasing")
 
     @classmethod
-    def from_csv(cls, path: str, *, calendar: TradingCalendar | None = None) -> MarketDataFeed:
-        """Load and validate a CSV file."""
-        return cls(pd.read_csv(path), calendar=calendar)
+    def from_csv(
+        cls,
+        path: str,
+        *,
+        calendar: TradingCalendar | None = None,
+        price_basis: PriceBasis | str = PriceBasis.RAW,
+    ) -> MarketDataFeed:
+        """Load and validate a CSV file without changing its price columns."""
+        return cls(pd.read_csv(path), calendar=calendar, price_basis=price_basis)
 
     @property
     def dates(self) -> list[date]:

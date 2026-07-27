@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import Decimal
 
+from alpha_cycle.data.integrity import CorporateActionType
 from alpha_cycle.domain.models import Fill, Side
 
 ZERO = Decimal("0")
@@ -21,8 +22,25 @@ class Position:
     realized_pnl: Decimal = ZERO
 
 
+@dataclass(frozen=True)
+class CorporateActionApplication:
+    """Auditable before/after state for one applied split event."""
+
+    effective_date: date
+    ticker: str
+    action_type: CorporateActionType
+    ratio: Decimal
+    quantity_before: int
+    quantity_after: int
+    average_cost_before: Decimal
+    average_cost_after: Decimal
+    cash_effect: Decimal
+    status: str
+    reason: str | None = None
+
+
 class Portfolio:
-    """Cash and long-only positions updated exclusively from fills."""
+    """Cash and long-only positions updated exclusively from fills and actions."""
 
     def __init__(self, initial_cash: Decimal) -> None:
         if initial_cash <= ZERO:
@@ -63,6 +81,67 @@ class Portfolio:
         self.total_slippage += fill.slippage
         self.traded_notional += fill.gross_value
         self.last_prices[fill.ticker] = fill.price
+
+    def apply_split(
+        self,
+        ticker: str,
+        ratio: Decimal,
+        effective_date: date,
+        *,
+        action_type: CorporateActionType,
+    ) -> CorporateActionApplication:
+        """Apply a split without changing cash, realized P&L, or total cost basis."""
+        if action_type not in {
+            CorporateActionType.SPLIT,
+            CorporateActionType.REVERSE_SPLIT,
+        }:
+            raise ValueError(f"Unsupported split action type: {action_type}")
+        if ratio <= ZERO or ratio == Decimal("1"):
+            raise ValueError("Split ratio must be positive and different from 1")
+        position = self.positions.get(ticker)
+        if position is None or position.quantity == 0:
+            return CorporateActionApplication(
+                effective_date=effective_date,
+                ticker=ticker,
+                action_type=action_type,
+                ratio=ratio,
+                quantity_before=0,
+                quantity_after=0,
+                average_cost_before=ZERO,
+                average_cost_after=ZERO,
+                cash_effect=ZERO,
+                status="not_held",
+                reason="no_open_position",
+            )
+        quantity_before = position.quantity
+        average_cost_before = position.average_cost
+        quantity_after_decimal = Decimal(quantity_before) * ratio
+        if quantity_after_decimal != quantity_after_decimal.to_integral_value():
+            raise ValueError(
+                f"Split for {ticker} creates fractional shares; cash settlement unsupported"
+            )
+        quantity_after = int(quantity_after_decimal)
+        average_cost_after = average_cost_before / ratio
+        total_cost_before = average_cost_before * quantity_before
+        total_cost_after = average_cost_after * quantity_after
+        if total_cost_before != total_cost_after:
+            raise ValueError("Split application changed total cost basis")
+        position.quantity = quantity_after
+        position.average_cost = average_cost_after
+        if ticker in self.last_prices:
+            self.last_prices[ticker] = self.last_prices[ticker] / ratio
+        return CorporateActionApplication(
+            effective_date=effective_date,
+            ticker=ticker,
+            action_type=action_type,
+            ratio=ratio,
+            quantity_before=quantity_before,
+            quantity_after=quantity_after,
+            average_cost_before=average_cost_before,
+            average_cost_after=average_cost_after,
+            cash_effect=ZERO,
+            status="applied",
+        )
 
     def mark(self, prices: dict[str, Decimal]) -> None:
         """Update valuation marks without changing accounting cost."""
@@ -129,4 +208,3 @@ class Portfolio:
             )
             rows.append(row)
         return rows
-
