@@ -17,10 +17,12 @@ from alpha_cycle.reporting.attribution import (
     CsvBenchmarkReturnsAdapter,
     CsvFactorReturnsAdapter,
     analyze_attribution,
+    strategy_returns_from_result,
 )
 from alpha_cycle.reporting.metrics import calculate_metrics
 from alpha_cycle.reporting.writer import write_outputs
 from alpha_cycle.risk.manager import RiskManager
+from alpha_cycle.scenarios import load_stress_config, run_stress_tests, write_stress_outputs
 from alpha_cycle.strategies.examples import (
     BuyAndHoldStrategy,
     CrossSectionalMomentumStrategy,
@@ -52,6 +54,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=AlignmentPolicy.STRICT.value,
     )
     backtest.add_argument("--min-factor-observations", type=int, default=20)
+    backtest.add_argument(
+        "--stress-config",
+        type=Path,
+        help="YAML path and factor stress scenario definitions",
+    )
     return parser
 
 
@@ -140,6 +147,19 @@ def _run_backtest(args: argparse.Namespace) -> None:
         initial_cash=config.backtest.initial_cash,
         attribution=attribution,
     )
+    if args.stress_config is not None:
+        stress_config = load_stress_config(args.stress_config)
+        factor_attribution = (
+            attribution.factor_attribution if attribution is not None else None
+        )
+        stress_result = run_stress_tests(
+            strategy_returns_from_result(result),
+            stress_config,
+            factor_attribution=factor_attribution,
+            periods_per_year=config.backtest.periods_per_year,
+        )
+        written.extend(write_stress_outputs(args.output, stress_result))
+
     print(f"Backtest completed: {len(result.fills)} fills, {len(written)} output files")
     print(f"Output directory: {args.output.resolve()}")
 
