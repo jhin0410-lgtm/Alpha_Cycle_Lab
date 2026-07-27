@@ -70,7 +70,7 @@ ECOS, FRED 등 외부 API를 자동 호출하지 않습니다. 원천 데이터�
 ## 설치와 실행
 
 ```bash
-python -m pip install -e "[dev]"
+python -m pip install -e ".[dev]"
 python -m alpha_cycle.cli backtest --input data/sample/prices.csv --strategy momentum --initial-cash 80000000 --config config/example.yaml --output outputs/momentum_test
 ```
 
