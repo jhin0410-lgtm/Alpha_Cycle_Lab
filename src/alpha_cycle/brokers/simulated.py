@@ -120,16 +120,6 @@ class SimulatedBroker(BrokerAdapter):
             return None
         return max(market_price, limit_price)
 
-    def _affordable_buy_quantity(
-        self,
-        execution_price: Decimal,
-        cash: Decimal,
-    ) -> int:
-        per_share_cash = execution_price * (ONE + self.commission.buy_rate)
-        if per_share_cash <= ZERO:
-            return 0
-        return int((cash / per_share_cash).to_integral_value(rounding=ROUND_FLOOR))
-
     def execute(
         self,
         order: Order,
@@ -166,12 +156,11 @@ class SimulatedBroker(BrokerAdapter):
             order.record_attempt(event_date, "volume_cap")
             return None
 
+        notional = execution_price * quantity
+        commission, tax = self.commission.calculate(order.side, notional)
         if order.side is Side.BUY:
-            quantity = min(
-                quantity,
-                self._affordable_buy_quantity(execution_price, portfolio.cash),
-            )
-            if quantity <= 0:
+            required_cash = notional + commission + tax
+            if required_cash > portfolio.cash:
                 order.record_attempt(event_date, "insufficient_cash")
                 if order.filled_quantity == 0:
                     order.status = OrderStatus.REJECTED
@@ -180,16 +169,13 @@ class SimulatedBroker(BrokerAdapter):
         else:
             position = portfolio.positions.get(order.ticker)
             held = position.quantity if position else 0
-            quantity = min(quantity, held)
-            if quantity <= 0:
+            if quantity > held:
                 order.record_attempt(event_date, "insufficient_position")
                 if order.filled_quantity == 0:
                     order.status = OrderStatus.REJECTED
                     order.rejection_reason = "insufficient_position"
                 return None
 
-        notional = execution_price * quantity
-        commission, tax = self.commission.calculate(order.side, notional)
         raw_slippage = abs(execution_price - base_price) * quantity
         timestamp = execution_timestamp or datetime.combine(
             event_date,
