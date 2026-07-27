@@ -32,4 +32,19 @@ jobs:
       - name: Enforce mypy result
         shell: bash
         run: test "${{ steps.mypy.outputs.status }}" -eq 0
-      - run: pytest
+      - id: pytest
+        shell: bash
+        run: |
+          set +e
+          pytest 2>&1 | tee pytest.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pytest-diagnostics-${{ matrix.python-version }}
+          path: pytest.log
+      - name: Enforce pytest result
+        shell: bash
+        run: test "${{ steps.pytest.outputs.status }}" -eq 0
