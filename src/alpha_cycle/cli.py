@@ -47,6 +47,9 @@ def _run_backtest(args: argparse.Namespace) -> None:
         raise ValueError("--initial-cash must be positive")
     config = load_config(args.config, initial_cash=cash)
     feed = MarketDataFeed.from_csv(str(args.input))
+    calendar = config.calendar
+    if calendar is not None:
+        feed = MarketDataFeed.from_csv(str(args.input), calendar=calendar)
     strategy = (
         BuyAndHoldStrategy()
         if args.strategy == "buy_hold"
@@ -64,6 +67,7 @@ def _run_backtest(args: argparse.Namespace) -> None:
         SimulatedBroker(config.commission, config.slippage),
         RiskManager(config.risk),
         config.backtest,
+        calendar=calendar,
     )
     result = engine.run()
     metrics = calculate_metrics(

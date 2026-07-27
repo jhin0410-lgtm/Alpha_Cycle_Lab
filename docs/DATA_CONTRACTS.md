@@ -7,6 +7,10 @@
 0 이하 가격, 비정상 high/low를 거부합니다. 검증 결과에는 전체 기간, 종목별 시작·종료
 날짜와 행 수, 요청 시 최신성 차이가 포함됩니다. 데이터는 날짜·종목 순으로 안정 정렬됩니다.
 
+날짜는 캘린더가 제공된 경우 반드시 실제 거래 세션이어야 합니다. 거래일은 ISO 날짜 형식으로
+저장하고, 체결/주문 timestamp는 ISO 8601 with timezone offset 형식으로 저장합니다.
+예: `2024-01-03T09:00:00+09:00`.
+
 ## Point-in-Time
 
 필수 열은 `observation_date,available_date,retrieved_at,source,revision_id`입니다.
