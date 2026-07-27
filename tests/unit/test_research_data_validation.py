@@ -63,11 +63,13 @@ def test_invalid_optional_financial_date_is_rejected() -> None:
 
 def test_non_finite_values_are_rejected() -> None:
     financial = valid_financial()
+    financial["value"] = financial["value"].astype(float)
     financial.loc[0, "value"] = float("inf")
     with pytest.raises(ValueError, match="must be finite"):
         validate_financial_statements(financial)
 
     macro = valid_macro()
+    macro["value"] = macro["value"].astype(float)
     macro.loc[0, "value"] = float("-inf")
     with pytest.raises(ValueError, match="must be finite"):
         validate_macro_series(macro)
