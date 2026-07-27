@@ -72,7 +72,13 @@ def _run_backtest(args: argparse.Namespace) -> None:
         periods_per_year=config.backtest.periods_per_year,
         risk_free_rate=config.backtest.risk_free_rate,
     )
-    written = write_outputs(args.output, result, metrics)
+    written = write_outputs(
+        args.output,
+        result,
+        metrics,
+        strategy_name=args.strategy,
+        initial_cash=config.backtest.initial_cash,
+    )
     print(f"Backtest completed: {len(result.fills)} fills, {len(written)} output files")
     print(f"Output directory: {args.output.resolve()}")
 
@@ -80,7 +86,13 @@ def _run_backtest(args: argparse.Namespace) -> None:
 def main(argv: list[str] | None = None) -> int:
     """Run CLI and convert expected input failures into concise messages."""
     parser = build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        if exc.code in {0, None}:
+            return 0
+        print("Error: invalid command usage", file=sys.stderr)
+        return 2
     try:
         if args.command == "backtest":
             _run_backtest(args)

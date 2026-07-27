@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,12 @@ from alpha_cycle.backtest.engine import BacktestResult
 
 
 def write_outputs(
-    output_dir: Path, result: BacktestResult, metrics: dict[str, Any]
+    output_dir: Path,
+    result: BacktestResult,
+    metrics: dict[str, Any],
+    *,
+    strategy_name: str | None = None,
+    initial_cash: Decimal | None = None,
 ) -> list[Path]:
     """Create all documented CSV, JSON, and Markdown outputs."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -52,6 +58,9 @@ def write_outputs(
     report_path.write_text(
         "# Backtest Report\n\n"
         "Research simulation only; this is not investment advice or a performance claim.\n\n"
+        "## Parameters\n\n"
+        f"- Strategy: {strategy_name or 'unknown'}\n"
+        f"- Initial cash: {initial_cash if initial_cash is not None else 'default'}\n\n"
         "## Metrics\n\n"
         f"{metric_lines}\n",
         encoding="utf-8",
