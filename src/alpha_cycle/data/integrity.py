@@ -281,17 +281,18 @@ class UniverseMembershipStore:
     ) -> tuple[str, ...]:
         """Return members active on session and known by information_date."""
         known_on = information_date or session
-        rows = self._data.loc[
-            (self._data["universe"] == universe)
-            & (self._data["available_date"] <= known_on)
-            & (self._data["member_from"] <= session)
-            & (
-                self._data["member_to"].isna()
-                | (session < self._data["member_to"])
-            )
-        ]
-        tickers = (str(value) for value in rows["ticker"].tolist())
-        return tuple(sorted(set(tickers)))
+        members: set[str] = set()
+        for _, row in self._data.iterrows():
+            if str(row["universe"]) != universe:
+                continue
+            available_date = cast(date, row["available_date"])
+            member_from = cast(date, row["member_from"])
+            member_to = _optional_date(row["member_to"])
+            if available_date > known_on:
+                continue
+            if member_from <= session and (member_to is None or session < member_to):
+                members.add(str(row["ticker"]))
+        return tuple(sorted(members))
 
     def is_member(
         self,
