@@ -12,6 +12,8 @@
 - 일봉 OHLCV 계약, 정합성·기간·최신성 검사와 시간순 피드
 - `available_date`로 공개 시점을 강제하는 Point-in-Time 계약
 - 재무·거시 데이터의 초도치/최신 수정치 revision 정책과 로컬 CSV 어댑터
+- 벤치마크 날짜 정렬, 추적오차·정보비율·베타·상관계수
+- 다중팩터 OLS 기반 알파·팩터 베타·설명력·잔차 변동성 귀속
 - RAW, SPLIT_ADJUSTED, TOTAL_RETURN_ADJUSTED 가격 기준 구분
 - 시점별 투자 유니버스와 미래 구성종목 비노출
 - split/reverse split의 수량·평균원가 회계 및 감사 출력
@@ -23,7 +25,7 @@
 - 매수/매도 수수료, 매도세, 고정/비율 슬리피지
 - 단일종목, 총익스포저, 회전율, 유동성, 일손실, 낙폭 제한과 구조화된 거절
 - 연구 검증용 Buy-and-Hold 및 횡단면 모멘텀 예제
-- 성과지표와 8개 감사 출력 파일, YAML 설정, CLI
+- 기본 8개 감사 출력과 선택적 귀속 출력 2개, YAML 설정, CLI
 - 추상 `BrokerAdapter`, 로컬 `SimulatedBroker`, 항상 비활성인 KIS 안전 스텁
 - 명시적 거래 캘린더와 `Asia/Seoul` 세션 기반 체결/리밸런싱 지원
 
@@ -40,6 +42,19 @@
 동일한 revision 정책으로 반환합니다. 현재 어댑터는 로컬 CSV와 DataFrame만 지원하며 DART,
 ECOS, FRED 등 외부 API를 자동 호출하지 않습니다. 원천 데이터의 실제 공시 시각과 수정 이력
 정확성은 데이터 공급자가 보증해야 합니다.
+
+## 벤치마크와 팩터 귀속
+
+벤치마크 CSV는 `date,benchmark,return`, 팩터 CSV는 `date,factor,return`의 long-form
+계약을 사용합니다. 기본 `strict` 정렬은 전략 수익률 날짜에 벤치마크나 팩터 값이 하나라도
+없으면 실행을 중단합니다. `inner`는 공통 날짜만 남기지만 결측 수익률을 0이나 직전 값으로
+채우지 않습니다.
+
+벤치마크 분석은 누적·연환산 벤치마크 수익률, 초과수익, 추적오차, 정보비율, 베타와 상관계수를
+계산합니다. 팩터 분석은 일별 전략수익률을 절편과 복수 팩터수익률에 OLS 회귀해 연환산 알파,
+팩터 베타, R², 잔차 변동성 및 평균 팩터 기여도를 제공합니다. 이는 통계적 설명이며 인과관계나
+미래 알파를 증명하지 않습니다. 팩터 정의·통화·시간대·수익률 기준은 사용자가 동일하게 맞춰야
+합니다.
 
 ## 주문 수명주기 정책
 
@@ -74,10 +89,17 @@ python -m pip install -e ".[dev]"
 python -m alpha_cycle.cli backtest --input data/sample/prices.csv --strategy momentum --initial-cash 80000000 --config config/example.yaml --output outputs/momentum_test
 ```
 
+귀속 분석을 함께 실행하는 예시는 다음과 같습니다.
+
+```bash
+python -m alpha_cycle.cli backtest --input data/sample/prices.csv --strategy momentum --initial-cash 80000000 --config config/example.yaml --benchmark data/sample/benchmark_returns.csv --benchmark-id KOSPI --factors data/sample/factor_returns.csv --alignment-policy strict --min-factor-observations 20 --output outputs/momentum_attribution
+```
+
 Windows PowerShell과 POSIX 셸 모두에서 위 한 줄 명령을 사용할 수 있습니다. 예제 CSV는
-프로그램 검증용 합성 데이터일 뿐입니다. 실행 후 `equity_curve.csv`, `positions.csv`,
+프로그램 검증용 합성 데이터일 뿐입니다. 기본 실행 후 `equity_curve.csv`, `positions.csv`,
 `orders.csv`, `fills.csv`, `trades.csv`, `corporate_actions.csv`, `metrics.json`,
-`backtest_report.md`가 생성됩니다.
+`backtest_report.md`가 생성됩니다. 벤치마크를 제공하면 `benchmark_alignment.csv`와
+`attribution_summary.json`이 추가됩니다.
 
 ```bash
 python -m pytest
@@ -93,11 +115,14 @@ python -m mypy
 정보가 과거 가격에 소급 반영될 수 있으므로 전략 실행 입력으로 안전하다고 가정하지 않습니다.
 
 재무·거시 revision 계약은 미래 수정치 사용을 막지만 공시 시각의 장중 순서, 공급자별 값의
-정의 차이, restatement의 경제적 의미까지 자동 판정하지 않습니다. 체결은 일봉 기반 단순
-모델이고 실제 호가, 주문 우선순위, 장중 체결 순서, 동적 시장 충격을 재현하지 않습니다.
-거래비용 설정은 예시이며 특정 시장이나 증권사의 현재 요율이 아닙니다. 기본 시장 시간대는
-`Asia/Seoul`입니다. 공식 KRX 휴장일·기업행동·구성종목 자동 다운로드는 지원하지 않으며,
-테스트와 예제는 명시적 합성 데이터 계약을 사용합니다.
+정의 차이, restatement의 경제적 의미까지 자동 판정하지 않습니다. 벤치마크와 팩터 귀속은
+동일 날짜의 단순수익률이 비교 가능하다고 가정하며, 비동기 시장·환율·휴장일·팩터 구축 오류를
+자동 보정하지 않습니다. 회귀계수는 표본과 팩터 선택에 민감하고 인과관계를 의미하지 않습니다.
+
+체결은 일봉 기반 단순 모델이고 실제 호가, 주문 우선순위, 장중 체결 순서, 동적 시장 충격을
+재현하지 않습니다. 거래비용 설정은 예시이며 특정 시장이나 증권사의 현재 요율이 아닙니다.
+기본 시장 시간대는 `Asia/Seoul`입니다. 공식 KRX 휴장일·기업행동·구성종목 자동 다운로드는
+지원하지 않으며, 테스트와 예제는 명시적 합성 데이터 계약을 사용합니다.
 
 ## 구조
 
