@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pytest
-from zoneinfo import ZoneInfo
 
-from alpha_cycle.backtest.engine import BacktestConfig, BacktestEngine, ExecutionPrice
+from alpha_cycle.backtest.engine import BacktestConfig, BacktestEngine
 from alpha_cycle.brokers.simulated import SimulatedBroker
 from alpha_cycle.calendar.rebalance import MonthlyRebalanceSchedule, WeeklyRebalanceSchedule
 from alpha_cycle.calendar.sessions import ExplicitTradingCalendar
 from alpha_cycle.data.market import MarketDataFeed
-from alpha_cycle.domain.models import TargetPosition
 from alpha_cycle.portfolio.portfolio import Portfolio
 from alpha_cycle.risk.manager import RiskConfig, RiskManager
 from alpha_cycle.strategies.examples import BuyAndHoldStrategy
@@ -54,9 +53,33 @@ def test_calendar_detects_sessions_and_timezones() -> None:
     assert open_dt == datetime(2024, 1, 3, 9, 0, tzinfo=ZoneInfo("Asia/Seoul"))
     assert close_dt == datetime(2024, 1, 3, 15, 30, tzinfo=ZoneInfo("Asia/Seoul"))
     assert calendar.session_label(open_dt) == date(2024, 1, 3)
+    assert calendar.session_label(
+        datetime(2024, 1, 3, 0, 0, tzinfo=ZoneInfo("UTC"))
+    ) == date(2024, 1, 3)
 
     with pytest.raises(ValueError):
         calendar.session_label(datetime(2024, 1, 3, 9, 0))
+
+
+def test_calendar_validates_session_collection_once() -> None:
+    session_generator = (value for value in [date(2024, 1, 2), date(2024, 1, 3)])
+    calendar = ExplicitTradingCalendar(
+        name="GENERATOR_TEST",
+        sessions=session_generator,
+        timezone=ZoneInfo("Asia/Seoul"),
+        open_time=time(9, 0),
+        close_time=time(15, 30),
+    )
+    assert calendar.sessions == (date(2024, 1, 2), date(2024, 1, 3))
+
+    with pytest.raises(ValueError, match="must not be empty"):
+        ExplicitTradingCalendar(
+            name="EMPTY_TEST",
+            sessions=[],
+            timezone=ZoneInfo("Asia/Seoul"),
+            open_time=time(9, 0),
+            close_time=time(15, 30),
+        )
 
 
 def test_feed_rejects_non_trading_session_values() -> None:
@@ -133,7 +156,9 @@ def test_engine_uses_calendar_next_open_and_timezone_aware_fills() -> None:
     )
     result = engine.run()
     assert result.fills[0].timestamp.tzinfo is not None
-    assert result.fills[0].timestamp == datetime(2024, 1, 3, 9, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+    assert result.fills[0].timestamp == datetime(
+        2024, 1, 3, 9, 0, tzinfo=ZoneInfo("Asia/Seoul")
+    )
     assert result.fills[0].price == Decimal("101")
 
 
@@ -144,5 +169,7 @@ def test_rebalance_schedules_follow_calendar_boundaries() -> None:
 
     assert weekly.should_rebalance(date(2024, 1, 2), calendar)
     assert not weekly.should_rebalance(date(2024, 1, 3), calendar)
+    assert weekly.should_rebalance(date(2024, 1, 8), calendar)
     assert monthly.should_rebalance(date(2024, 1, 2), calendar)
     assert not monthly.should_rebalance(date(2024, 1, 4), calendar)
+    assert not monthly.should_rebalance(date(2024, 1, 8), calendar)
