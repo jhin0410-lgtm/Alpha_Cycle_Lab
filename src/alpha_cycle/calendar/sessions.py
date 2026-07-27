@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date, datetime, time
-from typing import Iterable
 from zoneinfo import ZoneInfo
 
 
@@ -32,9 +32,14 @@ class ExplicitTradingCalendar:
             raise ValueError("Open/close times must be timezone-naive")
         if close_time <= open_time:
             raise ValueError("Session close time must be later than session open time")
-        normalized_sessions = sorted(set(sessions))
-        if len(normalized_sessions) != len(list(sessions)):
+
+        session_values = tuple(sessions)
+        if not session_values:
+            raise ValueError("Trading sessions must not be empty")
+        normalized_sessions = sorted(set(session_values))
+        if len(normalized_sessions) != len(session_values):
             raise ValueError("Trading sessions must be unique")
+
         self.name = name
         self.timezone = timezone
         self._sessions = tuple(normalized_sessions)
@@ -91,9 +96,10 @@ class ExplicitTradingCalendar:
         return datetime.combine(value, self._close_time, tzinfo=self.timezone)
 
     def session_label(self, timestamp: datetime) -> date:
-        """Convert a timezone-aware timestamp back to its trading session date."""
+        """Convert a timezone-aware timestamp to its local trading-session date."""
         if timestamp.tzinfo is None:
             raise ValueError("Timestamp must be timezone-aware")
-        if not self.is_session(timestamp.date()):
-            raise ValueError(f"{timestamp.date()} is not a trading session")
-        return timestamp.date()
+        local_date = timestamp.astimezone(self.timezone).date()
+        if not self.is_session(local_date):
+            raise ValueError(f"{local_date} is not a trading session")
+        return local_date
