@@ -17,4 +17,16 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: ruff check .
       - run: mypy
-      - run: pytest
+      - name: Run pytest diagnostics
+        run: |
+          set +e
+          pytest > pytest.txt 2>&1
+          echo $? > pytest-exit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pytest-broker-reconciliation-${{ matrix.python-version }}
+          path: |
+            pytest.txt
+            pytest-exit.txt
+      - name: Enforce pytest result
+        run: test "$(cat pytest-exit.txt)" = "0"
