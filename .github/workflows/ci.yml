@@ -17,9 +17,12 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - name: Capture Ruff diagnostics
         run: ruff check . > ruff.txt 2>&1 || true
+      - name: Capture mypy diagnostics
+        run: mypy > mypy.txt 2>&1 || true
       - uses: actions/upload-artifact@v4
         with:
-          name: ruff-diagnostics
-          path: ruff.txt
-      - run: mypy
+          name: quality-diagnostics
+          path: |
+            ruff.txt
+            mypy.txt
       - run: pytest
