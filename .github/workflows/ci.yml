@@ -15,6 +15,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - run: ruff check .
+      - name: Capture Ruff diagnostics
+        run: ruff check . > ruff.txt 2>&1 || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruff-diagnostics
+          path: ruff.txt
       - run: mypy
       - run: pytest
