@@ -1,0 +1,13 @@
+series:
+  - series_id: kr_base_rate
+    stat_code: 722Y001
+    cycle: D
+    start: "20260701"
+    end: "20260728"
+    item_codes: ["0101000"]
+  - series_id: usd_krw
+    stat_code: 731Y001
+    cycle: D
+    start: "20260701"
+    end: "20260728"
+    item_codes: ["0000001"]
