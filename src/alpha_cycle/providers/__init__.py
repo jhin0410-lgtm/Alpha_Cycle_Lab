@@ -6,8 +6,8 @@ from alpha_cycle.providers.tossinvest import (
     MarketPrice,
     PriceBatch,
     TossInvestCredentials,
-    TossInvestReadOnlyClient,
 )
+from alpha_cycle.providers.tossinvest_compressed import TossInvestReadOnlyClient
 
 __all__ = [
     "Candle",
