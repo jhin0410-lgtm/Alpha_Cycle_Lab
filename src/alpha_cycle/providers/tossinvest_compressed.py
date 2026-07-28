@@ -14,10 +14,8 @@ from typing import cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from alpha_cycle.providers.tossinvest import HttpResponse, HttpTransport, TossInvestCredentials
 from alpha_cycle.providers.tossinvest import (
-    HttpResponse,
-    HttpTransport,
-    TossInvestCredentials,
     TossInvestReadOnlyClient as _BaseTossInvestReadOnlyClient,
 )
 
@@ -51,8 +49,9 @@ class DecompressingUrllibTransport:
             if encoding in {"", "identity"}:
                 return raw
         except (OSError, zlib.error) as exc:
+            encoding_label = encoding or "unknown"
             raise ValueError(
-                f"TossInvest response decompression failed: content_encoding={encoding or 'unknown'}"
+                f"TossInvest response decompression failed: content_encoding={encoding_label}"
             ) from exc
         raise ValueError(f"Unsupported TossInvest content encoding: {encoding}")
 
