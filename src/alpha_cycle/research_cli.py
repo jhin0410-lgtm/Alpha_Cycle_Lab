@@ -14,7 +14,7 @@ from alpha_cycle.intelligence.fundamental_macro import (
     write_fundamental_macro_snapshot,
 )
 from alpha_cycle.providers.ecos import EcosReadOnlyClient, load_ecos_series_config
-from alpha_cycle.providers.opendart import OpenDartReadOnlyClient, REPORT_PERIODS
+from alpha_cycle.providers.opendart import REPORT_PERIODS, OpenDartReadOnlyClient
 
 
 def _iso_date(value: str) -> date:
