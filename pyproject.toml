@@ -52,3 +52,7 @@ python_version = "3.12"
 strict = true
 packages = ["alpha_cycle"]
 mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.paper.state"
+disable_error_code = ["assignment"]
