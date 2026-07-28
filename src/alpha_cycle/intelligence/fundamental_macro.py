@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import cast
 
 import pandas as pd
 
@@ -164,14 +163,12 @@ class FundamentalMacroCollector:
                 "disclosures": disclosures.raw_payload,
             }
             timestamps = pd.to_datetime(financial.frame["retrieved_at"], utc=True)
-            captured_candidates.append(
-                cast(pd.Timestamp, timestamps.max()).to_pydatetime()
-            )
+            captured_candidates.append(timestamps.max().to_pydatetime())
         financial_all = pd.concat(financial_frames, ignore_index=True)
         disclosure_all = pd.concat(disclosure_frames, ignore_index=True)
         macro_batch = self.ecos.collect(ecos_specs)
         macro_times = pd.to_datetime(macro_batch.frame["retrieved_at"], utc=True)
-        captured_candidates.append(cast(pd.Timestamp, macro_times.max()).to_pydatetime())
+        captured_candidates.append(macro_times.max().to_pydatetime())
         portal = ResearchDataPortal(
             financials=FinancialStatementStore(financial_all),
             macro=MacroSeriesStore(macro_batch.frame),
