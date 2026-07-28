@@ -1,4 +1,4 @@
-"""Command-line entry point for local research backtests and paper state."""
+"""Command-line entry point for research, paper state, and reconciliation."""
 
 from __future__ import annotations
 
@@ -6,11 +6,17 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from alpha_cycle.backtest.engine import BacktestEngine
+from alpha_cycle.brokers.reconciliation import (
+    load_broker_snapshot,
+    local_state_from_store,
+    reconcile_account_state,
+    write_reconciliation_outputs,
+)
 from alpha_cycle.brokers.simulated import SimulatedBroker
 from alpha_cycle.config import load_config
 from alpha_cycle.data.market import MarketDataFeed
@@ -75,6 +81,18 @@ def build_parser() -> argparse.ArgumentParser:
     paper_export = paper_commands.add_parser("export", help="export normalized audit files")
     paper_export.add_argument("--database", type=Path, required=True)
     paper_export.add_argument("--output", type=Path, required=True)
+
+    reconcile = commands.add_parser(
+        "broker-reconcile",
+        help="compare local paper state with a read-only broker snapshot",
+    )
+    reconcile.add_argument("--database", type=Path, required=True)
+    reconcile.add_argument("--snapshot", type=Path, required=True)
+    reconcile.add_argument("--output", type=Path, required=True)
+    reconcile.add_argument("--max-snapshot-age-seconds", type=int, default=300)
+    reconcile.add_argument("--future-tolerance-seconds", type=int, default=5)
+    reconcile.add_argument("--cash-tolerance", default="0")
+    reconcile.add_argument("--average-cost-tolerance", default="0.01")
     return parser
 
 
@@ -189,7 +207,7 @@ def _run_paper_state(args: argparse.Namespace) -> None:
                 strategy_name=args.strategy,
                 initial_cash=Decimal(args.initial_cash),
                 config_digest=args.config_digest,
-                created_at=datetime.now(timezone.utc),
+                created_at=datetime.now(UTC),
             )
         )
         print(f"Paper state initialized: {args.database.resolve()}")
@@ -221,6 +239,40 @@ def _run_paper_state(args: argparse.Namespace) -> None:
     print(f"Output directory: {args.output.resolve()}")
 
 
+def _run_broker_reconciliation(args: argparse.Namespace) -> None:
+    if not args.database.is_file():
+        raise ValueError(f"Paper state database does not exist: {args.database}")
+    if not args.snapshot.is_file():
+        raise ValueError(f"Broker snapshot does not exist: {args.snapshot}")
+    local = local_state_from_store(PaperTradingStore(args.database))
+    broker = load_broker_snapshot(args.snapshot)
+    report = reconcile_account_state(
+        local,
+        broker,
+        max_snapshot_age_seconds=args.max_snapshot_age_seconds,
+        future_tolerance_seconds=args.future_tolerance_seconds,
+        cash_tolerance=Decimal(args.cash_tolerance),
+        average_cost_tolerance=Decimal(args.average_cost_tolerance),
+    )
+    written = write_reconciliation_outputs(args.output, report)
+    print(
+        json.dumps(
+            {
+                "status": report.status.value,
+                "can_submit_orders": report.can_submit_orders,
+                "blocking_count": report.blocking_count,
+                "warning_count": report.warning_count,
+                "output_files": len(written),
+            },
+            sort_keys=True,
+        )
+    )
+    if not report.can_submit_orders:
+        raise ValueError(
+            "Broker reconciliation did not authorize order submission; review output artifacts"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run CLI and convert expected input failures into concise messages."""
     parser = build_parser()
@@ -236,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
             _run_backtest(args)
         elif args.command == "paper-state":
             _run_paper_state(args)
+        elif args.command == "broker-reconcile":
+            _run_broker_reconciliation(args)
         return 0
     except (ValueError, OSError, InvalidOperation, sqlite3.DatabaseError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
