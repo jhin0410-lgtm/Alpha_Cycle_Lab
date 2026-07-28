@@ -63,16 +63,28 @@ def test_partial_bulk_response_is_completed_with_single_symbol_fallback() -> Non
     transport = FakeTransport(
         [
             _token(),
-            HttpResponse(200, {"X-RateLimit-Remaining": "9"}, {"result": [_price("005930")]}),
-            HttpResponse(200, {"X-RateLimit-Remaining": "8"}, {"result": [_price("000660", "300000")]}),
+            HttpResponse(
+                200,
+                {"X-RateLimit-Remaining": "9"},
+                {"result": [_price("005930")]},
+            ),
+            HttpResponse(
+                200,
+                {"X-RateLimit-Remaining": "8"},
+                {"result": [_price("000660", "300000")]},
+            ),
         ]
     )
 
     batch = _client(transport).prices(["005930", "000660"])
 
     assert [item.symbol for item in batch.prices] == ["000660", "005930"]
-    assert batch.response_headers["X-Alpha-Cycle-Price-Fallback-Count"] == "1"
-    assert batch.response_headers["X-Alpha-Cycle-Price-Fallback-Symbols"] == "000660"
+    fallback_count = batch.response_headers["X-Alpha-Cycle-Price-Fallback-Count"]
+    fallback_symbols = batch.response_headers[
+        "X-Alpha-Cycle-Price-Fallback-Symbols"
+    ]
+    assert fallback_count == "1"
+    assert fallback_symbols == "000660"
     assert isinstance(batch.raw_payload, dict)
     assert "symbols=005930%2C000660" in transport.requests[1][1]
     assert transport.requests[2][1].endswith("symbols=000660")
@@ -135,7 +147,10 @@ def test_single_symbol_fallback_must_return_exact_requested_symbol() -> None:
         ]
     )
 
-    with pytest.raises(ValueError, match="single-symbol fallback did not match") as exc_info:
+    with pytest.raises(
+        ValueError,
+        match="single-symbol fallback did not match",
+    ) as exc_info:
         _client(transport).prices(["005930", "000660"])
 
     assert "missing=['000660']" in str(exc_info.value)
