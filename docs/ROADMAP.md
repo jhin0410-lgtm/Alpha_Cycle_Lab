@@ -23,7 +23,16 @@
 8. 읽기 전용 broker reconciliation과 주문 승인 게이트
    - 완료: snapshot schema, freshness 검사, 현금·포지션·주문·체결 대조, fail-closed 보고서
    - 남음: 실제 broker snapshot adapter, 체결 정정·취소, 다중통화·결제일 현금, 응답 서명 검증
-9. 독립 보안검토 후에만 KIS 모의투자 어댑터 검토
+9. 실시간 시장 인텔리전스
+   - 부분 완료: 토스증권 OAuth2 읽기 전용 현재가·1분/일봉, rate-limit 재시도, 원본·정규화 불변 snapshot
+   - 부분 완료: 수익률·상대강도·변동성·거래량·낙폭·RSI·추세 효율성 feature
+   - 남음: 장 캘린더·호가·체결·랭킹·시장 폭, 명시적 scheduler와 데이터 보존 정책
+10. 기업·거시·산업 인텔리전스
+   - 남음: OpenDART 공시·XBRL, ECOS 거시지표, 경쟁사·수주·CAPEX·점유율 evidence model
+11. 투자 논리·촉매·학습 loop
+   - 남음: 시점별 thesis와 Bull/Base/Bear 저장, 1·5·20·60일 성과 라벨, champion-challenger 검증
+12. 독립 보안검토 후에만 제한적 모의주문 어댑터 검토
    - 남음: 자격증명 저장소, 최소 권한, idempotency key, rate limit, kill switch, 사용자 확인
 
-실계좌 자동매매는 현재 로드맵 범위가 아닙니다.
+실계좌 자동매매는 현재 로드맵 범위가 아닙니다. 주문 연동보다 분석 정확성, 시점 정합성,
+재현 가능성, 사후 성과검증과 학습 loop를 우선합니다.
