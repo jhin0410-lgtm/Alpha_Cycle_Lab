@@ -9,7 +9,10 @@ import zlib
 import pytest
 
 from alpha_cycle.providers import TossInvestCredentials, TossInvestReadOnlyClient
-from alpha_cycle.providers.tossinvest_compressed import DecompressingUrllibTransport
+from alpha_cycle.providers.tossinvest_compressed import (
+    DecompressingUrllibTransport,
+    _normalize_error_payload,
+)
 
 
 def _encoded(payload: object) -> bytes:
@@ -58,3 +61,50 @@ def test_unsupported_content_encoding_is_rejected() -> None:
 def test_public_client_uses_compression_aware_transport() -> None:
     client = TossInvestReadOnlyClient(TossInvestCredentials("client", "secret"))
     assert isinstance(client.transport, DecompressingUrllibTransport)
+
+
+def test_documented_error_envelope_preserves_code_and_adds_header_request_id() -> None:
+    normalized = _normalize_error_payload(
+        {"error": {"code": "forbidden", "message": "권한이 부족합니다."}},
+        status=403,
+        headers={"X-Request-Id": "request-123"},
+        url="https://openapi.tossinvest.com/api/v1/prices?symbols=005930",
+    )
+    assert normalized == {
+        "error": {
+            "code": "forbidden",
+            "message": "권한이 부족합니다.",
+            "requestId": "request-123",
+        }
+    }
+
+
+def test_top_level_edge_error_is_normalized_with_auth_stage() -> None:
+    normalized = _normalize_error_payload(
+        {"message": "Forbidden"},
+        status=403,
+        headers={"x-amz-cf-id": "edge-request-456"},
+        url="https://openapi.tossinvest.com/oauth2/token",
+    )
+    assert normalized == {
+        "error": {
+            "code": "auth-http-403",
+            "message": "auth request rejected: Forbidden",
+            "requestId": "edge-request-456",
+        }
+    }
+
+
+def test_unknown_edge_error_reports_safe_keys_and_market_data_stage() -> None:
+    normalized = _normalize_error_payload(
+        {"reason": "policy"},
+        status=403,
+        headers={},
+        url="https://openapi.tossinvest.com/api/v1/prices?symbols=005930",
+    )
+    assert normalized == {
+        "error": {
+            "code": "market-data-http-403",
+            "message": "market-data request was rejected; response_keys=reason",
+        }
+    }
