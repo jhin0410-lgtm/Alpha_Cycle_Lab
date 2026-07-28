@@ -4,8 +4,15 @@
 에는 placeholder만 있으며 `.env*`는 예외 파일을 제외하고 무시됩니다. `secrets/`,
 `credentials/`, `data/raw/`, `data/private/`, `outputs/`, 로컬 DB도 무시됩니다.
 
-현재 코드는 외부 API에 연결하지 않습니다. `BrokerAdapter.live_trading_enabled` 기본값은
-`False`이고 KIS 스텁은 모든 실행에서 예외를 발생시킵니다.
+토스증권 연동은 현재 OAuth2 client credentials와 계좌 비의존 시장 데이터에만 한정됩니다.
+`TOSSINVEST_CLIENT_ID`와 `TOSSINVEST_CLIENT_SECRET`은 로컬 환경변수로만 읽으며, 어댑터는
+공식 `https://openapi.tossinvest.com` 호스트만 허용합니다. access token과 client secret은
+예외 메시지, snapshot, CSV, 테스트 fixture 또는 로그에 기록하지 않습니다.
+
+토스증권 어댑터의 경로 allow-list에는 현재가·캔들 등 읽기 전용 시장 데이터만 존재합니다.
+계좌 조회와 주문 생성·정정·취소·조건주문 경로는 구현하지 않았고, allow-list 밖의 요청은
+실행 전에 거부합니다. `BrokerAdapter.live_trading_enabled` 기본값은 `False`이고 KIS 스텁도
+모든 실행에서 예외를 발생시킵니다.
 
 브로커 reconciliation 입력은 읽기 전용 JSON 파일이며 `account_ref_hash`에는 64자리 SHA-256
 16진수만 허용합니다. 실제 계좌번호, 앱 키, 시크릿, access token, refresh token, 주민번호,
