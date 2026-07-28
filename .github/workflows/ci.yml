@@ -15,6 +15,19 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - run: ruff check .
+      - name: Capture Ruff diagnostics
+        run: |
+          set +e
+          python -m ruff check . > ruff-compressed-response.txt 2>&1
+          echo $? > ruff-compressed-response.exit
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruff-compressed-response-${{ matrix.python-version }}
+          path: |
+            ruff-compressed-response.txt
+            ruff-compressed-response.exit
+      - name: Enforce Ruff result
+        run: test "$(cat ruff-compressed-response.exit)" = "0"
       - run: mypy
       - run: pytest
