@@ -1,7 +1,8 @@
 # Alpha Cycle Lab
 
-개인 투자 연구를 위한 결정론적 이벤트 기반 백테스트 코어입니다. Python 3.12와
-`src` 레이아웃을 사용하며, 전략·주문·위험관리·체결·포트폴리오 회계를 분리합니다.
+개인 투자 연구를 위한 결정론적 이벤트 기반 백테스트 및 읽기 전용 시장 인텔리전스
+코어입니다. Python 3.12와 `src` 레이아웃을 사용하며, 데이터 수집·전략·주문·위험관리·
+체결·포트폴리오 회계와 분석 snapshot을 분리합니다.
 
 > 이 프로젝트는 교육 및 연구 목적이며 투자 추천 프로그램이 아닙니다. 실전 주문 기능은
 > 없고 의도적으로 비활성화되어 있습니다. 포함된 예제 전략과 fixture의 결과는 실제 성과
@@ -9,6 +10,10 @@
 
 ## 현재 구현 범위
 
+- 토스증권 공식 REST API의 OAuth2 읽기 전용 현재가·1분봉·일봉 수집
+- 명시적 RAW/수정주가 기준, rate-limit 재시도와 원본 응답 보존
+- 수익률·상대강도·변동성·거래량·낙폭·RSI·추세 효율성 feature
+- content-addressed immutable 시장 인텔리전스 snapshot
 - 일봉 OHLCV 계약, 정합성·기간·최신성 검사와 시간순 피드
 - `available_date`로 공개 시점을 강제하는 Point-in-Time 계약
 - 재무·거시 데이터의 초도치/최신 수정치 revision 정책과 로컬 CSV 어댑터
@@ -30,7 +35,29 @@
 - 추상 `BrokerAdapter`, 로컬 `SimulatedBroker`, 항상 비활성인 KIS 안전 스텁
 - 명시적 거래 캘린더와 `Asia/Seoul` 세션 기반 체결/리밸런싱 지원
 
-공매도, 레버리지, 실시간 데이터, 실전 증권사 주문, 자동매매는 지원하지 않습니다.
+공매도, 레버리지, 실전 증권사 주문과 자동매매는 지원하지 않습니다. 외부 네트워크 기능은
+토스증권의 계좌 비의존 읽기 전용 시장 데이터에 한정되며, 계좌·보유자산·주문 API는 구현하지
+않았습니다.
+
+## 읽기 전용 시장 인텔리전스
+
+로컬 환경변수에 토스증권 Open API 자격증명을 설정합니다. 실제 값은 `.env.example`, 소스,
+테스트 또는 GitHub에 넣지 마십시오.
+
+```text
+TOSSINVEST_CLIENT_ID=...
+TOSSINVEST_CLIENT_SECRET=...
+```
+
+기본 candle 기준은 공급자의 수정주가 기본값을 숨기지 않도록 `--no-adjusted`입니다.
+
+```bash
+python -m alpha_cycle.cli market-intel --symbols 005930,000660 --interval 1d --count 100 --no-adjusted --output data/private/market-intelligence
+```
+
+한 번의 실행은 현재가, 종목별 candle, 기술 feature와 원본 JSON을 하나의 immutable 디렉터리에
+저장합니다. REST one-shot 수집이며 background scheduler나 WebSocket stream은 아직 없습니다.
+분석 지표는 가격과 유동성의 상태를 설명할 뿐 미래 방향을 단정하지 않습니다.
 
 ## 재무·거시 revision 정책
 
@@ -144,6 +171,11 @@ python -m mypy
 상관관계, 변동성, 거래비용이 동시에 비선형적으로 변할 수 있으며 현재 모형은 이러한 내생적
 변화를 자동 추정하지 않습니다. 결과는 손실 한도나 미래 최악 손실의 보증값이 아닙니다.
 
+토스증권 시장 데이터는 REST 호출 시점의 provider 응답이며 WebSocket tick stream이 아닙니다.
+1분봉 변동성 연환산은 거래일당 390분·연 252일을 가정하므로 한국·미국의 실제 세션 차이,
+휴장·단축장·프리마켓·애프터마켓을 아직 자동 보정하지 않습니다. 기술 feature는 설명 변수이며
+독립적인 재무·산업·거시·밸류에이션 검증 없이 투자 판단으로 사용해서는 안 됩니다.
+
 체결은 일봉 기반 단순 모델이고 실제 호가, 주문 우선순위, 장중 체결 순서, 동적 시장 충격을
 재현하지 않습니다. 거래비용 설정은 예시이며 특정 시장이나 증권사의 현재 요율이 아닙니다.
 기본 시장 시간대는 `Asia/Seoul`입니다. 공식 KRX 휴장일·기업행동·구성종목 자동 다운로드는
@@ -154,13 +186,15 @@ python -m mypy
 ```text
 src/alpha_cycle/
   data/ domain/ strategies/ portfolio/ risk/
-  backtest/ brokers/ reporting/ scenarios/ calendar/ cli.py config.py
+  backtest/ brokers/ providers/ intelligence/ reporting/ scenarios/ calendar/
+  cli.py config.py
 tests/
   unit/ integration/
 config/  data/sample/  docs/  .github/workflows/
 ```
 
-설계 상세는 [ARCHITECTURE](docs/ARCHITECTURE.md), 가정은
+설계 상세는 [ARCHITECTURE](docs/ARCHITECTURE.md), 시장 인텔리전스 계약은
+[MARKET_INTELLIGENCE](docs/MARKET_INTELLIGENCE.md), 가정은
 [BACKTEST_ASSUMPTIONS](docs/BACKTEST_ASSUMPTIONS.md), 데이터 계약은
 [DATA_CONTRACTS](docs/DATA_CONTRACTS.md), 공개 저장소 지침은
 [SECURITY](docs/SECURITY.md)를 참고하십시오. 향후 계획은 [ROADMAP](docs/ROADMAP.md)에

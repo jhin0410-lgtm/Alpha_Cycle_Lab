@@ -1,6 +1,19 @@
 # Architecture
 
-처리 순서는 다음과 같습니다.
+라이브 시장 인텔리전스 처리 순서는 다음과 같습니다.
+
+```text
+TossInvestReadOnlyClient
+→ OAuth2 token cache / rate-limit retry
+→ current prices + 1m or 1d candles
+→ response schema and OHLC validation
+→ MarketIntelligenceCollector
+→ explainable technical features
+→ content-addressed immutable snapshot
+→ future outcome labels / thesis / learning loop
+```
+
+백테스트와 paper-state 처리 순서는 다음과 같습니다.
 
 ```text
 TradingCalendar
@@ -28,6 +41,16 @@ TradingCalendar
    ├─ benchmark alignment / factor attribution
    └─ scenario path stress / factor stress / breakeven
 ```
+
+`TossInvestReadOnlyClient`는 외부 네트워크를 사용하는 유일한 현재 구현이지만 공식 호스트와
+읽기 전용 시장 데이터 경로만 허용합니다. 현재가를 최대 200종목까지 묶음 조회하고 캔들은
+종목별로 수집합니다. 토큰은 만료 직전까지 메모리에만 캐시하며 429와 일시적 5xx는 제한된
+횟수만 재시도합니다. 계좌·자산·주문 API는 이 어댑터에 존재하지 않습니다.
+
+`MarketIntelligenceCollector`는 provider 응답을 곧바로 전략 또는 주문으로 전달하지 않습니다.
+원본 payload, 정규화된 현재가와 캔들, 계산된 feature를 하나의 snapshot으로 묶고 canonical
+JSON SHA-256으로 식별합니다. snapshot에는 adjusted 여부와 수집 시각이 포함되며 access token과
+자격증명은 포함되지 않습니다. 이 경계 뒤에서만 사후 수익률 라벨과 모델 검증을 수행합니다.
 
 전략 인터페이스에는 브로커가 전달되지 않으므로 직접 주문할 수 없습니다.
 `MarketDataFeed.history_through(date)`는 현재 이벤트 날짜 이후 행을 반환하지 않습니다.
