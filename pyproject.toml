@@ -44,6 +44,7 @@ select = ["E", "F", "I", "B", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/alpha_cycle/paper/state.py" = ["E501", "UP017"]
+"src/alpha_cycle/brokers/reconciliation.py" = ["E501"]
 "src/alpha_cycle/cli.py" = ["UP017"]
 "tests/unit/test_paper_state.py" = ["UP017"]
 
