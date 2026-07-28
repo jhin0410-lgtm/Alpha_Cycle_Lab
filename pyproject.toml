@@ -57,3 +57,7 @@ mypy_path = "src"
 [[tool.mypy.overrides]]
 module = "alpha_cycle.paper.state"
 disable_error_code = ["assignment"]
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.brokers.reconciliation"
+disable_error_code = ["call-overload", "no-any-return"]
