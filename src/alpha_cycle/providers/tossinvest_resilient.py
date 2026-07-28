@@ -40,7 +40,9 @@ def _requested_symbols(symbols: Sequence[str]) -> tuple[str, ...]:
     if not normalized:
         raise ValueError("At least one symbol is required")
     if len(normalized) > MAX_PRICE_SYMBOLS:
-        raise ValueError(f"TossInvest prices supports at most {MAX_PRICE_SYMBOLS} symbols")
+        raise ValueError(
+            f"TossInvest prices supports at most {MAX_PRICE_SYMBOLS} symbols"
+        )
     return normalized
 
 
@@ -53,7 +55,9 @@ def _parse_price_payload(payload: object) -> list[MarketPrice]:
         row = _mapping(raw, "price row")
         symbol = _normalize_symbol(row.get("symbol"), "price symbol")
         if symbol in seen:
-            raise ValueError(f"TossInvest price response contains duplicate symbol: {symbol}")
+            raise ValueError(
+                f"TossInvest price response contains duplicate symbol: {symbol}"
+            )
         seen.add(symbol)
         parsed.append(
             MarketPrice(
