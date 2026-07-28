@@ -10,13 +10,14 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from email.message import Message
 from http.client import HTTPMessage
 from pathlib import Path
-from typing import Callable, Mapping, Protocol, cast
+from typing import Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -363,7 +364,9 @@ class TossInvestReadOnlyClient:
         return response
 
     def prices(self, symbols: list[str] | tuple[str, ...]) -> PriceBatch:
-        normalized = tuple(dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip()))
+        normalized = tuple(
+            dict.fromkeys(symbol.strip().upper() for symbol in symbols if symbol.strip())
+        )
         if not normalized:
             raise ValueError("At least one symbol is required")
         if len(normalized) > MAX_PRICE_SYMBOLS:
