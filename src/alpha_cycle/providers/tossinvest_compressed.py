@@ -28,6 +28,65 @@ def _header_value(headers: Mapping[str, str], name: str) -> str | None:
     return None
 
 
+def _first_text(mapping: Mapping[str, object], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _request_stage(url: str) -> str:
+    return "auth" if "/oauth2/token" in url else "market-data"
+
+
+def _normalize_error_payload(
+    payload: object,
+    *,
+    status: int,
+    headers: Mapping[str, str],
+    url: str,
+) -> object:
+    """Normalize provider and edge-generated JSON errors into the documented envelope."""
+    if status < 400 or not isinstance(payload, dict):
+        return payload
+
+    request_id = (
+        _first_text(payload, ("requestId", "request_id"))
+        or _header_value(headers, "X-Request-Id")
+        or _header_value(headers, "x-amz-cf-id")
+        or ""
+    )
+    nested = payload.get("error")
+    if isinstance(nested, dict):
+        normalized = dict(nested)
+        if request_id and not str(normalized.get("requestId", "")).strip():
+            normalized["requestId"] = request_id
+        return {"error": normalized}
+
+    stage = _request_stage(url)
+    code = _first_text(
+        payload,
+        ("code", "errorCode", "error_code", "type", "title"),
+    ) or f"{stage}-http-{status}"
+    message = _first_text(
+        payload,
+        ("message", "error_description", "detail", "description"),
+    )
+    if message is None and isinstance(nested, str) and nested.strip():
+        message = nested.strip()
+    if message is None:
+        keys = ",".join(sorted(str(key) for key in payload)[:12])
+        message = f"{stage} request was rejected; response_keys={keys or 'none'}"
+    else:
+        message = f"{stage} request rejected: {message}"
+
+    error: dict[str, object] = {"code": code, "message": message}
+    if request_id:
+        error["requestId"] = request_id
+    return {"error": error}
+
+
 class DecompressingUrllibTransport:
     """Decode gzip/deflate JSON responses before parsing them."""
 
@@ -85,6 +144,27 @@ class DecompressingUrllibTransport:
                 f"body_preview={preview!r}"
             ) from exc
 
+    @classmethod
+    def _response(
+        cls,
+        *,
+        status: int,
+        headers: Mapping[str, str],
+        raw: bytes,
+        url: str,
+    ) -> HttpResponse:
+        payload = cls._decode(raw, status=status, headers=headers)
+        return HttpResponse(
+            status=status,
+            headers=headers,
+            payload=_normalize_error_payload(
+                payload,
+                status=status,
+                headers=headers,
+                url=url,
+            ),
+        )
+
     def request(
         self,
         method: str,
@@ -100,21 +180,19 @@ class DecompressingUrllibTransport:
         try:
             with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
                 response_headers = self._headers(response.headers)
-                status = int(response.status)
-                raw = response.read()
-                return HttpResponse(
-                    status=status,
+                return self._response(
+                    status=int(response.status),
                     headers=response_headers,
-                    payload=self._decode(raw, status=status, headers=response_headers),
+                    raw=response.read(),
+                    url=url,
                 )
         except HTTPError as exc:
             response_headers = self._headers(exc.headers)
-            status = int(exc.code)
-            raw = exc.read()
-            return HttpResponse(
-                status=status,
+            return self._response(
+                status=int(exc.code),
                 headers=response_headers,
-                payload=self._decode(raw, status=status, headers=response_headers),
+                raw=exc.read(),
+                url=url,
             )
         except (URLError, TimeoutError) as exc:
             raise OSError("TossInvest network request failed") from exc
