@@ -6,11 +6,11 @@ import csv
 import hashlib
 import json
 import shutil
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Callable, Mapping
 
 from alpha_cycle.intelligence.technical import (
     TechnicalFeatures,
@@ -111,7 +111,9 @@ class MarketIntelligenceCollector:
         count: int,
         adjusted: bool,
     ) -> MarketIntelligenceSnapshot:
-        normalized = tuple(sorted(set(symbol.strip().upper() for symbol in symbols if symbol.strip())))
+        normalized = tuple(
+            sorted(set(symbol.strip().upper() for symbol in symbols if symbol.strip()))
+        )
         if not normalized:
             raise ValueError("At least one symbol is required")
         price_batch = self.client.prices(normalized)
@@ -130,7 +132,9 @@ class MarketIntelligenceCollector:
             all_candles.extend(batch.candles)
             raw_candles[symbol] = batch.raw_payload
             calculated.append(calculate_technical_features(batch.candles))
-        ranked = add_relative_strength_ranks(tuple(sorted(calculated, key=lambda item: item.symbol)))
+        ranked = add_relative_strength_ranks(
+            tuple(sorted(calculated, key=lambda item: item.symbol))
+        )
         prices = tuple(sorted(price_batch.prices, key=lambda item: item.symbol))
         price_currency = {item.symbol: item.currency for item in prices}
         for candle in all_candles:
