@@ -18,6 +18,7 @@ TradingCalendar
 → SimulatedBroker
 → Fill(s)
 → Portfolio
+→ PaperTradingStore (optional session checkpoint)
 → Reporting
    ├─ benchmark alignment / factor attribution
    └─ scenario path stress / factor stress / breakeven
@@ -56,6 +57,16 @@ delisting은 안전한 회계 정책이 구현될 때까지 실행을 중단합�
 high/low로 지정가 도달 여부만 판정합니다. 정확한 장중 체결 순서는 알 수 없으므로 지정가
 체결의 감사 timestamp는 해당 세션 close를 사용합니다. `is_halted=true`인 세션은 체결을
 만들지 않으며 DAY 잔량은 만료되고 GTC 잔량은 유지됩니다.
+
+`PaperTradingStore`는 선택적 로컬 지속성 경계입니다. 한 SQLite 파일은 하나의 run identity를
+보존하며 세션 날짜, 시장 입력 fingerprint, 최신 주문 상태, 체결, 현금, 포지션, 평가가격과
+비용 누계를 하나의 트랜잭션으로 기록합니다. 동일 세션과 동일 payload 재처리는 멱등적이고,
+다른 payload 또는 중복 fill ID는 전체 commit을 취소합니다.
+
+각 paper session은 canonical JSON payload hash와 이전 session hash를 연결한 state hash를
+가집니다. 재시작 시 최신 portfolio와 open order를 복구할 수 있으며, hash chain 또는 fill
+index가 일치하지 않으면 fail-closed합니다. 이 계층은 상태 저장만 담당하고 broker 주문 전송,
+실제 잔고 reconciliation, multi-process leader election과 자동 재시작은 수행하지 않습니다.
 
 백테스트 종료 후 `strategy_returns_from_result()`가 equity audit trail을 일별 단순수익률로
 변환합니다. 벤치마크·팩터 계층은 이 경로를 외부 수익률과 정렬하며 결측값을 forward-fill하지
