@@ -23,6 +23,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 OFFICIAL_BASE_URL = "https://openapi.tossinvest.com"
+CLIENT_USER_AGENT = "Alpha-Cycle-Lab/0.1"
 MAX_PRICE_SYMBOLS = 200
 MAX_CANDLE_COUNT = 200
 RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -41,6 +42,24 @@ READ_ONLY_PATHS = frozenset(
         "/api/v1/market-indicators/prices",
     }
 )
+
+
+def _header_value(headers: Mapping[str, str], name: str) -> str | None:
+    lowered = name.lower()
+    for key, value in headers.items():
+        if key.lower() == lowered:
+            return value
+    return None
+
+
+def _request_headers(extra: Mapping[str, str] | None = None) -> dict[str, str]:
+    result = {
+        "Accept": "application/json",
+        "User-Agent": CLIENT_USER_AGENT,
+    }
+    if extra is not None:
+        result.update(extra)
+    return result
 
 
 @dataclass(frozen=True)
@@ -91,20 +110,38 @@ class HttpTransport(Protocol):
 
 
 class UrllibTransport:
-    """Standard-library JSON transport with no automatic credential logging."""
+    """Standard-library JSON transport with safe diagnostics for edge/WAF responses."""
 
     @staticmethod
     def _headers(values: Message | HTTPMessage) -> dict[str, str]:
         return {str(key): str(value) for key, value in values.items()}
 
     @staticmethod
-    def _decode(raw: bytes) -> object:
+    def _decode(
+        raw: bytes,
+        *,
+        status: int,
+        headers: Mapping[str, str],
+    ) -> object:
         if not raw:
             return {}
         try:
-            return cast(object, json.loads(raw.decode("utf-8")))
+            text = raw.decode("utf-8")
+            return cast(object, json.loads(text))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ValueError("TossInvest returned a non-JSON response") from exc
+            decoded = raw.decode("utf-8", errors="replace")
+            preview = " ".join(decoded.split())[:240]
+            content_type = _header_value(headers, "Content-Type") or "unknown"
+            request_id = (
+                _header_value(headers, "X-Request-Id")
+                or _header_value(headers, "x-amz-cf-id")
+                or "unavailable"
+            )
+            raise ValueError(
+                "TossInvest returned non-JSON content: "
+                f"status={status}, content_type={content_type}, "
+                f"request_id={request_id}, body_preview={preview!r}"
+            ) from exc
 
     def request(
         self,
@@ -118,18 +155,24 @@ class UrllibTransport:
         request = Request(url, data=body, headers=dict(headers), method=method)
         try:
             with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+                response_headers = self._headers(response.headers)
+                status = int(response.status)
+                raw = response.read()
                 return HttpResponse(
-                    status=int(response.status),
-                    headers=self._headers(response.headers),
-                    payload=self._decode(response.read()),
+                    status=status,
+                    headers=response_headers,
+                    payload=self._decode(raw, status=status, headers=response_headers),
                 )
         except HTTPError as exc:
+            response_headers = self._headers(exc.headers)
+            status = int(exc.code)
+            raw = exc.read()
             return HttpResponse(
-                status=int(exc.code),
-                headers=self._headers(exc.headers),
-                payload=self._decode(exc.read()),
+                status=status,
+                headers=response_headers,
+                payload=self._decode(raw, status=status, headers=response_headers),
             )
-        except URLError as exc:
+        except (URLError, TimeoutError) as exc:
             raise OSError("TossInvest network request failed") from exc
 
 
@@ -260,16 +303,8 @@ class TossInvestReadOnlyClient:
     def from_env(cls) -> TossInvestReadOnlyClient:
         return cls(TossInvestCredentials.from_env())
 
-    @staticmethod
-    def _header(headers: Mapping[str, str], name: str) -> str | None:
-        lowered = name.lower()
-        for key, value in headers.items():
-            if key.lower() == lowered:
-                return value
-        return None
-
     def _backoff_seconds(self, response: HttpResponse, attempt: int) -> float:
-        retry_after = self._header(response.headers, "Retry-After")
+        retry_after = _header_value(response.headers, "Retry-After")
         if retry_after is not None:
             try:
                 parsed = float(retry_after)
@@ -331,7 +366,9 @@ class TossInvestReadOnlyClient:
         response = self._request_with_retry(
             "POST",
             f"{self.credentials.base_url}/oauth2/token",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            headers=_request_headers(
+                {"Content-Type": "application/x-www-form-urlencoded"}
+            ),
             body=body,
         )
         if response.status != 200:
@@ -350,14 +387,14 @@ class TossInvestReadOnlyClient:
         response = self._request_with_retry(
             "GET",
             url,
-            headers={"Authorization": f"Bearer {token.value}"},
+            headers=_request_headers({"Authorization": f"Bearer {token.value}"}),
         )
         if response.status == 401:
             token = self.authenticate(force=True)
             response = self._request_with_retry(
                 "GET",
                 url,
-                headers={"Authorization": f"Bearer {token.value}"},
+                headers=_request_headers({"Authorization": f"Bearer {token.value}"}),
             )
         if response.status != 200:
             raise ValueError(_error_detail(response.payload, response.status))
