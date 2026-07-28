@@ -195,7 +195,7 @@ def write_market_intelligence_snapshot(
         shutil.rmtree(temporary)
     temporary.mkdir(parents=False)
     try:
-        price_rows = [
+        price_rows: list[dict[str, object]] = [
             {
                 "symbol": item.symbol,
                 "timestamp": item.timestamp.isoformat(),
@@ -204,7 +204,7 @@ def write_market_intelligence_snapshot(
             }
             for item in snapshot.prices
         ]
-        candle_rows = [
+        candle_rows: list[dict[str, object]] = [
             {
                 "symbol": item.symbol,
                 "timestamp": item.timestamp.isoformat(),
