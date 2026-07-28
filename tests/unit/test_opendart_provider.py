@@ -41,7 +41,11 @@ def _json(payload: object) -> HttpBytesResponse:
 
 
 def _corp_zip() -> HttpBytesResponse:
-    xml = b"""<result><list><corp_code>00126380</corp_code><corp_name>Samsung</corp_name><stock_code>005930</stock_code><modify_date>20260701</modify_date></list></result>"""
+    xml = (
+        b"<result><list><corp_code>00126380</corp_code>"
+        b"<corp_name>Samsung</corp_name><stock_code>005930</stock_code>"
+        b"<modify_date>20260701</modify_date></list></result>"
+    )
     stream = io.BytesIO()
     with zipfile.ZipFile(stream, "w") as archive:
         archive.writestr("CORPCODE.xml", xml)
