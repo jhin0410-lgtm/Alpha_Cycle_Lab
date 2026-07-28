@@ -16,5 +16,17 @@ jobs:
           cache: pip
       - run: python -m pip install -e ".[dev]"
       - run: ruff check .
-      - run: mypy
+      - name: Run mypy diagnostics
+        run: |
+          set +e
+          mypy > mypy.txt 2>&1
+          echo $? > mypy-exit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mypy-broker-reconciliation-${{ matrix.python-version }}
+          path: |
+            mypy.txt
+            mypy-exit.txt
+      - name: Enforce mypy result
+        run: test "$(cat mypy-exit.txt)" = "0"
       - run: pytest
