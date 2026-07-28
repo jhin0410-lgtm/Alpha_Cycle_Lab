@@ -22,7 +22,7 @@ from alpha_cycle.brokers.reconciliation import (
     write_reconciliation_outputs,
 )
 
-NOW = datetime(2026, 7, 28, 0, 0, tzinfo=UTC)
+NOW = datetime(2026, 7, 28, 12, 0, tzinfo=UTC)
 
 
 def _local() -> LocalAccountState:
@@ -198,10 +198,7 @@ def test_snapshot_loader_rejects_raw_account_number_and_duplicates(tmp_path) -> 
         "snapshot_id": "S1",
         "captured_at": NOW.isoformat(),
         "cash": "1000",
-        "positions": [
-            {"ticker": "AAA", "quantity": 1},
-            {"ticker": "AAA", "quantity": 2},
-        ],
+        "positions": [{"ticker": "AAA", "quantity": 1}],
         "open_orders": [],
         "fills": [],
     }
@@ -209,6 +206,10 @@ def test_snapshot_loader_rejects_raw_account_number_and_duplicates(tmp_path) -> 
     with pytest.raises(ValueError, match="SHA-256"):
         load_broker_snapshot(path)
     payload["account_ref_hash"] = "a" * 64
+    payload["positions"] = [
+        {"ticker": "AAA", "quantity": 1},
+        {"ticker": "AAA", "quantity": 2},
+    ]
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ValueError, match="Duplicate broker position"):
         load_broker_snapshot(path)
