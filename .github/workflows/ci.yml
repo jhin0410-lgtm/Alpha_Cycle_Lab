@@ -16,18 +16,5 @@ jobs:
           cache: pip
       - run: python -m pip install -e ".[dev]"
       - run: ruff check .
-      - name: Capture mypy diagnostics
-        run: |
-          set +e
-          mypy > mypy-live-intelligence.txt 2>&1
-          echo $? > mypy-live-intelligence.exit
-          exit 0
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mypy-live-intelligence-${{ matrix.python-version }}
-          path: |
-            mypy-live-intelligence.txt
-            mypy-live-intelligence.exit
-      - name: Enforce mypy result
-        run: test "$(cat mypy-live-intelligence.exit)" = "0"
+      - run: mypy
       - run: pytest
