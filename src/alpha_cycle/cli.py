@@ -1,4 +1,4 @@
-"""Command-line entry point for research, paper state, and reconciliation."""
+"""Command-line entry point for research, intelligence, and paper state."""
 
 from __future__ import annotations
 
@@ -20,8 +20,10 @@ from alpha_cycle.brokers.reconciliation import (
 from alpha_cycle.brokers.simulated import SimulatedBroker
 from alpha_cycle.config import load_config
 from alpha_cycle.data.market import MarketDataFeed
+from alpha_cycle.intelligence import MarketIntelligenceCollector, write_market_intelligence_snapshot
 from alpha_cycle.paper import PaperRunMetadata, PaperTradingStore
 from alpha_cycle.portfolio.portfolio import Portfolio
+from alpha_cycle.providers import TossInvestReadOnlyClient
 from alpha_cycle.reporting.attribution import (
     AlignmentPolicy,
     CsvBenchmarkReturnsAdapter,
@@ -67,6 +69,27 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="YAML path and factor stress scenario definitions",
     )
+
+    intelligence = commands.add_parser(
+        "market-intel",
+        help="collect read-only TossInvest prices and calculate technical features",
+    )
+    intelligence.add_argument(
+        "--symbols",
+        required=True,
+        help="comma-separated KR or US symbols, for example 005930,000660 or AAPL,MSFT",
+    )
+    intelligence.add_argument("--interval", choices=("1m", "1d"), default="1d")
+    intelligence.add_argument("--count", type=int, default=100)
+    intelligence.add_argument(
+        "--adjusted",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="request adjusted candles explicitly; default is raw/unadjusted",
+    )
+    intelligence.add_argument("--output", type=Path, required=True)
+    intelligence.add_argument("--timeout-seconds", type=float, default=10.0)
+    intelligence.add_argument("--max-retries", type=int, default=3)
 
     paper = commands.add_parser("paper-state", help="manage a local paper state database")
     paper_commands = paper.add_subparsers(dest="paper_action", required=True)
@@ -198,6 +221,44 @@ def _run_backtest(args: argparse.Namespace) -> None:
     print(f"Output directory: {args.output.resolve()}")
 
 
+def _run_market_intelligence(args: argparse.Namespace) -> None:
+    symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]
+    if not symbols:
+        raise ValueError("--symbols must include at least one symbol")
+    if args.count <= 0 or args.count > 200:
+        raise ValueError("--count must be between 1 and 200")
+    if args.timeout_seconds <= 0:
+        raise ValueError("--timeout-seconds must be positive")
+    if args.max_retries < 0:
+        raise ValueError("--max-retries cannot be negative")
+    client = TossInvestReadOnlyClient.from_env()
+    client.timeout_seconds = args.timeout_seconds
+    client.max_retries = args.max_retries
+    snapshot = MarketIntelligenceCollector(client).collect(
+        symbols,
+        interval=args.interval,
+        count=args.count,
+        adjusted=args.adjusted,
+    )
+    written = write_market_intelligence_snapshot(args.output, snapshot)
+    print(
+        json.dumps(
+            {
+                "status": "collected",
+                "snapshot_id": snapshot.snapshot_id,
+                "captured_at": snapshot.captured_at.isoformat(),
+                "symbols": list(snapshot.symbols),
+                "interval": snapshot.interval,
+                "adjusted": snapshot.adjusted,
+                "output_directory": str(written[0].parent.resolve()),
+                "output_files": len(written),
+                "order_api_enabled": False,
+            },
+            sort_keys=True,
+        )
+    )
+
+
 def _run_paper_state(args: argparse.Namespace) -> None:
     store = PaperTradingStore(args.database)
     if args.paper_action == "init":
@@ -286,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "backtest":
             _run_backtest(args)
+        elif args.command == "market-intel":
+            _run_market_intelligence(args)
         elif args.command == "paper-state":
             _run_paper_state(args)
         elif args.command == "broker-reconcile":
