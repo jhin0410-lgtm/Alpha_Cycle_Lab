@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 
 from alpha_cycle.providers.tossinvest import (
     MAX_PRICE_SYMBOLS,
+    CandleBatch,
+    HttpResponse,
     MarketPrice,
     PriceBatch,
     _aware_datetime,
@@ -19,6 +22,7 @@ from alpha_cycle.providers.tossinvest_compressed import (
 )
 
 MAX_PARTIAL_PRICE_FALLBACKS = 10
+_SAFE_QUERY_KEYS = ("symbol", "symbols", "interval", "count", "adjusted", "before")
 
 
 def _normalize_symbol(value: object, field_name: str) -> str:
@@ -84,8 +88,20 @@ def _mismatch_message(
     )
 
 
+def _safe_query_context(query: Mapping[str, str]) -> str:
+    parts = [f"{key}={query[key]}" for key in _SAFE_QUERY_KEYS if key in query]
+    return ",".join(parts) if parts else "none"
+
+
 class TossInvestReadOnlyClient(_CompressedTossInvestReadOnlyClient):
-    """Read-only client that repairs safe partial multi-symbol price responses."""
+    """Read-only client with bounded recovery and actionable safe diagnostics."""
+
+    def _authorized_get(self, path: str, query: Mapping[str, str]) -> HttpResponse:
+        try:
+            return super()._authorized_get(path, query)
+        except ValueError as exc:
+            context = _safe_query_context(query)
+            raise ValueError(f"{exc} endpoint={path} query={context}") from exc
 
     def prices(self, symbols: list[str] | tuple[str, ...]) -> PriceBatch:
         normalized = _requested_symbols(symbols)
@@ -122,7 +138,16 @@ class TossInvestReadOnlyClient(_CompressedTossInvestReadOnlyClient):
         merged = {item.symbol: item for item in parsed}
         fallback_payloads: dict[str, object] = {}
         for symbol in sorted(missing):
-            response = self._authorized_get("/api/v1/prices", {"symbols": symbol})
+            try:
+                response = self._authorized_get(
+                    "/api/v1/prices",
+                    {"symbols": symbol},
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "TossInvest single-symbol price fallback failed: "
+                    f"symbol={symbol}; {exc}"
+                ) from exc
             single = _parse_price_payload(response.payload)
             single_symbols = {item.symbol for item in single}
             if single_symbols != {symbol} or len(single) != 1:
@@ -166,3 +191,28 @@ class TossInvestReadOnlyClient(_CompressedTossInvestReadOnlyClient):
             raw_payload=raw_payload,
             response_headers=response_headers,
         )
+
+    def candles(
+        self,
+        symbol: str,
+        *,
+        interval: str,
+        count: int = 100,
+        before: datetime | None = None,
+        adjusted: bool = False,
+    ) -> CandleBatch:
+        normalized = _normalize_symbol(symbol, "candle symbol")
+        try:
+            return super().candles(
+                normalized,
+                interval=interval,
+                count=count,
+                before=before,
+                adjusted=adjusted,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "TossInvest candle collection failed: "
+                f"symbol={normalized}, interval={interval}, count={count}, "
+                f"adjusted={str(adjusted).lower()}; {exc}"
+            ) from exc
