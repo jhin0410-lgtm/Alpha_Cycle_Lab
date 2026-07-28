@@ -149,13 +149,13 @@ def add_relative_strength_ranks(
     features: tuple[TechnicalFeatures, ...],
 ) -> tuple[TechnicalFeatures, ...]:
     """Rank 20-period returns cross-sectionally from 0 to 1 when available."""
-    available = [item for item in features if item.return_20 is not None]
-    if len(available) < 2:
+    values: dict[str, float] = {}
+    for item in features:
+        if item.return_20 is not None:
+            values[item.symbol] = item.return_20
+    if len(values) < 2:
         return features
-    series = pd.Series(
-        {item.symbol: float(item.return_20) for item in available},
-        dtype="float64",
-    )
+    series = pd.Series(values, dtype="float64")
     ranks = series.rank(method="average", pct=True)
     return tuple(
         replace(
