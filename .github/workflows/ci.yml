@@ -15,21 +15,6 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - name: Capture Ruff diagnostics
-        run: |
-          set +e
-          ruff check --fix .
-          git diff > ruff-fix.diff
-          ruff check . > ruff.txt 2>&1
-          echo $? > ruff-exit.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ruff-broker-reconciliation-${{ matrix.python-version }}
-          path: |
-            ruff-fix.diff
-            ruff.txt
-            ruff-exit.txt
-      - name: Enforce Ruff result
-        run: test "$(cat ruff-exit.txt)" = "0"
+      - run: ruff check .
       - run: mypy
       - run: pytest
