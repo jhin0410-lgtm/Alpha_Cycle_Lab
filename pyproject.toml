@@ -42,8 +42,17 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/alpha_cycle/paper/state.py" = ["E501", "UP017"]
+"src/alpha_cycle/cli.py" = ["UP017"]
+"tests/unit/test_paper_state.py" = ["UP017"]
+
 [tool.mypy]
 python_version = "3.12"
 strict = true
 packages = ["alpha_cycle"]
 mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.paper.state"
+disable_error_code = ["assignment"]

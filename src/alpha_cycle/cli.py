@@ -1,9 +1,12 @@
-"""Command-line entry point for local research backtests."""
+"""Command-line entry point for local research backtests and paper state."""
 
 from __future__ import annotations
 
 import argparse
+import json
+import sqlite3
 import sys
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -11,6 +14,7 @@ from alpha_cycle.backtest.engine import BacktestEngine
 from alpha_cycle.brokers.simulated import SimulatedBroker
 from alpha_cycle.config import load_config
 from alpha_cycle.data.market import MarketDataFeed
+from alpha_cycle.paper import PaperRunMetadata, PaperTradingStore
 from alpha_cycle.portfolio.portfolio import Portfolio
 from alpha_cycle.reporting.attribution import (
     AlignmentPolicy,
@@ -33,6 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Build the public CLI parser."""
     parser = argparse.ArgumentParser(prog="alpha-cycle", description="Research backtesting CLI")
     commands = parser.add_subparsers(dest="command", required=True)
+
     backtest = commands.add_parser("backtest", help="run a deterministic local backtest")
     backtest.add_argument("--input", type=Path, required=True, help="validated OHLCV CSV")
     backtest.add_argument("--strategy", choices=("buy_hold", "momentum"), required=True)
@@ -43,10 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--top-k", type=int, default=4)
     backtest.add_argument("--rebalance-every", type=int, default=1)
     backtest.add_argument("--benchmark", type=Path, help="long-form benchmark return CSV")
-    backtest.add_argument(
-        "--benchmark-id",
-        help="benchmark identifier when CSV has multiple series",
-    )
+    backtest.add_argument("--benchmark-id", help="benchmark identifier for multiple series")
     backtest.add_argument("--factors", type=Path, help="long-form factor return CSV")
     backtest.add_argument(
         "--alignment-policy",
@@ -59,6 +61,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="YAML path and factor stress scenario definitions",
     )
+
+    paper = commands.add_parser("paper-state", help="manage a local paper state database")
+    paper_commands = paper.add_subparsers(dest="paper_action", required=True)
+    paper_init = paper_commands.add_parser("init", help="initialize immutable run metadata")
+    paper_init.add_argument("--database", type=Path, required=True)
+    paper_init.add_argument("--run-id", required=True)
+    paper_init.add_argument("--strategy", required=True)
+    paper_init.add_argument("--initial-cash", required=True)
+    paper_init.add_argument("--config-digest", required=True)
+    paper_verify = paper_commands.add_parser("verify", help="verify the full state hash chain")
+    paper_verify.add_argument("--database", type=Path, required=True)
+    paper_export = paper_commands.add_parser("export", help="export normalized audit files")
+    paper_export.add_argument("--database", type=Path, required=True)
+    paper_export.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -164,6 +180,47 @@ def _run_backtest(args: argparse.Namespace) -> None:
     print(f"Output directory: {args.output.resolve()}")
 
 
+def _run_paper_state(args: argparse.Namespace) -> None:
+    store = PaperTradingStore(args.database)
+    if args.paper_action == "init":
+        store.initialize(
+            PaperRunMetadata(
+                run_id=args.run_id,
+                strategy_name=args.strategy,
+                initial_cash=Decimal(args.initial_cash),
+                config_digest=args.config_digest,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        print(f"Paper state initialized: {args.database.resolve()}")
+        return
+    if not args.database.is_file():
+        raise ValueError(f"Paper state database does not exist: {args.database}")
+    if args.paper_action == "verify":
+        report = store.assert_integrity()
+        print(
+            json.dumps(
+                {
+                    "ok": report.ok,
+                    "sessions": report.sessions,
+                    "order_states": report.order_states,
+                    "fills": report.fills,
+                    "latest_session": (
+                        report.latest_session.isoformat()
+                        if report.latest_session is not None
+                        else None
+                    ),
+                    "latest_hash": report.latest_hash,
+                },
+                sort_keys=True,
+            )
+        )
+        return
+    written = store.export_audit(args.output)
+    print(f"Paper audit exported: {len(written)} files")
+    print(f"Output directory: {args.output.resolve()}")
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run CLI and convert expected input failures into concise messages."""
     parser = build_parser()
@@ -177,8 +234,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "backtest":
             _run_backtest(args)
+        elif args.command == "paper-state":
+            _run_paper_state(args)
         return 0
-    except (ValueError, OSError, InvalidOperation) as exc:
+    except (ValueError, OSError, InvalidOperation, sqlite3.DatabaseError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
