@@ -8,7 +8,6 @@ from alpha_cycle.providers.tossinvest import (
     MAX_PRICE_SYMBOLS,
     MarketPrice,
     PriceBatch,
-    TossInvestCredentials,
     _aware_datetime,
     _decimal,
     _mapping,
@@ -84,13 +83,6 @@ def _mismatch_message(
 class TossInvestReadOnlyClient(_CompressedTossInvestReadOnlyClient):
     """Read-only client that repairs safe partial multi-symbol price responses."""
 
-    def __init__(
-        self,
-        credentials: TossInvestCredentials,
-        **kwargs: object,
-    ) -> None:
-        super().__init__(credentials, **kwargs)
-
     def prices(self, symbols: list[str] | tuple[str, ...]) -> PriceBatch:
         normalized = _requested_symbols(symbols)
         requested = set(normalized)
@@ -125,7 +117,6 @@ class TossInvestReadOnlyClient(_CompressedTossInvestReadOnlyClient):
 
         merged = {item.symbol: item for item in parsed}
         fallback_payloads: dict[str, object] = {}
-        fallback_headers: dict[str, dict[str, str]] = {}
         for symbol in sorted(missing):
             response = self._authorized_get("/api/v1/prices", {"symbols": symbol})
             single = _parse_price_payload(response.payload)
@@ -140,7 +131,6 @@ class TossInvestReadOnlyClient(_CompressedTossInvestReadOnlyClient):
                 )
             merged[symbol] = single[0]
             fallback_payloads[symbol] = response.payload
-            fallback_headers[symbol] = dict(response.headers)
 
         final_symbols = set(merged)
         if final_symbols != requested:
@@ -164,9 +154,6 @@ class TossInvestReadOnlyClient(_CompressedTossInvestReadOnlyClient):
             )
             response_headers["X-Alpha-Cycle-Price-Fallback-Symbols"] = ",".join(
                 sorted(fallback_payloads)
-            )
-            response_headers["X-Alpha-Cycle-Price-Fallback-Headers"] = str(
-                fallback_headers
             )
 
         ordered = tuple(merged[symbol] for symbol in sorted(merged))
