@@ -15,6 +15,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - run: ruff check .
+      - name: Run Ruff diagnostics
+        run: |
+          set +e
+          ruff check . > ruff.txt 2>&1
+          echo $? > ruff-exit.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruff-diagnostics-${{ matrix.python-version }}
+          path: |
+            ruff.txt
+            ruff-exit.txt
+      - name: Enforce Ruff result
+        run: test "$(cat ruff-exit.txt)" = "0"
       - run: mypy
       - run: pytest
