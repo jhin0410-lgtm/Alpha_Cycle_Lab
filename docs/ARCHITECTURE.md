@@ -19,6 +19,11 @@ TradingCalendar
 → Fill(s)
 → Portfolio
 → PaperTradingStore (optional session checkpoint)
+→ ReadOnlyBrokerSnapshot
+→ ReconciliationGate
+   ├─ ready: comparison passed
+   ├─ review_required: warning, submission disabled
+   └─ blocked: mismatch, submission disabled
 → Reporting
    ├─ benchmark alignment / factor attribution
    └─ scenario path stress / factor stress / breakeven
@@ -65,8 +70,17 @@ high/low로 지정가 도달 여부만 판정합니다. 정확한 장중 체결 
 
 각 paper session은 canonical JSON payload hash와 이전 session hash를 연결한 state hash를
 가집니다. 재시작 시 최신 portfolio와 open order를 복구할 수 있으며, hash chain 또는 fill
-index가 일치하지 않으면 fail-closed합니다. 이 계층은 상태 저장만 담당하고 broker 주문 전송,
-실제 잔고 reconciliation, multi-process leader election과 자동 재시작은 수행하지 않습니다.
+index가 일치하지 않으면 fail-closed합니다.
+
+`ReadOnlyBrokerSnapshot`은 네트워크 어댑터가 아니라 검증된 JSON 입력 계약입니다. 실제
+계좌번호 대신 SHA-256 account reference만 허용하고, snapshot ID와 timezone-aware 수집시각,
+현금, 포지션, 활성 주문과 체결을 보존합니다. 중복 ID와 비정상 수치, 오래된 스냅샷은
+reconciliation 전에 거부합니다.
+
+`ReconciliationGate`는 검증된 PaperTradingStore를 임시 normalized audit view로 변환한 뒤
+브로커 snapshot과 비교합니다. 현금·포지션 수량·활성 주문·누적 체결 불일치는 blocking이고,
+평균원가 차이는 warning입니다. warning도 자동 주문 제출을 허용하지 않습니다. 현재는 결과만
+계산하고 `KISBrokerAdapter`의 주문 실행 경로는 계속 비활성입니다.
 
 백테스트 종료 후 `strategy_returns_from_result()`가 equity audit trail을 일별 단순수익률로
 변환합니다. 벤치마크·팩터 계층은 이 경로를 외부 수익률과 정렬하며 결측값을 forward-fill하지
@@ -86,4 +100,4 @@ index가 일치하지 않으면 fail-closed합니다. 이 계층은 상태 저�
 
 `BrokerAdapter`는 향후 확장 경계입니다. 현재 실행 가능한 구현은 네트워크를 쓰지 않는
 `SimulatedBroker`뿐입니다. `KISBrokerAdapter`는 문서화된 안전 스텁이고 언제나 예외를
-발생시킵니다.
+발생시킵니다. broker reconciliation 성공은 주문 기능 활성화를 의미하지 않습니다.
