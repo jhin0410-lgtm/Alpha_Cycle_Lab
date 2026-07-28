@@ -18,6 +18,8 @@
    - 완료: 경로 수익률·변동성·비용·일회성 충격, 팩터 베타 충격, 브레이크이븐 분석
    - 남음: rolling beta, 비선형 옵션성, 상관관계 붕괴, 포지션별 재평가와 유동성 시장충격
 7. 재현 가능한 Paper Trading 저장 계층
+   - 완료: SQLite session journal, 원자적 commit, 멱등 retry, fill 중복 차단, hash chain, 상태 복구와 감사 export
+   - 남음: 실제 broker reconciliation, heartbeat, multi-process leader election, 원격·암호화 저장소
 8. 독립 보안검토 후에만 KIS 모의투자 어댑터 검토
 
 실계좌 자동매매는 현재 로드맵 범위가 아닙니다.
