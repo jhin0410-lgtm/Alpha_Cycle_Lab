@@ -8,10 +8,12 @@ import sys
 from pathlib import Path
 
 from alpha_cycle.intelligence.decision import (
-    DecisionPolicy,
     build_investment_decision_snapshot,
-    load_company_exposures,
     write_investment_decision_snapshot,
+)
+from alpha_cycle.intelligence.decision_scoring import (
+    DecisionPolicy,
+    load_company_exposures,
 )
 from alpha_cycle.intelligence.outcomes import write_outcome_labels
 from alpha_cycle.providers.opendart import normalize_listed_stock_code
@@ -72,7 +74,10 @@ def _build(args: argparse.Namespace) -> int:
         policy=policy,
     )
     written = write_investment_decision_snapshot(args.output, snapshot)
-    states = snapshot.scorecards["decision_state"].value_counts().to_dict()
+    states = {
+        str(key): int(value)
+        for key, value in snapshot.scorecards["decision_state"].value_counts().items()
+    }
     print(
         json.dumps(
             {
