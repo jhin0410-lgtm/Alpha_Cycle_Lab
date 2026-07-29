@@ -196,8 +196,8 @@ def _archive_xml(body: bytes) -> bytes:
         if status:
             raise ValueError(
                 f"OpenDART /api/corpCode.xml failed: status={status} message={message}"
-            )
-        raise ValueError("OpenDART corporation-code archive is invalid")
+            ) from None
+        raise ValueError("OpenDART corporation-code archive is invalid") from None
 
 
 class OpenDartReadOnlyClient(RetryingReadOnlyClient):
