@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 
 from alpha_cycle.data.research import (
@@ -19,19 +22,33 @@ from alpha_cycle.data.research import (
     RevisionPolicy,
 )
 from alpha_cycle.providers.ecos import EcosReadOnlyClient, EcosSeriesSpec
-from alpha_cycle.providers.opendart import OpenDartReadOnlyClient
+from alpha_cycle.providers.opendart import (
+    REPORT_PERIODS,
+    OpenDartReadOnlyClient,
+)
 
-RESEARCH_INTELLIGENCE_SCHEMA_VERSION = 1
+RESEARCH_INTELLIGENCE_SCHEMA_VERSION = 2
+KOREA_TZ = ZoneInfo("Asia/Seoul")
 
 
 def _json_value(value: object) -> object:
+    if value is None or value is pd.NA or value is pd.NaT:
+        return None
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     if isinstance(value, Decimal):
         return str(value)
-    if value is None or value is pd.NA or value is pd.NaT:
-        return None
-    return value
+    if isinstance(value, np.generic):
+        return _json_value(value.item())
+    if isinstance(value, float):
+        if math.isnan(value):
+            return None
+        if not math.isfinite(value):
+            raise ValueError("Snapshot values must be finite")
+        return value
+    if isinstance(value, (str, int, bool)):
+        return value
+    raise TypeError(f"Snapshot value is not JSON serializable: {type(value).__name__}")
 
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
@@ -44,6 +61,7 @@ def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
 def _canonical_json(value: object) -> str:
     return json.dumps(
         value,
+        allow_nan=False,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
@@ -69,7 +87,7 @@ def _market_snapshot_id(path: Path | None) -> str | None:
 
 @dataclass(frozen=True)
 class FundamentalMacroSnapshot:
-    """Immutable PIT-visible financial, disclosure, and macro dataset."""
+    """Immutable visible financial, disclosure, and macro dataset."""
 
     captured_at: datetime
     evaluation_date: date
@@ -80,11 +98,12 @@ class FundamentalMacroSnapshot:
     raw_opendart: object
     raw_ecos: object
     market_snapshot_id: str | None = None
+    warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.captured_at.tzinfo is None or self.captured_at.utcoffset() is None:
             raise ValueError("captured_at must be timezone-aware")
-        if self.captured_at.date() < self.evaluation_date:
+        if self.captured_at.astimezone(KOREA_TZ).date() < self.evaluation_date:
             raise ValueError("captured_at cannot precede evaluation_date")
 
     def payload_without_id(self) -> dict[str, object]:
@@ -94,6 +113,7 @@ class FundamentalMacroSnapshot:
             "evaluation_date": self.evaluation_date.isoformat(),
             "revision_policy": self.revision_policy.value,
             "market_snapshot_id": self.market_snapshot_id,
+            "warnings": list(self.warnings),
             "financials": _records(self.financials),
             "disclosures": _records(self.disclosures),
             "macro": _records(self.macro),
@@ -132,6 +152,18 @@ class FundamentalMacroCollector:
         revision_policy: RevisionPolicy,
         market_snapshot: Path | None = None,
     ) -> FundamentalMacroSnapshot:
+        if disclosure_end > evaluation_date:
+            raise ValueError(
+                "disclosure_end cannot follow evaluation_date because raw future disclosures "
+                "would enter the snapshot"
+            )
+        if report_code not in REPORT_PERIODS:
+            raise ValueError("OpenDART report_code is unsupported")
+        _, report_month, report_day = REPORT_PERIODS[report_code]
+        report_period_end = date(business_year, report_month, report_day)
+        if report_period_end > evaluation_date:
+            raise ValueError("Requested financial period ends after evaluation_date")
+
         resolved = self.opendart.resolve_stock_codes(symbols)
         financial_frames: list[pd.DataFrame] = []
         disclosure_frames: list[pd.DataFrame] = []
@@ -164,11 +196,17 @@ class FundamentalMacroCollector:
             }
             timestamps = pd.to_datetime(financial.frame["retrieved_at"], utc=True)
             captured_candidates.append(timestamps.max().to_pydatetime())
+
+        diagnostics = self.opendart.corp_code_diagnostics
+        if diagnostics is not None:
+            raw_dart["_corp_code_archive_diagnostics"] = diagnostics.as_dict()
+
         financial_all = pd.concat(financial_frames, ignore_index=True)
         disclosure_all = pd.concat(disclosure_frames, ignore_index=True)
         macro_batch = self.ecos.collect(ecos_specs)
         macro_times = pd.to_datetime(macro_batch.frame["retrieved_at"], utc=True)
         captured_candidates.append(macro_times.max().to_pydatetime())
+
         portal = ResearchDataPortal(
             financials=FinancialStatementStore(financial_all),
             macro=MacroSeriesStore(macro_batch.frame),
@@ -179,6 +217,34 @@ class FundamentalMacroCollector:
             disclosure_all["receipt_date"] <= evaluation_date
         ].sort_values(["ticker", "receipt_date", "rcept_no"], kind="stable")
         captured_at = max(captured_candidates).astimezone(UTC)
+
+        warnings: list[str] = []
+        visible_tickers = set(visible.financials["ticker"].astype(str).tolist())
+        missing_financials = sorted(set(resolved) - visible_tickers)
+        if missing_financials:
+            raise ValueError(
+                "No OpenDART financial facts were available by evaluation_date for: "
+                f"{','.join(missing_financials)}. The live endpoint cannot reconstruct "
+                "a superseded historical filing; use a current evaluation date or an "
+                "archived earlier snapshot."
+            )
+        if visible.macro.empty:
+            warnings.append(
+                "ECOS rows are empty because conservative availability uses the Korea "
+                "retrieval date; use the current Korea date for a live macro snapshot."
+            )
+        if (financial_all["available_date"] > evaluation_date).any():
+            warnings.append(
+                "The current OpenDART endpoint included a filing after evaluation_date; "
+                "only visible rows were retained, so historical revision reconstruction "
+                "may be incomplete."
+            )
+        if evaluation_date < captured_at.astimezone(KOREA_TZ).date():
+            warnings.append(
+                "This is a live-endpoint-filtered historical snapshot, not a complete "
+                "archive of all superseded OpenDART or ECOS vintages."
+            )
+
         return FundamentalMacroSnapshot(
             captured_at=captured_at,
             evaluation_date=evaluation_date,
@@ -189,6 +255,7 @@ class FundamentalMacroCollector:
             raw_opendart=raw_dart,
             raw_ecos=dict(macro_batch.raw_payloads),
             market_snapshot_id=_market_snapshot_id(market_snapshot),
+            warnings=tuple(warnings),
         )
 
 
@@ -241,9 +308,12 @@ def write_fundamental_macro_snapshot(
             "financial_rows": len(snapshot.financials),
             "disclosure_rows": len(snapshot.disclosures),
             "macro_rows": len(snapshot.macro),
+            "warnings": list(snapshot.warnings),
+            "research_mode": "live_endpoint_filtered",
+            "historical_revision_archive_complete": False,
             "availability_policy": {
                 "opendart": "filing_receipt_date",
-                "ecos": "retrieval_date_conservative",
+                "ecos": "korea_retrieval_date_conservative",
             },
             "files": list(names[1:]),
             "order_api_enabled": False,
