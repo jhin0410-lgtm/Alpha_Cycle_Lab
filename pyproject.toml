@@ -26,6 +26,7 @@ dev = [
 
 [project.scripts]
 alpha-cycle = "alpha_cycle.cli:main"
+alpha-cycle-decision = "alpha_cycle.decision_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
