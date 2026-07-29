@@ -26,7 +26,6 @@ from alpha_cycle.intelligence.decision_scoring import (
     DecisionPolicy,
     build_report,
     build_scorecards,
-    load_company_exposures,
 )
 
 DECISION_SCHEMA_VERSION = 1
