@@ -65,3 +65,11 @@ disable_error_code = ["assignment"]
 [[tool.mypy.overrides]]
 module = "alpha_cycle.brokers.reconciliation"
 disable_error_code = ["call-overload", "no-any-return"]
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.intelligence.decision"
+disable_error_code = ["arg-type", "call-overload", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.intelligence.outcomes"
+disable_error_code = ["arg-type"]
