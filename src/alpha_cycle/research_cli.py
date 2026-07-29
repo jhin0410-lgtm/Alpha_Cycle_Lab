@@ -14,7 +14,11 @@ from alpha_cycle.intelligence.fundamental_macro import (
     write_fundamental_macro_snapshot,
 )
 from alpha_cycle.providers.ecos import EcosReadOnlyClient, load_ecos_series_config
-from alpha_cycle.providers.opendart import REPORT_PERIODS, OpenDartReadOnlyClient
+from alpha_cycle.providers.opendart import (
+    REPORT_PERIODS,
+    OpenDartReadOnlyClient,
+    normalize_listed_stock_code,
+)
 
 
 def _iso_date(value: str) -> date:
@@ -25,16 +29,14 @@ def _iso_date(value: str) -> date:
 
 
 def _stock_codes(value: str) -> list[str]:
-    """Normalize comma-separated KRX codes while preserving leading zeroes."""
+    """Normalize and deduplicate comma-separated KRX stock codes."""
 
     raw_codes = [item.strip() for item in value.split(",") if item.strip()]
     if not raw_codes:
         raise ValueError("--symbols must include at least one symbol")
     normalized: list[str] = []
     for raw in raw_codes:
-        if not raw.isdigit() or len(raw) > 6:
-            raise ValueError("--symbols must contain numeric KRX codes of at most six digits")
-        code = raw.zfill(6)
+        code = normalize_listed_stock_code(raw)
         if code not in normalized:
             normalized.append(code)
     return normalized
@@ -76,6 +78,10 @@ def main(argv: list[str] | None = None) -> int:
         symbols = _stock_codes(args.symbols)
         if args.business_year < 2015:
             raise ValueError("--business-year must be 2015 or later")
+        if args.disclosure_begin > args.disclosure_end:
+            raise ValueError("--disclosure-begin cannot follow --disclosure-end")
+        if args.disclosure_end > args.evaluation_date:
+            raise ValueError("--disclosure-end cannot follow --evaluation-date")
         if not args.ecos_config.is_file():
             raise ValueError(f"ECOS config does not exist: {args.ecos_config}")
         if args.market_snapshot is not None and not args.market_snapshot.exists():
@@ -84,11 +90,13 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("--timeout-seconds must be positive")
         if args.max_retries < 0:
             raise ValueError("--max-retries cannot be negative")
+
         opendart = OpenDartReadOnlyClient.from_env()
         ecos = EcosReadOnlyClient.from_env()
         for client in (opendart, ecos):
             client.timeout_seconds = args.timeout_seconds
             client.max_retries = args.max_retries
+
         snapshot = FundamentalMacroCollector(opendart, ecos).collect(
             symbols,
             business_year=args.business_year,
@@ -102,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             market_snapshot=args.market_snapshot,
         )
         written = write_fundamental_macro_snapshot(args.output, snapshot)
+        diagnostics = opendart.corp_code_diagnostics
         print(
             json.dumps(
                 {
@@ -113,6 +122,10 @@ def main(argv: list[str] | None = None) -> int:
                     "financial_rows": len(snapshot.financials),
                     "disclosure_rows": len(snapshot.disclosures),
                     "macro_rows": len(snapshot.macro),
+                    "warnings": list(snapshot.warnings),
+                    "corp_code_archive": (
+                        diagnostics.as_dict() if diagnostics is not None else None
+                    ),
                     "output_directory": str(written[0].parent.resolve()),
                     "output_files": len(written),
                     "order_api_enabled": False,
@@ -121,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         return 0
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, TypeError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
 
