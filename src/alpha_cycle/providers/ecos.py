@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
 from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yaml
@@ -25,6 +26,8 @@ from alpha_cycle.providers.read_only_http import (
 
 ECOS_BASE_URL = "https://ecos.bok.or.kr/api"
 SUPPORTED_CYCLES = frozenset({"A", "Q", "M", "D"})
+KOREA_TZ = ZoneInfo("Asia/Seoul")
+MAX_ECOS_ROWS = 100000
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,10 @@ class EcosSeriesSpec:
             raise ValueError("ECOS supports at most four item-code path segments")
         if any(not item.strip() for item in self.item_codes):
             raise ValueError("ECOS item codes cannot be empty")
+        start_date = _observation_date(self.cycle, self.start)
+        end_date = _observation_date(self.cycle, self.end)
+        if start_date > end_date:
+            raise ValueError("ECOS start cannot follow end")
 
 
 @dataclass(frozen=True)
@@ -96,9 +103,12 @@ def _observation_date(cycle: str, value: object) -> date:
     raise ValueError(f"ECOS TIME is invalid for cycle {cycle}: {text}")
 
 
-def _decimal(value: object) -> Decimal:
+def _optional_decimal(value: object) -> Decimal | None:
+    text = str(value).strip().replace(",", "")
+    if text in {"", "-", "None", "nan"}:
+        return None
     try:
-        result = Decimal(str(value).strip().replace(",", ""))
+        result = Decimal(text)
     except InvalidOperation as exc:
         raise ValueError(f"ECOS DATA_VALUE is invalid: {value!r}") from exc
     if not result.is_finite():
@@ -113,6 +123,13 @@ def _result_error(container: Mapping[str, object], service: str) -> None:
     code = str(result.get("CODE", "unknown")).strip()
     message = str(result.get("MESSAGE", "request failed")).strip()
     raise ValueError(f"ECOS {service} failed: code={code} message={message}")
+
+
+def _safe_int(value: object, field: str) -> int:
+    try:
+        return int(str(value).strip())
+    except ValueError as exc:
+        raise ValueError(f"ECOS {field} must be an integer") from exc
 
 
 def load_ecos_series_config(path: str | Path) -> tuple[EcosSeriesSpec, ...]:
@@ -183,7 +200,7 @@ class EcosReadOnlyClient(RetryingReadOnlyClient):
             "json",
             "kr",
             "1",
-            "100000",
+            str(MAX_ECOS_ROWS),
             spec.stat_code,
             spec.cycle,
             spec.start,
@@ -192,6 +209,26 @@ class EcosReadOnlyClient(RetryingReadOnlyClient):
         ]
         encoded = "/".join(quote(segment, safe="") for segment in segments)
         return f"{self.credentials.base_url}/{encoded}"
+
+    def _validate_row_identity(
+        self,
+        raw: Mapping[str, object],
+        spec: EcosSeriesSpec,
+    ) -> None:
+        returned_stat = str(raw.get("STAT_CODE", "")).strip()
+        if returned_stat and returned_stat != spec.stat_code:
+            raise ValueError(
+                "ECOS response STAT_CODE does not match request: "
+                f"expected={spec.stat_code}, actual={returned_stat}"
+            )
+        for index, expected in enumerate(spec.item_codes, start=1):
+            returned = str(raw.get(f"ITEM_CODE{index}", "")).strip()
+            if returned and returned != expected:
+                raise ValueError(
+                    "ECOS response item code does not match request: "
+                    f"series_id={spec.series_id}, item={index}, "
+                    f"expected={expected}, actual={returned}"
+                )
 
     def search(self, spec: EcosSeriesSpec) -> tuple[pd.DataFrame, object]:
         response = self._get(self._url(spec))
@@ -208,23 +245,39 @@ class EcosReadOnlyClient(RetryingReadOnlyClient):
         rows_raw = service.get("row")
         if not isinstance(rows_raw, list):
             raise ValueError("ECOS StatisticSearch row must be an array")
+        total_count = _safe_int(service.get("list_total_count", len(rows_raw)), "list_total_count")
+        if total_count > len(rows_raw):
+            raise ValueError(
+                "ECOS response was truncated; narrow the configured date range "
+                f"(total_count={total_count}, returned={len(rows_raw)})"
+            )
         retrieved_at = self.now()
         if retrieved_at.tzinfo is None or retrieved_at.utcoffset() is None:
             raise ValueError("ECOS client clock must be timezone-aware")
+        available_date = retrieved_at.astimezone(KOREA_TZ).date()
         rows: list[dict[str, object]] = []
         seen_dates: set[date] = set()
-        for raw in rows_raw:
-            if not isinstance(raw, dict):
+        skipped_missing = 0
+        for raw_value in rows_raw:
+            if not isinstance(raw_value, dict):
                 raise ValueError("ECOS StatisticSearch row must be an object")
+            raw = cast(Mapping[str, object], raw_value)
+            self._validate_row_identity(raw, spec)
             observation = _observation_date(spec.cycle, raw.get("TIME"))
             if observation in seen_dates:
-                raise ValueError(f"ECOS series contains duplicate TIME: {observation}")
+                raise ValueError(
+                    "ECOS series contains duplicate TIME values; configure enough item_codes: "
+                    f"series_id={spec.series_id}, time={observation}"
+                )
+            value = _optional_decimal(raw.get("DATA_VALUE"))
+            if value is None:
+                skipped_missing += 1
+                continue
             seen_dates.add(observation)
-            value = _decimal(raw.get("DATA_VALUE"))
             unit = str(raw.get("UNIT_NAME", "")).strip() or "unspecified"
             revision_material = (
                 f"{spec.series_id}|{observation.isoformat()}|{value}|{unit}|"
-                f"{retrieved_at.isoformat()}"
+                f"{'|'.join(spec.item_codes)}"
             )
             rows.append(
                 {
@@ -233,7 +286,7 @@ class EcosReadOnlyClient(RetryingReadOnlyClient):
                     "frequency": spec.cycle,
                     "value": value,
                     "unit": unit,
-                    "available_date": retrieved_at.date(),
+                    "available_date": available_date,
                     "retrieved_at": retrieved_at,
                     "source": "ecos",
                     "revision_id": hashlib.sha256(
@@ -243,7 +296,10 @@ class EcosReadOnlyClient(RetryingReadOnlyClient):
                 }
             )
         if not rows:
-            raise ValueError(f"ECOS returned no rows for series {spec.series_id}")
+            raise ValueError(
+                f"ECOS returned no numeric rows for series {spec.series_id}; "
+                f"skipped_missing_values={skipped_missing}"
+            )
         return validate_macro_series(pd.DataFrame(rows)), payload
 
     def collect(self, specs: Sequence[EcosSeriesSpec]) -> EcosBatch:
