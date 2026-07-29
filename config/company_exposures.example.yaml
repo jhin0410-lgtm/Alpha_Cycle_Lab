@@ -1,0 +1,11 @@
+# These are transparent research assumptions, not measured betas.
+# Copy to config/company_exposures.local.yaml and edit locally.
+companies:
+  "005930":
+    sector: semiconductor
+    export_fx_sensitivity: 0.7
+    rate_duration_sensitivity: 0.4
+  "000660":
+    sector: semiconductor
+    export_fx_sensitivity: 0.8
+    rate_duration_sensitivity: 0.5
