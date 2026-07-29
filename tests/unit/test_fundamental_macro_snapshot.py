@@ -6,11 +6,13 @@ import json
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from alpha_cycle.data.research import RevisionPolicy
 from alpha_cycle.intelligence.fundamental_macro import (
     FundamentalMacroSnapshot,
+    _json_value,
     write_fundamental_macro_snapshot,
 )
 
@@ -72,6 +74,7 @@ def test_snapshot_writer_is_content_addressed_and_idempotent(tmp_path: Path) -> 
         raw_opendart={"ok": True},
         raw_ecos={"ok": True},
         market_snapshot_id="a" * 64,
+        warnings=("example warning",),
     )
     first = write_fundamental_macro_snapshot(tmp_path, snapshot)
     second = write_fundamental_macro_snapshot(tmp_path, snapshot)
@@ -80,5 +83,15 @@ def test_snapshot_writer_is_content_addressed_and_idempotent(tmp_path: Path) -> 
     manifest = json.loads(first[0].read_text(encoding="utf-8"))
     assert manifest["snapshot_id"] == snapshot.snapshot_id
     assert manifest["market_snapshot_id"] == "a" * 64
-    assert manifest["availability_policy"]["ecos"] == "retrieval_date_conservative"
+    assert manifest["availability_policy"]["ecos"] == "korea_retrieval_date_conservative"
+    assert manifest["research_mode"] == "live_endpoint_filtered"
+    assert manifest["historical_revision_archive_complete"] is False
+    assert manifest["warnings"] == ["example warning"]
     assert manifest["order_api_enabled"] is False
+
+
+def test_json_value_handles_numpy_scalars_and_missing_values() -> None:
+    assert _json_value(np.int64(3)) == 3
+    assert _json_value(np.bool_(True)) is True
+    assert _json_value(np.float64(2.5)) == 2.5
+    assert _json_value(np.float64(np.nan)) is None
