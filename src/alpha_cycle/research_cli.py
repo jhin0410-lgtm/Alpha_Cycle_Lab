@@ -24,12 +24,32 @@ def _iso_date(value: str) -> date:
         raise argparse.ArgumentTypeError("date must use YYYY-MM-DD") from exc
 
 
+def _stock_codes(value: str) -> list[str]:
+    """Normalize comma-separated KRX codes while preserving leading zeroes."""
+
+    raw_codes = [item.strip() for item in value.split(",") if item.strip()]
+    if not raw_codes:
+        raise ValueError("--symbols must include at least one symbol")
+    normalized: list[str] = []
+    for raw in raw_codes:
+        if not raw.isdigit() or len(raw) > 6:
+            raise ValueError("--symbols must contain numeric KRX codes of at most six digits")
+        code = raw.zfill(6)
+        if code not in normalized:
+            normalized.append(code)
+    return normalized
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-research",
         description="Collect official OpenDART and ECOS point-in-time research data",
     )
-    parser.add_argument("--symbols", required=True, help="comma-separated six-digit KRX codes")
+    parser.add_argument(
+        "--symbols",
+        required=True,
+        help='comma-separated KRX codes; quote in PowerShell, for example "005930,000660"',
+    )
     parser.add_argument("--business-year", type=int, required=True)
     parser.add_argument("--report-code", choices=tuple(REPORT_PERIODS), required=True)
     parser.add_argument("--fs-div", choices=("CFS", "OFS"), default="CFS")
@@ -53,9 +73,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
-        symbols = [item.strip() for item in args.symbols.split(",") if item.strip()]
-        if not symbols:
-            raise ValueError("--symbols must include at least one symbol")
+        symbols = _stock_codes(args.symbols)
         if args.business_year < 2015:
             raise ValueError("--business-year must be 2015 or later")
         if not args.ecos_config.is_file():
