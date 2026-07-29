@@ -44,6 +44,7 @@ MACRO_REQUIRED = (
     "unit",
     *COMMON_REVISION_COLUMNS,
 )
+MAX_CIVIL_UTC_OFFSET_HOURS = 14
 
 
 class FinancialDataAdapter(Protocol):
@@ -95,6 +96,15 @@ def _validate_revision_columns(data: pd.DataFrame) -> None:
     if ((sequence % 1) != 0).any() or (sequence < 0).any():
         raise ValueError("revision_sequence must be a non-negative integer")
     data["revision_sequence"] = sequence.astype("int64")
+
+
+def _retrieval_covers_available_date(retrieved: pd.Timestamp, available: date) -> bool:
+    """Allow a source-local date to be up to the civil UTC+14 boundary."""
+
+    latest_possible_source_date = (
+        retrieved + pd.Timedelta(hours=MAX_CIVIL_UTC_OFFSET_HOURS)
+    ).date()
+    return latest_possible_source_date >= available
 
 
 def _validate_revision_order(data: pd.DataFrame, key_columns: list[str]) -> None:
@@ -173,8 +183,8 @@ def validate_financial_statements(frame: pd.DataFrame) -> pd.DataFrame:
             raise ValueError("period_start cannot follow period_end")
         if available < period_end:
             raise ValueError("Financial available_date cannot precede period_end")
-        if retrieved.date() < available:
-            raise ValueError("retrieved_at cannot precede available_date")
+        if not _retrieval_covers_available_date(retrieved, available):
+            raise ValueError("retrieved_at cannot precede source-local available_date")
     keys = ["ticker", "metric", "period_end", "fiscal_period"]
     _validate_revision_order(data, keys)
     return data.loc[:, canonical].sort_values(
@@ -208,8 +218,8 @@ def validate_macro_series(frame: pd.DataFrame) -> pd.DataFrame:
         retrieved = cast(pd.Timestamp, row["retrieved_at"])
         if available < observation:
             raise ValueError("Macro available_date cannot precede observation_date")
-        if retrieved.date() < available:
-            raise ValueError("retrieved_at cannot precede available_date")
+        if not _retrieval_covers_available_date(retrieved, available):
+            raise ValueError("retrieved_at cannot precede source-local available_date")
     keys = ["series_id", "observation_date"]
     _validate_revision_order(data, keys)
     return data.loc[:, list(MACRO_REQUIRED)].sort_values(
