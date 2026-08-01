@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
 from typing import cast
 
 import pandas as pd
@@ -72,17 +71,15 @@ def _integer(value: object, field: str, *, optional: bool = True) -> int | None:
 
 
 def _date_yyyymmdd(value: object, field: str) -> date:
-    text = str(value).strip()
     try:
-        return datetime.strptime(text, "%Y%m%d").date()
+        return datetime.strptime(str(value).strip(), "%Y%m%d").date()
     except ValueError as exc:
         raise ValueError(f"OpenDART {field} must use YYYYMMDD") from exc
 
 
 def _date_iso(value: object, field: str) -> date:
-    text = str(value).strip()
     try:
-        return date.fromisoformat(text)
+        return date.fromisoformat(str(value).strip())
     except ValueError as exc:
         raise ValueError(f"OpenDART {field} must use YYYY-MM-DD") from exc
 
@@ -107,18 +104,21 @@ def _period_end(business_year: int, report_code: str) -> date:
     return date(business_year, month, day)
 
 
-def _candidate_periods(evaluation_date: date, history_years: int) -> tuple[tuple[int, str], ...]:
+def _candidate_periods(
+    evaluation_date: date,
+    history_years: int,
+) -> tuple[tuple[int, str], ...]:
     if history_years <= 0:
         raise ValueError("history_years must be positive")
+    first_year = max(2015, evaluation_date.year - history_years + 1)
     periods: list[tuple[date, int, str]] = []
-    first_year = max(2015, evaluation_date.year - history_years)
     for year in range(first_year, evaluation_date.year + 1):
         for report_code in REPORT_PERIODS:
             period_end = _period_end(year, report_code)
             if period_end <= evaluation_date:
                 periods.append((period_end, year, report_code))
     periods.sort(reverse=True)
-    return tuple((year, code) for _, year, code in periods)
+    return tuple((year, report_code) for _, year, report_code in periods)
 
 
 def _visible_receipt_date(rows: list[Mapping[str, object]]) -> date | None:
@@ -131,24 +131,8 @@ def _visible_receipt_date(rows: list[Mapping[str, object]]) -> date | None:
     return max(dates) if dates else None
 
 
-def _decimal(value: object) -> Decimal | None:
-    text = str(value).strip().replace(",", "")
-    if text in {"", "-", "None", "nan"}:
-        return None
-    negative = text.startswith("(") and text.endswith(")")
-    if negative:
-        text = text[1:-1]
-    try:
-        result = Decimal(text)
-    except InvalidOperation:
-        return None
-    if not result.is_finite():
-        return None
-    return -result if negative else result
-
-
 class OpenDartValuationClient(OpenDartReadOnlyClient):
-    """Official GET-only OpenDART client for valuation and financial-history evidence."""
+    """Official GET-only client for share counts and financial-history evidence."""
 
     def stock_totals(
         self,
@@ -210,17 +194,23 @@ class OpenDartValuationClient(OpenDartReadOnlyClient):
                     "security_name": security_name,
                     "security_class": _security_class(security_name),
                     "authorized_shares": _integer(
-                        raw.get("isu_stock_totqy"), "isu_stock_totqy"
+                        raw.get("isu_stock_totqy"),
+                        "isu_stock_totqy",
                     ),
                     "shares_issued_to_date": _integer(
-                        raw.get("now_to_isu_stock_totqy"), "now_to_isu_stock_totqy"
+                        raw.get("now_to_isu_stock_totqy"),
+                        "now_to_isu_stock_totqy",
                     ),
                     "shares_reduced_to_date": _integer(
-                        raw.get("now_to_dcrs_stock_totqy"), "now_to_dcrs_stock_totqy"
+                        raw.get("now_to_dcrs_stock_totqy"),
+                        "now_to_dcrs_stock_totqy",
                     ),
                     "issued_shares": _integer(raw.get("istc_totqy"), "istc_totqy"),
                     "treasury_shares": _integer(raw.get("tesstk_co"), "tesstk_co"),
-                    "floating_shares": _integer(raw.get("distb_stock_co"), "distb_stock_co"),
+                    "floating_shares": _integer(
+                        raw.get("distb_stock_co"),
+                        "distb_stock_co",
+                    ),
                 }
             )
         frame = pd.DataFrame(records, columns=STOCK_TOTAL_COLUMNS)
@@ -229,9 +219,10 @@ class OpenDartValuationClient(OpenDartReadOnlyClient):
         if frame.duplicated(["security_class", "security_name"]).any():
             raise ValueError("OpenDART stock-total response contains duplicate security rows")
         return StockTotalsBatch(
-            frame.sort_values(["security_class", "security_name"], kind="stable").reset_index(
-                drop=True
-            ),
+            frame.sort_values(
+                ["security_class", "security_name"],
+                kind="stable",
+            ).reset_index(drop=True),
             dict(payload),
             corp,
         )
@@ -262,15 +253,15 @@ class OpenDartValuationClient(OpenDartReadOnlyClient):
                 (batch.frame["period_end"] <= evaluation_date)
                 & (batch.frame["available_date"] <= evaluation_date)
             ].copy()
-            if visible.empty:
-                continue
-            return StockTotalsBatch(
-                visible.reset_index(drop=True),
-                {"selected": batch.raw_payload, "attempts": attempts},
-                corp,
-            )
+            if not visible.empty:
+                return StockTotalsBatch(
+                    visible.reset_index(drop=True),
+                    {"selected": batch.raw_payload, "attempts": attempts},
+                    corp,
+                )
         raise ValueError(
-            f"No OpenDART stock totals were available by {evaluation_date} for {corp.stock_code}"
+            f"No OpenDART stock totals were available by {evaluation_date} "
+            f"for {corp.stock_code}"
         )
 
     def financial_period_payload(
@@ -302,7 +293,11 @@ class OpenDartValuationClient(OpenDartReadOnlyClient):
         raw_rows = payload.get("list", [])
         if not isinstance(raw_rows, list):
             raise ValueError("OpenDART financial-history list must be an array")
-        rows = [cast(Mapping[str, object], raw) for raw in raw_rows if isinstance(raw, dict)]
+        rows = [
+            cast(Mapping[str, object], raw)
+            for raw in raw_rows
+            if isinstance(raw, dict)
+        ]
         if len(rows) != len(raw_rows):
             raise ValueError("OpenDART financial-history rows must be objects")
         available_date = _visible_receipt_date(rows)
@@ -365,5 +360,4 @@ __all__ = [
     "FinancialPeriodPayload",
     "OpenDartValuationClient",
     "StockTotalsBatch",
-    "_decimal",
 ]
