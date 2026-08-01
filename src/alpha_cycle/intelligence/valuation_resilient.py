@@ -14,6 +14,8 @@ from alpha_cycle.intelligence.valuation import (
     CompanySecurityMapping,
     ValuationDataClient,
     ValuationEvidenceSnapshot,
+)
+from alpha_cycle.intelligence.valuation import (
     build_valuation_evidence_snapshot as _build_valuation_evidence_snapshot,
 )
 
@@ -44,7 +46,7 @@ def _unresolved_share_rows(shares: pd.DataFrame) -> pd.DataFrame:
 def _missing_names(value: object) -> set[str]:
     try:
         parsed = json.loads(str(value))
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except (TypeError, ValueError):
         return set()
     if not isinstance(parsed, list):
         return set()
