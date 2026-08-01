@@ -172,12 +172,16 @@ def test_build_and_write_integrated_decision_snapshot(tmp_path: Path) -> None:
     assert score["ticker"] == "005930"
     assert score["earnings_momentum_score"] >= 4.0
     assert score["valuation_status"] == "not_available"
+    assert snapshot.valuation_snapshot_id is None
     assert "Alpha Cycle 투자 의사결정 리포트" in snapshot.report_markdown
     written = write_investment_decision_snapshot(tmp_path / "decisions", snapshot)
-    assert len(written) == 11
+    assert len(written) == 13
     manifest = json.loads(written[0].read_text(encoding="utf-8"))
     assert manifest["valuation_available"] is False
+    assert manifest["valuation_scored_count"] == 0
     assert manifest["order_api_enabled"] is False
+    assert (written[0].parent / "valuation_metrics.csv").is_file()
+    assert (written[0].parent / "financial_history.csv").is_file()
     assert (written[0].parent / "scorecards.csv").is_file()
     assert (written[0].parent / "report.md").is_file()
 
