@@ -1,4 +1,4 @@
-"""Resume valuation and decision stages from linked same-day source snapshots."""
+"""Resume valuation and decision stages from fresh linked source snapshots."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import cast
 from zoneinfo import ZoneInfo
@@ -31,6 +31,9 @@ from alpha_cycle.live_pipeline_cli import (
 from alpha_cycle.providers import OpenDartCredentials, OpenDartValuationClient
 
 KOREA_TZ = ZoneInfo("Asia/Seoul")
+KRX_SESSION_CLOSE = time(15, 30)
+DEFAULT_MAX_MARKET_AGE_HOURS = 72.0
+MAX_MARKET_AGE_HOURS = 168.0
 _REQUIRED_MARKET_FILES = (
     "manifest.json",
     "prices.csv",
@@ -52,6 +55,7 @@ class ResumePair:
     research_directory: Path
     market_manifest: Mapping[str, object]
     research_manifest: Mapping[str, object]
+    source_evaluation_date: date
     age: timedelta
 
 
@@ -92,6 +96,33 @@ def _find_market_directory(
     return None
 
 
+def _potential_completed_session_after(captured_at: datetime, now: datetime) -> bool:
+    """Conservatively reject snapshots crossed by a possible completed KRX session."""
+
+    if captured_at.tzinfo is None or captured_at.utcoffset() is None:
+        raise ValueError("captured_at must be timezone-aware")
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("Resume clock must be timezone-aware")
+
+    captured_local = captured_at.astimezone(KOREA_TZ)
+    now_local = now.astimezone(KOREA_TZ)
+    if captured_local > now_local:
+        return True
+
+    current_date = captured_local.date()
+    while current_date <= now_local.date():
+        if current_date.weekday() < 5:
+            possible_close = datetime.combine(
+                current_date,
+                KRX_SESSION_CLOSE,
+                tzinfo=KOREA_TZ,
+            )
+            if captured_local < possible_close <= now_local:
+                return True
+        current_date += timedelta(days=1)
+    return False
+
+
 def find_resume_pair(
     output_root: Path,
     *,
@@ -99,7 +130,7 @@ def find_resume_pair(
     now: datetime,
     max_age_hours: float,
 ) -> ResumePair | None:
-    """Find the newest linked, same-day, sufficiently fresh research/market pair."""
+    """Find the newest linked, fresh pair without an intervening completed session."""
 
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("Resume clock must be timezone-aware")
@@ -108,6 +139,7 @@ def find_resume_pair(
     research_root = output_root / "research-intelligence"
     if not research_root.is_dir():
         return None
+
     required_symbols = set(DEFAULT_MARKET_SYMBOLS)
     max_age = timedelta(hours=max_age_hours)
     for research_directory in sorted(research_root.iterdir(), reverse=True):
@@ -115,13 +147,14 @@ def find_resume_pair(
             continue
         try:
             research_manifest = _read_manifest(research_directory)
-            manifest_date = date.fromisoformat(
+            source_evaluation_date = date.fromisoformat(
                 str(research_manifest.get("evaluation_date", ""))
             )
-            if manifest_date != evaluation_date:
+            if source_evaluation_date > evaluation_date:
                 continue
         except (ValueError, OSError, json.JSONDecodeError):
             continue
+
         market_snapshot_id = str(research_manifest.get("market_snapshot_id", ""))
         if not market_snapshot_id:
             continue
@@ -129,15 +162,22 @@ def find_resume_pair(
         if found is None:
             continue
         market_directory, market_manifest = found
+
         try:
-            captured_at = _aware_datetime(market_manifest.get("captured_at"), "captured_at")
+            captured_at = _aware_datetime(
+                market_manifest.get("captured_at"),
+                "captured_at",
+            )
         except ValueError:
             continue
         age = now.astimezone(UTC) - captured_at.astimezone(UTC)
         if age < timedelta(0) or age > max_age:
             continue
-        if captured_at.astimezone(KOREA_TZ).date() != evaluation_date:
+        if captured_at.astimezone(KOREA_TZ).date() > evaluation_date:
             continue
+        if _potential_completed_session_after(captured_at, now):
+            continue
+
         symbols_value = market_manifest.get("symbols", [])
         if not isinstance(symbols_value, list):
             continue
@@ -147,11 +187,13 @@ def find_resume_pair(
             continue
         if bool(market_manifest.get("adjusted", True)):
             continue
+
         return ResumePair(
             market_directory=market_directory,
             research_directory=research_directory,
             market_manifest=market_manifest,
             research_manifest=research_manifest,
+            source_evaluation_date=source_evaluation_date,
             age=age,
         )
     return None
@@ -159,10 +201,10 @@ def find_resume_pair(
 
 def _execute(args: argparse.Namespace) -> dict[str, object]:
     now = datetime.now(KOREA_TZ)
-    evaluation_date: date = args.evaluation_date or now.date()
+    requested_evaluation_date: date = args.evaluation_date or now.date()
     pair = find_resume_pair(
         args.output,
-        evaluation_date=evaluation_date,
+        evaluation_date=requested_evaluation_date,
         now=now,
         max_age_hours=args.max_market_age_hours,
     )
@@ -170,7 +212,8 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         raise PipelineStageError(
             "resume_validation",
             ValueError(
-                "No linked same-day market/research snapshot pair is available within "
+                "No linked market/research snapshot pair is fresh enough and free of "
+                "an intervening completed weekday session within "
                 f"{args.max_market_age_hours:g} hours"
             ),
         )
@@ -201,7 +244,9 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
     valuation_directory = valuation_files[0].parent
 
     company_config = Path("config/company_exposures.local.yaml")
-    exposures = load_company_exposures(company_config if company_config.is_file() else None)
+    exposures = load_company_exposures(
+        company_config if company_config.is_file() else None
+    )
     decision_snapshot = _run_stage(
         "decision",
         lambda: build_investment_decision_snapshot(
@@ -222,15 +267,30 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
     decision_directory = decision_files[0].parent
     valuation_frame = valuation_snapshot.valuation_metrics
     scorecards = decision_snapshot.scorecards
+    captured_at = _aware_datetime(
+        pair.market_manifest.get("captured_at"),
+        "captured_at",
+    )
+    captured_date = captured_at.astimezone(KOREA_TZ).date()
+    cross_date_resume = captured_date != requested_evaluation_date
     warnings = [
         "market_snapshot_resumed_after_live_provider_block",
         f"resumed_market_age_minutes={pair.age.total_seconds() / 60.0:.1f}",
-        *decision_snapshot.warnings,
     ]
+    if cross_date_resume:
+        warnings.append(
+            "cross_date_snapshot_resume="
+            f"{captured_date.isoformat()}->{requested_evaluation_date.isoformat()}"
+        )
+    warnings.extend(decision_snapshot.warnings)
+
     return {
         "status": "completed",
-        "execution_mode": "resumed_same_day_snapshots",
-        "evaluation_date": evaluation_date.isoformat(),
+        "execution_mode": "resumed_linked_snapshots",
+        "evaluation_date": pair.source_evaluation_date.isoformat(),
+        "requested_evaluation_date": requested_evaluation_date.isoformat(),
+        "market_capture_date": captured_date.isoformat(),
+        "cross_date_resume": cross_date_resume,
         "market_source": "resumed_snapshot",
         "research_source": "resumed_snapshot",
         "market_snapshot_age_minutes": round(pair.age.total_seconds() / 60.0, 1),
@@ -268,12 +328,19 @@ def _date_argument(value: str) -> date:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-resume",
-        description="Resume valuation and decision from linked same-day source snapshots",
+        description=(
+            "Resume valuation and decision from fresh linked source snapshots when no "
+            "possible completed weekday market session occurred after capture"
+        ),
     )
     parser.add_argument("--evaluation-date", type=_date_argument)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--history-years", type=int, default=3)
-    parser.add_argument("--max-market-age-hours", type=float, default=24.0)
+    parser.add_argument(
+        "--max-market-age-hours",
+        type=float,
+        default=DEFAULT_MAX_MARKET_AGE_HOURS,
+    )
     parser.add_argument("--timeout-seconds", type=float, default=15.0)
     parser.add_argument("--max-retries", type=int, default=3)
     return parser
@@ -282,8 +349,13 @@ def build_parser() -> argparse.ArgumentParser:
 def _validate_args(args: argparse.Namespace) -> None:
     if args.history_years <= 0 or args.history_years > 10:
         raise ValueError("--history-years must be between 1 and 10")
-    if args.max_market_age_hours <= 0 or args.max_market_age_hours > 24:
-        raise ValueError("--max-market-age-hours must be between 0 and 24")
+    if (
+        args.max_market_age_hours <= 0
+        or args.max_market_age_hours > MAX_MARKET_AGE_HOURS
+    ):
+        raise ValueError(
+            f"--max-market-age-hours must be between 0 and {MAX_MARKET_AGE_HOURS:g}"
+        )
     if args.timeout_seconds <= 0:
         raise ValueError("--timeout-seconds must be positive")
     if args.max_retries < 0:
@@ -315,7 +387,8 @@ def main(argv: list[str] | None = None) -> int:
             "reason": reason,
             "error": str(exc.cause),
             "next_action": (
-                "Register the current public IP in TossInvest and rerun the live pipeline."
+                "Register the current public IP in TossInvest and rerun the "
+                "live pipeline."
                 if exc.stage == "resume_validation"
                 else "Review the stage error and rerun after correction."
             ),
