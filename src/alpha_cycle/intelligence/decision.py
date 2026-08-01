@@ -27,8 +27,12 @@ from alpha_cycle.intelligence.decision_scoring import (
     build_report,
     build_scorecards,
 )
+from alpha_cycle.intelligence.valuation import (
+    append_valuation_report,
+    apply_valuation_to_scorecards,
+)
 
-DECISION_SCHEMA_VERSION = 1
+DECISION_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -39,6 +43,7 @@ class InvestmentDecisionSnapshot:
     evaluation_date: date
     research_snapshot_id: str
     market_snapshot_id: str
+    valuation_snapshot_id: str | None
     policy: DecisionPolicy
     financial_kpis: pd.DataFrame
     financial_mapping: pd.DataFrame
@@ -47,6 +52,8 @@ class InvestmentDecisionSnapshot:
     disclosure_summary: pd.DataFrame
     macro_regime: pd.DataFrame
     market_context: pd.DataFrame
+    valuation_metrics: pd.DataFrame
+    financial_history: pd.DataFrame
     scorecards: pd.DataFrame
     decision_records: pd.DataFrame
     report_markdown: str
@@ -57,6 +64,8 @@ class InvestmentDecisionSnapshot:
             raise ValueError("captured_at must be timezone-aware")
         _validate_snapshot_id(self.research_snapshot_id, "research_snapshot_id")
         _validate_snapshot_id(self.market_snapshot_id, "market_snapshot_id")
+        if self.valuation_snapshot_id is not None:
+            _validate_snapshot_id(self.valuation_snapshot_id, "valuation_snapshot_id")
 
     def payload_without_id(self) -> dict[str, object]:
         return {
@@ -65,6 +74,7 @@ class InvestmentDecisionSnapshot:
             "evaluation_date": self.evaluation_date.isoformat(),
             "research_snapshot_id": self.research_snapshot_id,
             "market_snapshot_id": self.market_snapshot_id,
+            "valuation_snapshot_id": self.valuation_snapshot_id,
             "policy": {
                 "recent_disclosure_days": self.policy.recent_disclosure_days,
                 "positive_threshold": self.policy.positive_threshold,
@@ -78,6 +88,8 @@ class InvestmentDecisionSnapshot:
             "disclosure_summary": _records(self.disclosure_summary),
             "macro_regime": _records(self.macro_regime),
             "market_context": _records(self.market_context),
+            "valuation_metrics": _records(self.valuation_metrics),
+            "financial_history": _records(self.financial_history),
             "scorecards": _records(self.scorecards),
             "decision_records": _records(self.decision_records),
             "report_markdown": self.report_markdown,
@@ -193,10 +205,49 @@ def _validate_ticker_sets(financial_kpis: pd.DataFrame, market_context: pd.DataF
         )
 
 
+def _load_valuation_snapshot(
+    path: str | Path,
+    *,
+    research_snapshot_id: str,
+    market_snapshot_id: str,
+    evaluation_date: date,
+) -> tuple[str, pd.DataFrame, pd.DataFrame, tuple[str, ...]]:
+    directory = _snapshot_directory(path)
+    manifest = _read_json(directory / "manifest.json")
+    snapshot_id = str(manifest.get("snapshot_id", ""))
+    _validate_snapshot_id(snapshot_id, "valuation_snapshot_id")
+    if str(manifest.get("research_snapshot_id", "")) != research_snapshot_id:
+        raise ValueError("Valuation snapshot is linked to a different research snapshot")
+    if str(manifest.get("market_snapshot_id", "")) != market_snapshot_id:
+        raise ValueError("Valuation snapshot is linked to a different market snapshot")
+    if date.fromisoformat(str(manifest.get("evaluation_date", ""))) != evaluation_date:
+        raise ValueError("Valuation snapshot evaluation date does not match")
+    metrics = pd.read_csv(
+        directory / "valuation_metrics.csv",
+        dtype={"ticker": "string"},
+    )
+    history = pd.read_csv(
+        directory / "financial_history.csv",
+        dtype={"ticker": "string", "report_code": "string"},
+    )
+    if "ticker" not in metrics.columns or "ticker" not in history.columns:
+        raise ValueError("Valuation snapshot files must contain ticker")
+    metrics["ticker"] = _ticker_codes(metrics["ticker"])
+    history["ticker"] = _ticker_codes(history["ticker"])
+    warnings_value = manifest.get("warnings", [])
+    warnings = (
+        tuple(str(item) for item in warnings_value)
+        if isinstance(warnings_value, list)
+        else ()
+    )
+    return snapshot_id, metrics, history, warnings
+
+
 def build_investment_decision_snapshot(
     research_snapshot: str | Path,
     market_snapshot: str | Path,
     *,
+    valuation_snapshot: str | Path | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
     policy: DecisionPolicy | None = None,
@@ -255,6 +306,33 @@ def build_investment_decision_snapshot(
         decision_policy,
     )
     scorecards["ticker"] = _ticker_codes(scorecards["ticker"])
+
+    valuation_id: str | None = None
+    valuation_metrics = pd.DataFrame(columns=["ticker"])
+    financial_history = pd.DataFrame(columns=["ticker"])
+    valuation_warnings: tuple[str, ...] = ()
+    if valuation_snapshot is not None:
+        valuation_id, valuation_metrics, financial_history, valuation_warnings = (
+            _load_valuation_snapshot(
+                valuation_snapshot,
+                research_snapshot_id=research_id,
+                market_snapshot_id=market_id,
+                evaluation_date=evaluation_date,
+            )
+        )
+        valuation_tickers = set(valuation_metrics["ticker"].astype(str))
+        score_tickers = set(scorecards["ticker"].astype(str))
+        if valuation_tickers != score_tickers:
+            raise ValueError(
+                "Valuation and decision ticker sets differ: "
+                f"valuation={sorted(valuation_tickers)}, decision={sorted(score_tickers)}"
+            )
+        scorecards = apply_valuation_to_scorecards(
+            scorecards,
+            valuation_metrics,
+            decision_policy,
+        )
+
     price_lookup = market_context.set_index("ticker")["last_price"].to_dict()
     decision_records = scorecards.loc[
         :,
@@ -271,7 +349,12 @@ def build_investment_decision_snapshot(
     if decision_records["reference_price"].isna().any():
         raise ValueError("Decision records are missing reference prices")
 
-    warnings = [*financial_warnings, "valuation_and_consensus_not_available"]
+    warnings = [*financial_warnings]
+    if valuation_id is None:
+        warnings.append("valuation_and_consensus_not_available")
+    else:
+        warnings.extend(valuation_warnings)
+        warnings.append("consensus_not_available")
     if not exposure_map:
         warnings.append("company_macro_exposures_not_configured")
     report = build_report(
@@ -283,11 +366,14 @@ def build_investment_decision_snapshot(
         market_context,
         tuple(warnings),
     )
+    if valuation_id is not None:
+        report = append_valuation_report(report, valuation_metrics, financial_history)
     return InvestmentDecisionSnapshot(
         captured_at=now or datetime.now(UTC),
         evaluation_date=evaluation_date,
         research_snapshot_id=research_id,
         market_snapshot_id=market_id,
+        valuation_snapshot_id=valuation_id,
         policy=decision_policy,
         financial_kpis=financial_kpis,
         financial_mapping=financial_mapping,
@@ -296,6 +382,8 @@ def build_investment_decision_snapshot(
         disclosure_summary=disclosure_summary,
         macro_regime=macro_regime,
         market_context=market_context,
+        valuation_metrics=valuation_metrics,
+        financial_history=financial_history,
         scorecards=scorecards,
         decision_records=decision_records,
         report_markdown=report,
@@ -322,6 +410,8 @@ def write_investment_decision_snapshot(
         "disclosure_summary.csv",
         "macro_regime.csv",
         "market_context.csv",
+        "valuation_metrics.csv",
+        "financial_history.csv",
         "scorecards.csv",
         "decision_records.csv",
         "report.md",
@@ -345,6 +435,8 @@ def write_investment_decision_snapshot(
             "disclosure_summary.csv": snapshot.disclosure_summary,
             "macro_regime.csv": snapshot.macro_regime,
             "market_context.csv": snapshot.market_context,
+            "valuation_metrics.csv": snapshot.valuation_metrics,
+            "financial_history.csv": snapshot.financial_history,
             "scorecards.csv": snapshot.scorecards,
             "decision_records.csv": snapshot.decision_records,
         }
@@ -362,10 +454,14 @@ def write_investment_decision_snapshot(
             "evaluation_date": snapshot.evaluation_date.isoformat(),
             "research_snapshot_id": snapshot.research_snapshot_id,
             "market_snapshot_id": snapshot.market_snapshot_id,
+            "valuation_snapshot_id": snapshot.valuation_snapshot_id,
             "symbols": snapshot.scorecards["ticker"].astype(str).tolist(),
             "decision_states": state_counts,
             "warnings": list(snapshot.warnings),
-            "valuation_available": False,
+            "valuation_available": snapshot.valuation_snapshot_id is not None,
+            "valuation_scored_count": int(
+                snapshot.scorecards["valuation_score"].notna().sum()
+            ),
             "consensus_available": False,
             "order_api_enabled": False,
             "files": list(names[1:]),
