@@ -8,7 +8,7 @@ REQUIRED = (
     "TOSSINVEST_CLIENT_ID",
     "TOSSINVEST_CLIENT_SECRET",
     "OPENDART_API_KEY",
-    "ECOS_API_KEY",
+    "BOK_ECOS_API_KEY",
 )
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -27,6 +27,7 @@ def test_setup_script_persists_required_credentials_without_echoing_values() -> 
     assert "ZeroFreeBSTR" in script
     assert "Write-Host $plainValue" not in script
     assert "Write-Output $plainValue" not in script
+    assert '"BOK_ECOS_API_KEY" = @("ECOS_API_KEY")' in script
 
 
 def test_runner_loads_user_credentials_and_never_reads_missing_report_path() -> None:
@@ -38,6 +39,7 @@ def test_runner_loads_user_credentials_and_never_reads_missing_report_path() -> 
     assert "python -m alpha_cycle.live_pipeline_cli" in script
     assert '$status.status -eq "completed" -and $status.report_path' in script
     assert "Get-Content $status.report_path" in script
+    assert 'SetEnvironmentVariable("ECOS_API_KEY", $bokEcosKey, "Process")' in script
 
 
 def test_cmd_launcher_bypasses_local_execution_policy_for_repo_script() -> None:

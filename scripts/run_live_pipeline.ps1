@@ -12,7 +12,7 @@ $RequiredVariables = @(
     "TOSSINVEST_CLIENT_ID",
     "TOSSINVEST_CLIENT_SECRET",
     "OPENDART_API_KEY",
-    "ECOS_API_KEY"
+    "BOK_ECOS_API_KEY"
 )
 
 Set-Location $RepositoryRoot
@@ -25,6 +25,26 @@ foreach ($name in $RequiredVariables) {
             [Environment]::SetEnvironmentVariable($name, $userValue, "Process")
         }
     }
+}
+
+$bokEcosKey = [Environment]::GetEnvironmentVariable("BOK_ECOS_API_KEY", "Process")
+if ([string]::IsNullOrWhiteSpace($bokEcosKey)) {
+    $legacyProcessKey = [Environment]::GetEnvironmentVariable("ECOS_API_KEY", "Process")
+    $legacyUserKey = [Environment]::GetEnvironmentVariable("ECOS_API_KEY", "User")
+    $legacyKey = if (-not [string]::IsNullOrWhiteSpace($legacyProcessKey)) {
+        $legacyProcessKey
+    }
+    else {
+        $legacyUserKey
+    }
+    if (-not [string]::IsNullOrWhiteSpace($legacyKey)) {
+        [Environment]::SetEnvironmentVariable("BOK_ECOS_API_KEY", $legacyKey, "User")
+        [Environment]::SetEnvironmentVariable("BOK_ECOS_API_KEY", $legacyKey, "Process")
+        $bokEcosKey = $legacyKey
+    }
+}
+if (-not [string]::IsNullOrWhiteSpace($bokEcosKey)) {
+    [Environment]::SetEnvironmentVariable("ECOS_API_KEY", $bokEcosKey, "Process")
 }
 
 $missing = @(
@@ -40,6 +60,11 @@ if ($missing.Count -gt 0) {
     Write-Host "Missing local API credentials: $($missing -join ', ')"
     Write-Host "Starting secure one-time credential setup. Values will not be printed or committed."
     & $SetupScript
+}
+
+$bokEcosKey = [Environment]::GetEnvironmentVariable("BOK_ECOS_API_KEY", "Process")
+if (-not [string]::IsNullOrWhiteSpace($bokEcosKey)) {
+    [Environment]::SetEnvironmentVariable("ECOS_API_KEY", $bokEcosKey, "Process")
 }
 
 $remaining = @(

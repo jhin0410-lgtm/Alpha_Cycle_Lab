@@ -10,8 +10,12 @@ $RequiredVariables = @(
     "TOSSINVEST_CLIENT_ID",
     "TOSSINVEST_CLIENT_SECRET",
     "OPENDART_API_KEY",
-    "ECOS_API_KEY"
+    "BOK_ECOS_API_KEY"
 )
+
+$CredentialAliases = @{
+    "BOK_ECOS_API_KEY" = @("ECOS_API_KEY")
+}
 
 function Get-EffectiveCredentialValue {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -29,6 +33,24 @@ function Get-EffectiveCredentialValue {
     if (-not [string]::IsNullOrWhiteSpace($userValue)) {
         [Environment]::SetEnvironmentVariable($Name, $userValue, "Process")
         return $userValue
+    }
+
+    if ($CredentialAliases.ContainsKey($Name)) {
+        foreach ($alias in $CredentialAliases[$Name]) {
+            $aliasProcessValue = [Environment]::GetEnvironmentVariable($alias, "Process")
+            $aliasUserValue = [Environment]::GetEnvironmentVariable($alias, "User")
+            $aliasValue = if (-not [string]::IsNullOrWhiteSpace($aliasProcessValue)) {
+                $aliasProcessValue
+            }
+            else {
+                $aliasUserValue
+            }
+            if (-not [string]::IsNullOrWhiteSpace($aliasValue)) {
+                [Environment]::SetEnvironmentVariable($Name, $aliasValue, "User")
+                [Environment]::SetEnvironmentVariable($Name, $aliasValue, "Process")
+                return $aliasValue
+            }
+        }
     }
 
     return $null
@@ -91,6 +113,11 @@ foreach ($name in $RequiredVariables) {
         $secureValue = $null
     }
     Write-Host "$name configured"
+}
+
+$bokEcosKey = [Environment]::GetEnvironmentVariable("BOK_ECOS_API_KEY", "Process")
+if (-not [string]::IsNullOrWhiteSpace($bokEcosKey)) {
+    [Environment]::SetEnvironmentVariable("ECOS_API_KEY", $bokEcosKey, "Process")
 }
 
 Write-Host "All Alpha Cycle Lab API credentials are configured for this Windows user and current PowerShell process."
