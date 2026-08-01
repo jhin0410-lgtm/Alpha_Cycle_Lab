@@ -39,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     build = subparsers.add_parser("build", help="build a decision-intelligence snapshot")
     build.add_argument("--research-snapshot", type=Path, required=True)
     build.add_argument("--market-snapshot", type=Path, required=True)
+    build.add_argument("--valuation-snapshot", type=Path)
     build.add_argument("--output", type=Path, required=True)
     build.add_argument("--benchmark")
     build.add_argument("--company-config", type=Path)
@@ -59,6 +60,8 @@ def build_parser() -> argparse.ArgumentParser:
 def _build(args: argparse.Namespace) -> int:
     if args.company_config is not None and not args.company_config.is_file():
         raise ValueError(f"Company config does not exist: {args.company_config}")
+    if args.valuation_snapshot is not None and not args.valuation_snapshot.is_dir():
+        raise ValueError(f"Valuation snapshot does not exist: {args.valuation_snapshot}")
     benchmark = normalize_listed_stock_code(args.benchmark) if args.benchmark else None
     policy = DecisionPolicy(
         recent_disclosure_days=args.recent_disclosure_days,
@@ -69,6 +72,7 @@ def _build(args: argparse.Namespace) -> int:
     snapshot = build_investment_decision_snapshot(
         args.research_snapshot,
         args.market_snapshot,
+        valuation_snapshot=args.valuation_snapshot,
         benchmark=benchmark,
         exposures=load_company_exposures(args.company_config),
         policy=policy,
@@ -86,12 +90,17 @@ def _build(args: argparse.Namespace) -> int:
                 "evaluation_date": snapshot.evaluation_date.isoformat(),
                 "research_snapshot_id": snapshot.research_snapshot_id,
                 "market_snapshot_id": snapshot.market_snapshot_id,
+                "valuation_snapshot_id": snapshot.valuation_snapshot_id,
                 "symbols": snapshot.scorecards["ticker"].astype(str).tolist(),
                 "decision_states": states,
                 "warnings": list(snapshot.warnings),
                 "output_directory": str(written[0].parent.resolve()),
                 "output_files": len(written),
-                "valuation_available": False,
+                "valuation_available": snapshot.valuation_snapshot_id is not None,
+                "valuation_scored_count": int(
+                    snapshot.scorecards["valuation_score"].notna().sum()
+                ),
+                "consensus_available": False,
                 "order_api_enabled": False,
             },
             ensure_ascii=False,
