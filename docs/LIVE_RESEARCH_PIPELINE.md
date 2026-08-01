@@ -16,7 +16,66 @@ One invocation performs these stages in order:
 
 The default evaluation date is the current date in `Asia/Seoul`. The annual financial reference defaults to the previous business year. ECOS and disclosure date ranges are calculated in memory, so `config/ecos_series.local.yaml` is not edited.
 
-## Run
+## Recommended Windows command
+
+Use the repository launcher instead of calling the Python module directly:
+
+```powershell
+.\scripts\run_live_pipeline.cmd
+```
+
+The launcher:
+
+- restores previously saved user-level credentials into the current process;
+- starts secure one-time setup when any required credential is missing;
+- runs the live pipeline from the repository root;
+- reads `latest_run.json` safely;
+- prints the report only when the pipeline completed and `report_path` exists.
+
+The first run asks for four values without echoing them:
+
+```text
+TOSSINVEST_CLIENT_ID
+TOSSINVEST_CLIENT_SECRET
+OPENDART_API_KEY
+ECOS_API_KEY
+```
+
+The values are stored in the current Windows user's environment and copied into the current PowerShell process. They are not written to repository files, printed, or committed. As with all user-level environment variables, other processes running as the same Windows user may be able to read them.
+
+Credential status can be checked without displaying values:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\setup_local_credentials.ps1 `
+  -StatusOnly
+```
+
+Replace existing saved values intentionally:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\scripts\setup_local_credentials.ps1 `
+  -Force
+```
+
+Suppress automatic report output while still running the pipeline:
+
+```powershell
+.\scripts\run_live_pipeline.cmd -NoReport
+```
+
+Additional arguments are forwarded to the Python pipeline:
+
+```powershell
+.\scripts\run_live_pipeline.cmd `
+  --evaluation-date 2026-08-01 `
+  --history-years 3
+```
+
+## Direct Python command
+
+The direct command remains available when all four environment variables already exist in the current process:
 
 ```powershell
 python -m alpha_cycle.live_pipeline_cli
