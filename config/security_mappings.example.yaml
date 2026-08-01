@@ -1,10 +1,11 @@
 # OpenDART `se` values must match exactly.
-# Copy to config/security_mappings.local.yaml and keep local assumptions explicit.
+# Korean labels use YAML Unicode escapes so Windows PowerShell 5.1 displays this file safely.
+# The one-command live pipeline does not require a local copy of this file.
 companies:
   "005930":
     securities:
-      "보통주": "005930"
-      "우선주": "005935"
+      "\uBCF4\uD1B5\uC8FC": "005930"
+      "\uC6B0\uC120\uC8FC": "005935"
   "000660":
     securities:
-      "보통주": "000660"
+      "\uBCF4\uD1B5\uC8FC": "000660"
