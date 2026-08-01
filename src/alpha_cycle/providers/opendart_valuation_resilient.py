@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import cast
 
-import pandas as pd
-
 from alpha_cycle.providers.opendart import CorpCode
 from alpha_cycle.providers.opendart_valuation import (
     OpenDartValuationClient as _BaseOpenDartValuationClient,
@@ -134,9 +132,11 @@ class OpenDartValuationClient(_BaseOpenDartValuationClient):
             if not mask.any():
                 continue
             existing = frame.loc[mask, "normalization_warning"].astype("string")
-            frame.loc[mask, "normalization_warning"] = existing.fillna("").map(
-                lambda value: f"{value} | {warning}".strip(" |")
-            )
+            combined = [
+                f"{value} | {warning}".strip(" |")
+                for value in existing.fillna("").astype(str).tolist()
+            ]
+            frame.loc[mask, "normalization_warning"] = combined
 
         diagnostic_payload = dict(raw_payload)
         diagnostic_payload["_normalization_warnings"] = list(warnings)
