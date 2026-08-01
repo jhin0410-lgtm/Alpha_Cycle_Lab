@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable, MutableMapping
+from contextlib import AbstractContextManager
+from importlib import import_module
+from typing import Protocol, cast
 
 __version__ = "0.1.0"
 
@@ -16,14 +19,21 @@ _USER_ENVIRONMENT_NAMES = (
 )
 
 
+class _WinRegModule(Protocol):
+    HKEY_CURRENT_USER: object
+
+    def OpenKey(self, key: object, sub_key: str) -> AbstractContextManager[object]: ...
+
+    def QueryValueEx(self, key: object, value_name: str) -> tuple[object, int]: ...
+
+
 def _windows_user_environment_value(name: str) -> str | None:
     """Read one Windows user-scoped environment value without printing it."""
 
     if os.name != "nt":
         return None
     try:
-        import winreg
-
+        winreg = cast(_WinRegModule, import_module("winreg"))
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
             value, _ = winreg.QueryValueEx(key, name)
     except (FileNotFoundError, OSError):
