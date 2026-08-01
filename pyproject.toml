@@ -27,6 +27,7 @@ dev = [
 [project.scripts]
 alpha-cycle = "alpha_cycle.cli:main"
 alpha-cycle-decision = "alpha_cycle.decision_cli:main"
+alpha-cycle-valuation = "alpha_cycle.valuation_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -50,7 +51,9 @@ select = ["E", "F", "I", "B", "UP"]
 "src/alpha_cycle/intelligence/decision.py" = ["E501"]
 "src/alpha_cycle/intelligence/decision_features.py" = ["B023", "E501"]
 "src/alpha_cycle/intelligence/outcomes.py" = ["E501"]
+"src/alpha_cycle/intelligence/valuation.py" = ["E501"]
 "tests/unit/test_paper_state.py" = ["UP017"]
+"tests/unit/test_valuation_intelligence.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
