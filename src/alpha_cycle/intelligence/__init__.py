@@ -26,9 +26,11 @@ from alpha_cycle.intelligence.valuation import (
     CompanySecurityMapping,
     ValuationEvidenceSnapshot,
     build_financial_history,
-    build_valuation_evidence_snapshot,
     load_security_mappings,
     write_valuation_evidence_snapshot,
+)
+from alpha_cycle.intelligence.valuation_resilient import (
+    build_valuation_evidence_snapshot,
 )
 
 __all__ = [
