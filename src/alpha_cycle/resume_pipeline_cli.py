@@ -73,7 +73,10 @@ def _aware_datetime(value: object, field: str) -> datetime:
     return parsed
 
 
-def _find_market_directory(root: Path, snapshot_id: str) -> tuple[Path, Mapping[str, object]] | None:
+def _find_market_directory(
+    root: Path,
+    snapshot_id: str,
+) -> tuple[Path, Mapping[str, object]] | None:
     market_root = root / "market-intelligence"
     if not market_root.is_dir():
         return None
@@ -112,7 +115,10 @@ def find_resume_pair(
             continue
         try:
             research_manifest = _read_manifest(research_directory)
-            if date.fromisoformat(str(research_manifest.get("evaluation_date", ""))) != evaluation_date:
+            manifest_date = date.fromisoformat(
+                str(research_manifest.get("evaluation_date", ""))
+            )
+            if manifest_date != evaluation_date:
                 continue
         except (ValueError, OSError, json.JSONDecodeError):
             continue
@@ -240,7 +246,9 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         "market_cap_complete_count": int(
             valuation_frame["market_cap_complete"].astype(bool).sum()
         ),
-        "valuation_scored_count": int(valuation_frame["valuation_score"].notna().sum()),
+        "valuation_scored_count": int(
+            valuation_frame["valuation_score"].notna().sum()
+        ),
         "decision_states": {
             str(key): int(value)
             for key, value in scorecards["decision_state"].value_counts().items()
@@ -296,10 +304,15 @@ def main(argv: list[str] | None = None) -> int:
     except PipelineStageError as exc:
         if args is None:
             raise
+        reason = (
+            "resume_unavailable"
+            if exc.stage == "resume_validation"
+            else "pipeline_error"
+        )
         payload: dict[str, object] = {
             "status": "failed",
             "stage": exc.stage,
-            "reason": "resume_unavailable" if exc.stage == "resume_validation" else "pipeline_error",
+            "reason": reason,
             "error": str(exc.cause),
             "next_action": (
                 "Register the current public IP in TossInvest and rerun the live pipeline."
