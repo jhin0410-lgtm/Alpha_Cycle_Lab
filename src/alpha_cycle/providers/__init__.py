@@ -18,9 +18,9 @@ from alpha_cycle.providers.opendart import (
 )
 from alpha_cycle.providers.opendart_valuation import (
     FinancialPeriodPayload,
-    OpenDartValuationClient,
     StockTotalsBatch,
 )
+from alpha_cycle.providers.opendart_valuation_resilient import OpenDartValuationClient
 from alpha_cycle.providers.tossinvest import (
     Candle,
     CandleBatch,
