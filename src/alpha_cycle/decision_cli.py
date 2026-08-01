@@ -7,9 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from alpha_cycle.intelligence.decision import (
+from alpha_cycle.intelligence.decision import write_investment_decision_snapshot
+from alpha_cycle.intelligence.decision_resilient import (
     build_investment_decision_snapshot,
-    write_investment_decision_snapshot,
 )
 from alpha_cycle.intelligence.decision_scoring import (
     DecisionPolicy,
