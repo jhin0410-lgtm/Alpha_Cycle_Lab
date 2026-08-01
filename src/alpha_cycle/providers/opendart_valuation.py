@@ -36,6 +36,7 @@ STOCK_TOTAL_COLUMNS = (
     "issued_shares",
     "treasury_shares",
     "floating_shares",
+    "normalization_warning",
 )
 
 _MISSING_INTEGER_MARKERS = frozenset(
@@ -57,6 +58,7 @@ _MISSING_INTEGER_MARKERS = frozenset(
     }
 )
 _WHOLE_SHARE_PATTERN = re.compile(r"^\+?[0-9]+(?:\.0+)?$")
+_LEGACY_NOTE_PATTERN = re.compile(r"[가-힣]|[A-Za-z]{2,}")
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,7 @@ class StockTotalsBatch:
     frame: pd.DataFrame
     raw_payload: object
     corp: CorpCode
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -109,6 +112,31 @@ def _integer(value: object, field: str, *, optional: bool = True) -> int | None:
     if result < 0:
         raise ValueError(f"OpenDART {field} cannot be negative; value={text!r}")
     return result
+
+
+def _optional_integer_with_warning(
+    value: object,
+    field: str,
+    *,
+    ticker: str,
+    security_name: str,
+    warnings: list[str],
+) -> int | None:
+    """Quarantine narrative legacy notes from non-critical optional count fields."""
+
+    try:
+        return _integer(value, field)
+    except ValueError:
+        raw_text = "" if value is None else " ".join(str(value).strip().split())
+        if not _LEGACY_NOTE_PATTERN.search(raw_text):
+            raise
+        sanitized = raw_text[:180]
+        warning = (
+            f"{ticker}:{security_name}:{field}: non-numeric legacy note normalized to "
+            f"missing; value={sanitized!r}"
+        )
+        warnings.append(warning)
+        return None
 
 
 def _date_yyyymmdd(value: object, field: str) -> date:
@@ -202,6 +230,7 @@ class OpenDartValuationClient(OpenDartReadOnlyClient):
         if not isinstance(raw_rows, list):
             raise ValueError("OpenDART stock-total list must be an array")
         records: list[dict[str, object]] = []
+        batch_warnings: list[str] = []
         for raw_value in raw_rows:
             if not isinstance(raw_value, dict):
                 raise ValueError("OpenDART stock-total row must be an object")
@@ -222,6 +251,48 @@ class OpenDartValuationClient(OpenDartReadOnlyClient):
             security_name = str(raw.get("se", "")).strip()
             if not security_name:
                 raise ValueError("OpenDART stock-total security name is required")
+            row_warnings: list[str] = []
+            authorized_shares = _optional_integer_with_warning(
+                raw.get("isu_stock_totqy"),
+                "isu_stock_totqy",
+                ticker=corp.stock_code,
+                security_name=security_name,
+                warnings=row_warnings,
+            )
+            shares_issued_to_date = _optional_integer_with_warning(
+                raw.get("now_to_isu_stock_totqy"),
+                "now_to_isu_stock_totqy",
+                ticker=corp.stock_code,
+                security_name=security_name,
+                warnings=row_warnings,
+            )
+            shares_reduced_to_date = _optional_integer_with_warning(
+                raw.get("now_to_dcrs_stock_totqy"),
+                "now_to_dcrs_stock_totqy",
+                ticker=corp.stock_code,
+                security_name=security_name,
+                warnings=row_warnings,
+            )
+            issued_shares = _integer(
+                raw.get("istc_totqy"),
+                "istc_totqy",
+                optional=False,
+            )
+            treasury_shares = _optional_integer_with_warning(
+                raw.get("tesstk_co"),
+                "tesstk_co",
+                ticker=corp.stock_code,
+                security_name=security_name,
+                warnings=row_warnings,
+            )
+            floating_shares = _optional_integer_with_warning(
+                raw.get("distb_stock_co"),
+                "distb_stock_co",
+                ticker=corp.stock_code,
+                security_name=security_name,
+                warnings=row_warnings,
+            )
+            batch_warnings.extend(row_warnings)
             records.append(
                 {
                     "ticker": corp.stock_code,
@@ -234,24 +305,13 @@ class OpenDartValuationClient(OpenDartReadOnlyClient):
                     "receipt_no": receipt_no,
                     "security_name": security_name,
                     "security_class": _security_class(security_name),
-                    "authorized_shares": _integer(
-                        raw.get("isu_stock_totqy"),
-                        "isu_stock_totqy",
-                    ),
-                    "shares_issued_to_date": _integer(
-                        raw.get("now_to_isu_stock_totqy"),
-                        "now_to_isu_stock_totqy",
-                    ),
-                    "shares_reduced_to_date": _integer(
-                        raw.get("now_to_dcrs_stock_totqy"),
-                        "now_to_dcrs_stock_totqy",
-                    ),
-                    "issued_shares": _integer(raw.get("istc_totqy"), "istc_totqy"),
-                    "treasury_shares": _integer(raw.get("tesstk_co"), "tesstk_co"),
-                    "floating_shares": _integer(
-                        raw.get("distb_stock_co"),
-                        "distb_stock_co",
-                    ),
+                    "authorized_shares": authorized_shares,
+                    "shares_issued_to_date": shares_issued_to_date,
+                    "shares_reduced_to_date": shares_reduced_to_date,
+                    "issued_shares": issued_shares,
+                    "treasury_shares": treasury_shares,
+                    "floating_shares": floating_shares,
+                    "normalization_warning": " | ".join(row_warnings) or None,
                 }
             )
         frame = pd.DataFrame(records, columns=STOCK_TOTAL_COLUMNS)
@@ -259,13 +319,16 @@ class OpenDartValuationClient(OpenDartReadOnlyClient):
             raise ValueError("OpenDART stock-total response contains no rows")
         if frame.duplicated(["security_class", "security_name"]).any():
             raise ValueError("OpenDART stock-total response contains duplicate security rows")
+        diagnostic_payload = dict(payload)
+        diagnostic_payload["_normalization_warnings"] = list(batch_warnings)
         return StockTotalsBatch(
             frame.sort_values(
                 ["security_class", "security_name"],
                 kind="stable",
             ).reset_index(drop=True),
-            dict(payload),
+            diagnostic_payload,
             corp,
+            tuple(batch_warnings),
         )
 
     def latest_stock_totals(
@@ -299,6 +362,7 @@ class OpenDartValuationClient(OpenDartReadOnlyClient):
                     visible.reset_index(drop=True),
                     {"selected": batch.raw_payload, "attempts": attempts},
                     corp,
+                    batch.warnings,
                 )
         raise ValueError(
             f"No OpenDART stock totals were available by {evaluation_date} "
