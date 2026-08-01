@@ -80,7 +80,12 @@ class OpenDartValuationClient(_BaseOpenDartValuationClient):
                 continue
             security_name = str(row.get("se", "")).strip()
             security_class = _security_class(security_name)
-            if security_class == "total" and valid_economic_counts and not unresolved_economic_names:
+            can_derive_total = (
+                security_class == "total"
+                and bool(valid_economic_counts)
+                and not unresolved_economic_names
+            )
+            if can_derive_total:
                 replacement = sum(valid_economic_counts)
                 source = "derived_validated_economic_class_sum"
             elif security_class == "note":
