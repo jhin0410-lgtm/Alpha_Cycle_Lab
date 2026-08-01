@@ -6,8 +6,6 @@ import json
 from collections.abc import Mapping
 from datetime import date
 
-import pytest
-
 from alpha_cycle.providers import OpenDartValuationClient
 from alpha_cycle.providers.opendart import CorpCode, OpenDartCredentials
 from alpha_cycle.providers.read_only_http import HttpBytesResponse
@@ -92,10 +90,19 @@ def test_empty_note_row_is_excluded_with_zero_schema_value() -> None:
     assert "non_economic_note_row_zero" in str(note["normalization_warning"])
 
 
-def test_economic_share_class_still_requires_issued_shares() -> None:
-    with pytest.raises(ValueError, match="istc_totqy is required"):
-        _client([_row("보통주", "")]).stock_totals(
-            CORP,
-            business_year=2026,
-            report_code="11013",
-        )
+def test_empty_economic_share_class_is_quarantined_for_valuation_guard() -> None:
+    batch = _client([_row("보통주", "")]).stock_totals(
+        CORP,
+        business_year=2026,
+        report_code="11013",
+    )
+
+    common = batch.frame.iloc[0]
+    assert common["issued_shares"] == 0
+    assert "unresolved_missing_economic_share_count" in str(
+        common["normalization_warning"]
+    )
+    assert any(
+        "unresolved_missing_economic_share_count" in warning
+        for warning in batch.warnings
+    )
