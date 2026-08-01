@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
@@ -29,6 +30,30 @@ _CLEARED_METRICS = (
     "fcf_yield",
     "earnings_yield",
     "valuation_score",
+)
+_METRIC_COLUMNS = (
+    "ticker",
+    "share_period_end",
+    "share_available_date",
+    "priced_security_classes",
+    "required_security_classes",
+    "market_cap_complete",
+    "share_count_complete",
+    "missing_security_names",
+    "market_cap_proxy",
+    "market_cap",
+    "annual_reference_year",
+    "annual_revenue",
+    "annual_net_income",
+    "annual_equity",
+    "annual_free_cash_flow",
+    "pe",
+    "pb",
+    "ps",
+    "fcf_yield",
+    "earnings_yield",
+    "valuation_score",
+    "valuation_status",
 )
 
 
@@ -96,6 +121,120 @@ def _append_unresolved_security_rows(
     ).reset_index(drop=True)
 
 
+def _latest_annual_reference(
+    financial_history: pd.DataFrame,
+    ticker: str,
+) -> Mapping[str, object] | None:
+    if financial_history.empty or "ticker" not in financial_history.columns:
+        return None
+    annual = financial_history.loc[
+        financial_history["ticker"].astype(str).eq(ticker)
+        & financial_history["period_label"].astype(str).eq("FY")
+    ].sort_values("period_end", kind="stable")
+    if annual.empty:
+        return None
+    return cast(Mapping[str, object], annual.iloc[-1].to_dict())
+
+
+def _number(value: object) -> float | None:
+    converted = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    return None if pd.isna(converted) else float(converted)
+
+
+def _partial_market_cap_proxy(
+    security_values: pd.DataFrame,
+    ticker: str,
+) -> tuple[float | None, int, int]:
+    if security_values.empty or "ticker" not in security_values.columns:
+        return None, 0, 0
+    company = security_values.loc[security_values["ticker"].astype(str).eq(ticker)]
+    if company.empty:
+        return None, 0, 0
+    priced = company.loc[company["priced"].fillna(False).astype(bool)]
+    values = pd.to_numeric(priced["security_market_value"], errors="coerce").dropna()
+    proxy = float(values.sum()) if not values.empty else None
+    return proxy, len(priced), len(company)
+
+
+def _placeholder_metric_row(
+    ticker: str,
+    group: pd.DataFrame,
+    security_values: pd.DataFrame,
+    financial_history: pd.DataFrame,
+    names: list[str],
+    columns: list[str],
+) -> dict[str, object]:
+    row: dict[str, object] = {column: None for column in columns}
+    annual = _latest_annual_reference(financial_history, ticker)
+    proxy, priced_count, required_count = _partial_market_cap_proxy(
+        security_values,
+        ticker,
+    )
+    row.update(
+        {
+            "ticker": ticker,
+            "share_period_end": group["period_end"].max(),
+            "share_available_date": group["available_date"].max(),
+            "priced_security_classes": priced_count,
+            "required_security_classes": required_count,
+            "market_cap_complete": False,
+            "share_count_complete": False,
+            "missing_security_names": json.dumps(names, ensure_ascii=False),
+            "market_cap_proxy": proxy,
+            "market_cap": None,
+            "annual_reference_year": (
+                int(str(annual["business_year"])) if annual is not None else None
+            ),
+            "annual_revenue": _number(annual.get("revenue")) if annual else None,
+            "annual_net_income": _number(annual.get("net_income")) if annual else None,
+            "annual_equity": _number(annual.get("equity")) if annual else None,
+            "annual_free_cash_flow": (
+                _number(annual.get("free_cash_flow_ytd")) if annual else None
+            ),
+            "pe": None,
+            "pb": None,
+            "ps": None,
+            "fcf_yield": None,
+            "earnings_yield": None,
+            "valuation_score": None,
+            "valuation_status": "incomplete_share_count",
+        }
+    )
+    return row
+
+
+def _ensure_unresolved_metric_rows(
+    metrics: pd.DataFrame,
+    unresolved: pd.DataFrame,
+    security_values: pd.DataFrame,
+    financial_history: pd.DataFrame,
+) -> pd.DataFrame:
+    result = metrics.copy()
+    for column in _METRIC_COLUMNS:
+        if column not in result.columns:
+            result[column] = None
+    existing = set(result["ticker"].astype(str))
+    additions: list[dict[str, object]] = []
+    for ticker_value, group in unresolved.groupby("ticker", sort=False):
+        ticker = str(ticker_value)
+        if ticker in existing:
+            continue
+        names = sorted(set(group["security_name"].astype(str)))
+        additions.append(
+            _placeholder_metric_row(
+                ticker,
+                group,
+                security_values,
+                financial_history,
+                names,
+                list(result.columns),
+            )
+        )
+    if additions:
+        result = pd.concat([result, pd.DataFrame(additions)], ignore_index=True, sort=False)
+    return result.sort_values("ticker", kind="stable").reset_index(drop=True)
+
+
 def apply_unresolved_share_count_guard(
     snapshot: ValuationEvidenceSnapshot,
 ) -> ValuationEvidenceSnapshot:
@@ -106,8 +245,13 @@ def apply_unresolved_share_count_guard(
         snapshot.security_values,
         unresolved,
     )
-    metrics = snapshot.valuation_metrics.copy()
-    metrics["share_count_complete"] = True
+    metrics = _ensure_unresolved_metric_rows(
+        snapshot.valuation_metrics,
+        unresolved,
+        security_values,
+        snapshot.financial_history,
+    )
+    metrics["share_count_complete"] = metrics["share_count_complete"].fillna(True)
     if unresolved.empty:
         return replace(snapshot, security_values=security_values, valuation_metrics=metrics)
 
@@ -116,8 +260,6 @@ def apply_unresolved_share_count_guard(
         ticker = str(ticker_value)
         names = sorted(set(group["security_name"].astype(str)))
         metric_mask = metrics["ticker"].astype(str).eq(ticker)
-        if not metric_mask.any():
-            continue
         current_missing: set[str] = set()
         for value in metrics.loc[metric_mask, "missing_security_names"]:
             current_missing.update(_missing_names(value))
