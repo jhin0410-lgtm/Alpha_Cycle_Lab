@@ -90,8 +90,52 @@ def test_empty_note_row_is_excluded_with_zero_schema_value() -> None:
     assert "non_economic_note_row_zero" in str(note["normalization_warning"])
 
 
-def test_empty_economic_share_class_is_quarantined_for_valuation_guard() -> None:
+def test_empty_economic_share_class_is_recovered_from_cross_checked_identity() -> None:
     batch = _client([_row("보통주", "")]).stock_totals(
+        CORP,
+        business_year=2026,
+        report_code="11013",
+    )
+
+    common = batch.frame.iloc[0]
+    assert common["issued_shares"] == 5969
+    assert "derived_cross_checked_share_identity" in str(
+        common["normalization_warning"]
+    )
+    assert not any(
+        "unresolved_missing_economic_share_count" in warning
+        for warning in batch.warnings
+    )
+
+
+def test_empty_zero_preferred_class_is_recovered_without_false_incompleteness() -> None:
+    preferred = _row("우선주", "")
+    preferred.update(
+        {
+            "now_to_isu_stock_totqy": "0",
+            "now_to_dcrs_stock_totqy": "0",
+            "tesstk_co": "0",
+            "distb_stock_co": "0",
+        }
+    )
+    batch = _client([preferred]).stock_totals(
+        CORP,
+        business_year=2026,
+        report_code="11013",
+    )
+
+    row = batch.frame.iloc[0]
+    assert row["issued_shares"] == 0
+    assert "derived_cross_checked_share_identity" in str(row["normalization_warning"])
+    assert "unresolved_missing_economic_share_count" not in str(
+        row["normalization_warning"]
+    )
+
+
+def test_conflicting_share_identities_remain_quarantined() -> None:
+    conflicting = _row("보통주", "")
+    conflicting["distb_stock_co"] = "5,800"
+    batch = _client([conflicting]).stock_totals(
         CORP,
         business_year=2026,
         report_code="11013",
@@ -101,8 +145,4 @@ def test_empty_economic_share_class_is_quarantined_for_valuation_guard() -> None
     assert common["issued_shares"] == 0
     assert "unresolved_missing_economic_share_count" in str(
         common["normalization_warning"]
-    )
-    assert any(
-        "unresolved_missing_economic_share_count" in warning
-        for warning in batch.warnings
     )

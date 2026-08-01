@@ -27,19 +27,77 @@ def _whole_share_or_none(value: object) -> int | None:
         return None
 
 
+def _derived_economic_share_count(
+    row: Mapping[str, object],
+) -> tuple[int, str] | None:
+    """Recover issued shares only when official share identities are consistent."""
+
+    candidates: list[tuple[str, int]] = []
+    issued_to_date = _whole_share_or_none(row.get("now_to_isu_stock_totqy"))
+    reduced_to_date = _whole_share_or_none(row.get("now_to_dcrs_stock_totqy"))
+    if (
+        issued_to_date is not None
+        and reduced_to_date is not None
+        and issued_to_date >= reduced_to_date
+    ):
+        candidates.append(
+            ("derived_issued_minus_reduced", issued_to_date - reduced_to_date)
+        )
+
+    treasury_shares = _whole_share_or_none(row.get("tesstk_co"))
+    floating_shares = _whole_share_or_none(row.get("distb_stock_co"))
+    if treasury_shares is not None and floating_shares is not None:
+        candidates.append(
+            ("derived_treasury_plus_floating", treasury_shares + floating_shares)
+        )
+
+    if not candidates:
+        return None
+    values = {value for _, value in candidates}
+    if len(values) != 1:
+        return None
+    value = values.pop()
+    source = (
+        "derived_cross_checked_share_identity"
+        if len(candidates) > 1
+        else candidates[0][0]
+    )
+    return value, source
+
+
+def _set_repaired_issued_count(
+    row: dict[str, object],
+    *,
+    security_name: str,
+    replacement: int,
+    source: str,
+) -> None:
+    original = row.get("istc_totqy")
+    row["_alpha_cycle_original_istc_totqy"] = original
+    row["_alpha_cycle_istc_totqy_source"] = source
+    if source.startswith("derived_"):
+        warning = (
+            f"{security_name or '<blank>'}: istc_totqy could not be parsed; "
+            f"validated as {replacement} via {source}"
+        )
+    else:
+        warning = (
+            f"{security_name or '<blank>'}: istc_totqy could not be validated; "
+            f"schema value set to zero via {source}"
+        )
+    row["_alpha_cycle_istc_totqy_warning"] = warning
+    row["istc_totqy"] = str(replacement)
+
+
 class OpenDartValuationClient(_BaseOpenDartValuationClient):
     """Preserve ambiguous share rows without manufacturing usable share counts.
 
     OpenDART historical ``stockTotqySttus`` payloads can contain blank or narrative
-    ``istc_totqy`` values on labels that are not consistently named ``합계`` or ``비고``.
-    The base parser requires a whole-share integer for every row, so those provider
-    anomalies previously aborted the entire live pipeline before the valuation layer
-    could decide whether the row was actually price-relevant.
-
-    This boundary replaces an unparseable row with a schema-safe zero only so the raw
-    evidence can travel through the pipeline. The original value and an explicit source
-    marker are preserved. A later valuation guard treats any unresolved economic row as
-    incomplete evidence and clears market capitalization and valuation multiples.
+    ``istc_totqy`` values. For an economic security row, the official schema also
+    exposes two independent identities: issued-to-date minus reduced-to-date, and
+    treasury shares plus floating shares. A missing issued-share count is recovered
+    only when the available identities agree. Conflicting or insufficient evidence
+    remains explicitly unresolved and is failed closed by the valuation guard.
     """
 
     def _json_get(
@@ -57,29 +115,45 @@ class OpenDartValuationClient(_BaseOpenDartValuationClient):
             return payload
 
         rows: list[dict[str, object]] = []
-        valid_economic_counts: list[int] = []
-        unresolved_economic_names: list[str] = []
         for raw_value in raw_rows:
             if not isinstance(raw_value, dict):
                 return payload
-            row = {str(key): value for key, value in raw_value.items()}
-            rows.append(row)
+            rows.append({str(key): value for key, value in raw_value.items()})
+
+        changed = False
+        valid_economic_counts: list[int] = []
+        unresolved_economic_names: list[str] = []
+        for row in rows:
             security_name = str(row.get("se", "")).strip()
             security_class = _security_class(security_name)
             if security_class not in _ECONOMIC_SECURITY_CLASSES:
                 continue
             count = _whole_share_or_none(row.get("istc_totqy"))
             if count is None:
-                unresolved_economic_names.append(security_name or "<blank>")
-            else:
-                valid_economic_counts.append(count)
+                derived = _derived_economic_share_count(row)
+                if derived is None:
+                    replacement = 0
+                    source = _UNRESOLVED_ECONOMIC_SOURCE
+                    unresolved_economic_names.append(security_name or "<blank>")
+                else:
+                    replacement, source = derived
+                _set_repaired_issued_count(
+                    row,
+                    security_name=security_name,
+                    replacement=replacement,
+                    source=source,
+                )
+                count = replacement
+                changed = True
+            valid_economic_counts.append(count)
 
-        changed = False
         for row in rows:
             if _whole_share_or_none(row.get("istc_totqy")) is not None:
                 continue
             security_name = str(row.get("se", "")).strip()
             security_class = _security_class(security_name)
+            if security_class in _ECONOMIC_SECURITY_CLASSES:
+                continue
             can_derive_total = (
                 security_class == "total"
                 and bool(valid_economic_counts)
@@ -97,14 +171,12 @@ class OpenDartValuationClient(_BaseOpenDartValuationClient):
             else:
                 replacement = 0
                 source = _UNRESOLVED_ECONOMIC_SOURCE
-            original = row.get("istc_totqy")
-            row["_alpha_cycle_original_istc_totqy"] = original
-            row["_alpha_cycle_istc_totqy_source"] = source
-            row["_alpha_cycle_istc_totqy_warning"] = (
-                f"{security_name or '<blank>'}: istc_totqy could not be validated; "
-                f"schema value set to zero via {source}"
+            _set_repaired_issued_count(
+                row,
+                security_name=security_name,
+                replacement=replacement,
+                source=source,
             )
-            row["istc_totqy"] = str(replacement)
             changed = True
 
         if not changed:
