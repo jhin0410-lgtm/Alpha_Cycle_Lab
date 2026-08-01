@@ -195,6 +195,29 @@ def _load_market_csv(path: Path) -> pd.DataFrame:
     return frame
 
 
+def _filter_market_inputs(
+    candles: pd.DataFrame,
+    technical: pd.DataFrame,
+    decision_tickers: set[str],
+    *,
+    benchmark: str | None,
+) -> tuple[pd.DataFrame, pd.DataFrame, tuple[str, ...]]:
+    required = set(decision_tickers)
+    if benchmark is not None:
+        required.add(benchmark)
+    available = set(candles["symbol"].astype(str))
+    missing = sorted(required - available)
+    if missing:
+        raise ValueError(
+            "Market snapshot is missing required decision symbols: "
+            f"{','.join(missing)}"
+        )
+    extras = tuple(sorted(available - required))
+    filtered_candles = candles.loc[candles["symbol"].isin(required)].copy()
+    filtered_technical = technical.loc[technical["symbol"].isin(required)].copy()
+    return filtered_candles, filtered_technical, extras
+
+
 def _validate_ticker_sets(financial_kpis: pd.DataFrame, market_context: pd.DataFrame) -> None:
     financial = set(_ticker_codes(financial_kpis["ticker"]).astype(str))
     market = set(_ticker_codes(market_context["ticker"]).astype(str))
@@ -274,6 +297,7 @@ def build_investment_decision_snapshot(
         raw_opendart
     )
     financial_kpis["ticker"] = _ticker_codes(financial_kpis["ticker"])
+    decision_tickers = set(financial_kpis["ticker"].astype(str))
     if not financial_mapping.empty:
         financial_mapping["ticker"] = _ticker_codes(financial_mapping["ticker"])
 
@@ -288,12 +312,21 @@ def build_investment_decision_snapshot(
 
     macro = pd.read_csv(research_dir / "macro.csv", dtype={"series_id": "string"})
     macro_regime = build_macro_regime(macro)
-    market_context = build_market_context(
+    candles, technical, extra_market_symbols = _filter_market_inputs(
         _load_market_csv(market_dir / "candles.csv"),
         _load_market_csv(market_dir / "technical_features.csv"),
+        decision_tickers,
         benchmark=benchmark,
     )
-    market_context["ticker"] = _ticker_codes(market_context["ticker"])
+    full_market_context = build_market_context(
+        candles,
+        technical,
+        benchmark=benchmark,
+    )
+    full_market_context["ticker"] = _ticker_codes(full_market_context["ticker"])
+    market_context = full_market_context.loc[
+        full_market_context["ticker"].isin(decision_tickers)
+    ].copy()
     _validate_ticker_sets(financial_kpis, market_context)
 
     exposure_map = dict(exposures or {})
@@ -350,6 +383,11 @@ def build_investment_decision_snapshot(
         raise ValueError("Decision records are missing reference prices")
 
     warnings = [*financial_warnings]
+    if extra_market_symbols:
+        warnings.append(
+            "market_snapshot_auxiliary_symbols_excluded_from_decision_context:"
+            + ",".join(extra_market_symbols)
+        )
     if valuation_id is None:
         warnings.append("valuation_and_consensus_not_available")
     else:
