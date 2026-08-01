@@ -1,4 +1,4 @@
-"""Resilient OpenDART share-count boundary for non-economic aggregate rows."""
+"""Resilient OpenDART share-count boundary for ambiguous non-priced rows."""
 
 from __future__ import annotations
 
@@ -17,17 +17,29 @@ from alpha_cycle.providers.opendart_valuation import (
 
 _STOCK_TOTAL_PATH = "/api/stockTotqySttus.json"
 _ECONOMIC_SECURITY_CLASSES = frozenset({"common", "preferred", "other"})
-_NON_ECONOMIC_SECURITY_CLASSES = frozenset({"total", "note"})
+_UNRESOLVED_ECONOMIC_SOURCE = "unresolved_missing_economic_share_count"
+
+
+def _whole_share_or_none(value: object) -> int | None:
+    try:
+        return _integer(value, "istc_totqy", optional=False)
+    except ValueError:
+        return None
 
 
 class OpenDartValuationClient(_BaseOpenDartValuationClient):
-    """Keep economic share classes strict while repairing empty aggregate rows.
+    """Preserve ambiguous share rows without manufacturing usable share counts.
 
-    Some historical OpenDART responses contain a blank ``istc_totqy`` on a ``합계``
-    or ``비고`` row even though common/preferred rows are complete. The aggregate row
-    is not priced directly. A blank total is therefore derived from validated economic
-    rows, while a note row is normalized to zero and remains excluded from valuation.
-    Original values and derivation metadata stay in the raw payload.
+    OpenDART historical ``stockTotqySttus`` payloads can contain blank or narrative
+    ``istc_totqy`` values on labels that are not consistently named ``합계`` or ``비고``.
+    The base parser requires a whole-share integer for every row, so those provider
+    anomalies previously aborted the entire live pipeline before the valuation layer
+    could decide whether the row was actually price-relevant.
+
+    This boundary replaces an unparseable row with a schema-safe zero only so the raw
+    evidence can travel through the pipeline. The original value and an explicit source
+    marker are preserved. A later valuation guard treats any unresolved economic row as
+    incomplete evidence and clears market capitalization and valuation multiples.
     """
 
     def _json_get(
@@ -45,49 +57,47 @@ class OpenDartValuationClient(_BaseOpenDartValuationClient):
             return payload
 
         rows: list[dict[str, object]] = []
-        economic_counts: list[int] = []
+        valid_economic_counts: list[int] = []
+        unresolved_economic_names: list[str] = []
         for raw_value in raw_rows:
             if not isinstance(raw_value, dict):
                 return payload
             row = {str(key): value for key, value in raw_value.items()}
             rows.append(row)
-            security_class = _security_class(row.get("se", ""))
-            if security_class not in _ECONOMIC_SECURITY_CLASSES:
-                continue
-            count = _integer(row.get("istc_totqy"), "istc_totqy", optional=False)
-            if count is None:
-                raise ValueError("OpenDART economic istc_totqy cannot be missing")
-            economic_counts.append(count)
-
-        economic_total = sum(economic_counts) if economic_counts else None
-        changed = False
-        for row in rows:
             security_name = str(row.get("se", "")).strip()
             security_class = _security_class(security_name)
-            if security_class not in _NON_ECONOMIC_SECURITY_CLASSES:
+            if security_class not in _ECONOMIC_SECURITY_CLASSES:
                 continue
-            try:
-                _integer(row.get("istc_totqy"), "istc_totqy", optional=False)
-                continue
-            except ValueError:
-                pass
-            if security_class == "total":
-                if economic_total is None:
-                    raise ValueError(
-                        "OpenDART aggregate istc_totqy is missing and no validated "
-                        "economic share classes are available"
-                    )
-                replacement = economic_total
-                source = "derived_validated_economic_class_sum"
+            count = _whole_share_or_none(row.get("istc_totqy"))
+            if count is None:
+                unresolved_economic_names.append(security_name or "<blank>")
             else:
+                valid_economic_counts.append(count)
+
+        changed = False
+        for row in rows:
+            if _whole_share_or_none(row.get("istc_totqy")) is not None:
+                continue
+            security_name = str(row.get("se", "")).strip()
+            security_class = _security_class(security_name)
+            if security_class == "total" and valid_economic_counts and not unresolved_economic_names:
+                replacement = sum(valid_economic_counts)
+                source = "derived_validated_economic_class_sum"
+            elif security_class == "note":
                 replacement = 0
                 source = "non_economic_note_row_zero"
+            elif security_class == "total":
+                replacement = 0
+                source = "unresolved_aggregate_share_count"
+            else:
+                replacement = 0
+                source = _UNRESOLVED_ECONOMIC_SOURCE
             original = row.get("istc_totqy")
             row["_alpha_cycle_original_istc_totqy"] = original
             row["_alpha_cycle_istc_totqy_source"] = source
             row["_alpha_cycle_istc_totqy_warning"] = (
-                f"{security_name}: istc_totqy missing on {security_class} row; "
-                f"normalized via {source}"
+                f"{security_name or '<blank>'}: istc_totqy could not be validated; "
+                f"schema value set to zero via {source}"
             )
             row["istc_totqy"] = str(replacement)
             changed = True
