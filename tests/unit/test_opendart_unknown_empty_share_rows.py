@@ -54,12 +54,21 @@ def _row(name: str, issued: object) -> dict[str, object]:
 
 
 def test_unknown_empty_row_is_quarantined_instead_of_aborting() -> None:
+    unresolved_other = _row("기타", "")
+    unresolved_other.update(
+        {
+            "now_to_isu_stock_totqy": "",
+            "now_to_dcrs_stock_totqy": "",
+            "tesstk_co": "",
+            "distb_stock_co": "",
+        }
+    )
     client = OpenDartValuationClient(
         OpenDartCredentials("secret"),
         transport=FakeTransport(
             [
                 _row("보통주", "5,969"),
-                _row("기타", ""),
+                unresolved_other,
                 _row("합계", ""),
             ]
         ),
