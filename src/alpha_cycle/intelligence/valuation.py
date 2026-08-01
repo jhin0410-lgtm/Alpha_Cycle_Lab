@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -21,10 +21,7 @@ import yaml
 
 from alpha_cycle.intelligence.decision_scoring import COMPONENT_WEIGHTS, DecisionPolicy
 from alpha_cycle.providers.opendart import CorpCode, normalize_listed_stock_code
-from alpha_cycle.providers.opendart_valuation import (
-    FinancialPeriodPayload,
-    OpenDartValuationClient,
-)
+from alpha_cycle.providers.opendart_valuation import FinancialPeriodPayload, StockTotalsBatch
 
 VALUATION_SCHEMA_VERSION = 1
 KOREA_TZ = ZoneInfo("Asia/Seoul")
@@ -35,6 +32,24 @@ PERIOD_LABELS = {
     "11011": "FY",
 }
 PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 5}
+
+
+class ValuationDataClient(Protocol):
+    def latest_stock_totals(
+        self,
+        corp: CorpCode,
+        *,
+        evaluation_date: date,
+    ) -> StockTotalsBatch: ...
+
+    def financial_history_payloads(
+        self,
+        corp: CorpCode,
+        *,
+        evaluation_date: date,
+        history_years: int,
+        fs_div: str = "CFS",
+    ) -> tuple[FinancialPeriodPayload, ...]: ...
 
 
 @dataclass(frozen=True)
@@ -189,8 +204,8 @@ def _json_value(value: object) -> object:
 
 def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
     return [
-        {str(key): _json_value(value) for key, value in row.items()}
-        for row in frame.to_dict(orient="records")
+        {str(key): _json_value(value) for key, value in raw.items()}
+        for raw in frame.to_dict(orient="records")
     ]
 
 
@@ -248,11 +263,26 @@ def _amount(value: object) -> float | None:
     return result if math.isfinite(result) else None
 
 
+def _number(value: object) -> float | None:
+    if value is None or value is pd.NA or value is pd.NaT:
+        return None
+    if isinstance(value, np.generic):
+        value = value.item()
+    if not isinstance(value, (int, float)):
+        return None
+    result = float(value)
+    return result if math.isfinite(result) else None
+
+
+def _first_not_none(primary: float | None, fallback: float | None) -> float | None:
+    return primary if primary is not None else fallback
+
+
 def _ratio(numerator: float | None, denominator: float | None) -> float | None:
     if numerator is None or denominator is None or denominator == 0:
         return None
-    value = numerator / denominator
-    return value if math.isfinite(value) else None
+    result = numerator / denominator
+    return result if math.isfinite(result) else None
 
 
 def _growth(current: float | None, prior: float | None) -> float | None:
@@ -265,7 +295,7 @@ def _as_rows(payload: Mapping[str, object]) -> list[Mapping[str, object]]:
     raw_rows = payload.get("list", [])
     if not isinstance(raw_rows, list):
         raise ValueError("OpenDART financial list must be an array")
-    rows = [cast(Mapping[str, object], value) for value in raw_rows if isinstance(value, dict)]
+    rows = [cast(Mapping[str, object], row) for row in raw_rows if isinstance(row, dict)]
     if len(rows) != len(raw_rows):
         raise ValueError("OpenDART financial rows must be objects")
     return rows
@@ -286,8 +316,7 @@ def _candidate_score(raw: Mapping[str, object], spec: MetricSpec) -> int:
             score = max(score, 60)
     if score == 0:
         return 0
-    detail = str(raw.get("account_detail", "")).strip()
-    if detail in {"", "-"}:
+    if str(raw.get("account_detail", "")).strip() in {"", "-"}:
         score += 5
     order = str(raw.get("ord", "")).strip()
     if order.isdigit():
@@ -299,14 +328,17 @@ def _select_metric(
     rows: Sequence[Mapping[str, object]],
     spec: MetricSpec,
 ) -> Mapping[str, object] | None:
-    candidates = [(raw, _candidate_score(raw, spec)) for raw in rows]
-    candidates = [(raw, score) for raw, score in candidates if score > 0]
+    candidates = [
+        (raw, score)
+        for raw in rows
+        if (score := _candidate_score(raw, spec)) > 0
+    ]
     if not candidates:
         return None
     candidates.sort(
         key=lambda item: (
             item[1],
-            str(item[0].get("account_detail", "")) in {"", "-"},
+            str(item[0].get("account_detail", "")).strip() in {"", "-"},
             str(item[0].get("account_id", "")),
         ),
         reverse=True,
@@ -341,7 +373,10 @@ def _extract_period(period: FinancialPeriodPayload) -> dict[str, object]:
                 current_ytd = (
                     current
                     if period.report_code == "11011"
-                    else _amount(selected.get("thstrm_add_amount")) or current
+                    else _first_not_none(
+                        _amount(selected.get("thstrm_add_amount")),
+                        current,
+                    )
                 )
                 prior_same = (
                     _amount(selected.get("frmtrm_amount"))
@@ -351,7 +386,10 @@ def _extract_period(period: FinancialPeriodPayload) -> dict[str, object]:
                 prior_ytd = (
                     prior_same
                     if period.report_code == "11011"
-                    else _amount(selected.get("frmtrm_add_amount")) or prior_same
+                    else _first_not_none(
+                        _amount(selected.get("frmtrm_add_amount")),
+                        prior_same,
+                    )
                 )
             elif spec.kind == "stock":
                 current = _amount(selected.get("thstrm_amount"))
@@ -369,17 +407,21 @@ def _extract_period(period: FinancialPeriodPayload) -> dict[str, object]:
 
 def _derive_q4(history: pd.DataFrame) -> pd.DataFrame:
     derived: list[dict[str, object]] = []
-    for (ticker, year), group in history.groupby(["ticker", "business_year"], sort=False):
-        by_label = {str(row["period_label"]): row for _, row in group.iterrows()}
-        if "FY" not in by_label or "Q3" not in by_label:
+    for keys, group in history.groupby(["ticker", "business_year"], sort=False):
+        ticker, year = cast(tuple[object, object], keys)
+        records = {
+            str(raw["period_label"]): cast(Mapping[str, object], raw)
+            for raw in group.to_dict(orient="records")
+        }
+        fiscal = records.get("FY")
+        q3 = records.get("Q3")
+        if fiscal is None or q3 is None:
             continue
-        fiscal = by_label["FY"]
-        q3 = by_label["Q3"]
-        record = fiscal.to_dict()
+        record = dict(fiscal)
         record.update(
             {
-                "ticker": ticker,
-                "business_year": int(year),
+                "ticker": str(ticker),
+                "business_year": int(str(year)),
                 "report_code": "DERIVED_Q4",
                 "period_label": "Q4",
                 "period_order": PERIOD_ORDER["Q4"],
@@ -416,24 +458,12 @@ def _derive_q4(history: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([history, pd.DataFrame(derived)], ignore_index=True, sort=False)
 
 
-def _number(value: object) -> float | None:
-    if value is None or value is pd.NA or value is pd.NaT:
-        return None
-    if isinstance(value, np.generic):
-        value = value.item()
-    if not isinstance(value, (int, float)):
-        return None
-    result = float(value)
-    return result if math.isfinite(result) else None
-
-
 def build_financial_history(
     periods: Sequence[FinancialPeriodPayload],
 ) -> pd.DataFrame:
     if not periods:
         raise ValueError("At least one OpenDART financial period is required")
-    history = pd.DataFrame([_extract_period(period) for period in periods])
-    history = _derive_q4(history)
+    history = _derive_q4(pd.DataFrame([_extract_period(period) for period in periods]))
     for metric in ("revenue", "operating_income", "net_income"):
         history[f"{metric}_yoy"] = [
             _growth(_number(current), _number(prior))
@@ -444,14 +474,16 @@ def build_financial_history(
             )
         ]
     history["operating_margin"] = [
-        _ratio(_number(op), _number(revenue))
-        for op, revenue in zip(
-            history["operating_income"], history["revenue"], strict=True
+        _ratio(_number(operating), _number(revenue))
+        for operating, revenue in zip(
+            history["operating_income"],
+            history["revenue"],
+            strict=True,
         )
     ]
     history["operating_margin_prior"] = [
-        _ratio(_number(op), _number(revenue))
-        for op, revenue in zip(
+        _ratio(_number(operating), _number(revenue))
+        for operating, revenue in zip(
             history["operating_income_prior_same"],
             history["revenue_prior_same"],
             strict=True,
@@ -468,18 +500,23 @@ def build_financial_history(
         )
     ]
     history["free_cash_flow_ytd"] = [
-        ocf - abs(capex) if ocf is not None and capex is not None else None
-        for ocf, capex in zip(
-            history["operating_cash_flow_ytd"], history["capex_ytd"], strict=True
+        operating - abs(capex)
+        if operating is not None and capex is not None
+        else None
+        for operating, capex in zip(
+            history["operating_cash_flow_ytd"],
+            history["capex_ytd"],
+            strict=True,
         )
     ]
     history = history.sort_values(
-        ["ticker", "period_end", "period_order"], kind="stable"
+        ["ticker", "period_end", "period_order"],
+        kind="stable",
     ).reset_index(drop=True)
+    quarterly = history["period_label"].isin(["Q1", "Q2", "Q3", "Q4"])
     for metric in ("revenue_yoy", "operating_income_yoy", "net_income_yoy"):
         acceleration = pd.Series(np.nan, index=history.index, dtype="float64")
-        quarter_mask = history["period_label"].isin(["Q1", "Q2", "Q3", "Q4"])
-        for _, group in history.loc[quarter_mask].groupby("ticker", sort=False):
+        for _, group in history.loc[quarterly].groupby("ticker", sort=False):
             values = pd.to_numeric(group[metric], errors="coerce")
             acceleration.loc[group.index] = values.diff()
         history[f"{metric}_acceleration"] = acceleration
@@ -501,16 +538,19 @@ def load_security_mappings(
         ticker = _ticker(raw_ticker)
         if not isinstance(raw_company, dict):
             raise ValueError(f"Security mapping entry must be an object: {ticker}")
-        securities = raw_company.get("securities")
-        if not isinstance(securities, dict):
+        raw_securities = raw_company.get("securities")
+        if not isinstance(raw_securities, dict):
             raise ValueError(f"Security mapping requires securities: {ticker}")
-        mapping: dict[str, str] = {}
-        for raw_name, raw_symbol in cast(Mapping[object, object], securities).items():
+        securities: dict[str, str] = {}
+        for raw_name, raw_symbol in cast(Mapping[object, object], raw_securities).items():
             name = str(raw_name).strip()
             if not name:
                 raise ValueError(f"Security name cannot be blank: {ticker}")
-            mapping[name] = _ticker(raw_symbol)
-        result[ticker] = CompanySecurityMapping(mapping)
+            symbol = _ticker(raw_symbol)
+            if symbol in securities.values():
+                raise ValueError(f"Security mapping repeats a symbol for {ticker}: {symbol}")
+            securities[name] = symbol
+        result[ticker] = CompanySecurityMapping(securities)
     return result
 
 
@@ -523,9 +563,13 @@ def _corp_records(raw_opendart: Mapping[str, object]) -> dict[str, CorpCode]:
             raise ValueError(f"Research raw OpenDART corp metadata is missing: {raw_ticker}")
         corp = cast(Mapping[str, object], raw_company["corp"])
         ticker = _ticker(corp.get("stock_code", raw_ticker))
+        corp_code = str(corp.get("corp_code", "")).strip()
+        corp_name = str(corp.get("corp_name", "")).strip()
+        if len(corp_code) != 8 or not corp_code.isdigit() or not corp_name:
+            raise ValueError(f"Research corp metadata is invalid: {ticker}")
         result[ticker] = CorpCode(
-            corp_code=str(corp.get("corp_code", "")).strip(),
-            corp_name=str(corp.get("corp_name", "")).strip(),
+            corp_code=corp_code,
+            corp_name=corp_name,
             stock_code=ticker,
             modify_date=date.fromisoformat(str(corp.get("modify_date", ""))),
         )
@@ -535,10 +579,7 @@ def _corp_records(raw_opendart: Mapping[str, object]) -> dict[str, CorpCode]:
 
 
 def _load_prices(market_dir: Path) -> pd.DataFrame:
-    prices = pd.read_csv(
-        market_dir / "prices.csv",
-        dtype={"symbol": "string"},
-    )
+    prices = pd.read_csv(market_dir / "prices.csv", dtype={"symbol": "string"})
     required = {"symbol", "timestamp", "last_price", "currency"}
     missing = required - set(prices.columns)
     if missing:
@@ -550,6 +591,9 @@ def _load_prices(market_dir: Path) -> pd.DataFrame:
         raise ValueError("Market prices contain duplicate symbols")
     if (prices["last_price"] <= 0).any():
         raise ValueError("Market prices must be positive")
+    currencies = prices["currency"].astype("string").str.upper()
+    if currencies.ne("KRW").any():
+        raise ValueError("KRX valuation prices must use KRW")
     return prices.sort_values("symbol", kind="stable").reset_index(drop=True)
 
 
@@ -562,59 +606,73 @@ def _security_values(
     timestamp_lookup = prices.set_index("symbol")["timestamp"].to_dict()
     rows: list[dict[str, object]] = []
     warnings: list[str] = []
-    for ticker, group in shares.groupby("ticker", sort=False):
-        company_mapping = mappings.get(str(ticker))
+    for ticker_value, group in shares.groupby("ticker", sort=False):
+        ticker = str(ticker_value)
+        company_mapping = mappings.get(ticker)
+        issued = pd.to_numeric(group["issued_shares"], errors="coerce").fillna(0)
         class_rows = group.loc[
             group["security_class"].isin(["common", "preferred", "other"])
-            & (pd.to_numeric(group["issued_shares"], errors="coerce").fillna(0) > 0)
+            & issued.gt(0)
         ].copy()
         common_rows = class_rows.loc[class_rows["security_class"] == "common"]
         if len(common_rows) > 1 and company_mapping is None:
             raise ValueError(f"Multiple common-share rows require explicit mapping: {ticker}")
         total_rows = group.loc[group["security_class"] == "total"]
-        class_total = int(pd.to_numeric(class_rows["issued_shares"], errors="coerce").sum())
+        class_total = int(
+            pd.to_numeric(class_rows["issued_shares"], errors="coerce").sum()
+        )
         if len(total_rows) == 1:
             reported_total = _number(total_rows.iloc[0].get("issued_shares"))
             if reported_total is not None and int(reported_total) != class_total:
                 warnings.append(
                     f"{ticker}: security-class issued shares do not equal the reported total"
                 )
-        for _, raw in class_rows.iterrows():
-            security_name = str(raw["security_name"])
+        elif len(total_rows) > 1:
+            raise ValueError(f"Multiple total share rows are unsupported: {ticker}")
+        for raw in class_rows.to_dict(orient="records"):
+            security = cast(Mapping[str, object], raw)
+            security_name = str(security["security_name"])
             symbol: str | None = None
             mapping_source = "unmapped"
             if company_mapping is not None and security_name in company_mapping.securities:
                 symbol = company_mapping.securities[security_name]
                 mapping_source = "explicit"
-            elif raw["security_class"] == "common" and len(common_rows) == 1:
-                symbol = str(ticker)
+            elif security["security_class"] == "common" and len(common_rows) == 1:
+                symbol = ticker
                 mapping_source = "default_common"
             price = _number(price_lookup.get(symbol)) if symbol is not None else None
-            issued = _number(raw.get("issued_shares"))
+            share_count = _number(security.get("issued_shares"))
             rows.append(
                 {
-                    **raw.to_dict(),
+                    **security,
                     "symbol": symbol,
                     "mapping_source": mapping_source,
                     "price": price,
-                    "price_timestamp": timestamp_lookup.get(symbol) if symbol is not None else None,
+                    "price_timestamp": (
+                        timestamp_lookup.get(symbol) if symbol is not None else None
+                    ),
                     "security_market_value": (
-                        price * issued if price is not None and issued is not None else None
+                        price * share_count
+                        if price is not None and share_count is not None
+                        else None
                     ),
                     "priced": price is not None,
                 }
             )
+    if not rows:
+        raise ValueError("OpenDART share data contains no issued equity classes")
     return (
-        pd.DataFrame(rows).sort_values(
-            ["ticker", "security_class", "security_name"], kind="stable"
-        ).reset_index(drop=True),
+        pd.DataFrame(rows)
+        .sort_values(["ticker", "security_class", "security_name"], kind="stable")
+        .reset_index(drop=True),
         tuple(warnings),
     )
 
 
 def _latest_annual(history: pd.DataFrame, ticker: str) -> Mapping[str, object] | None:
     annual = history.loc[
-        (history["ticker"] == ticker) & (history["period_label"] == "FY")
+        (history["ticker"].astype(str) == ticker)
+        & (history["period_label"] == "FY")
     ].sort_values("period_end", kind="stable")
     if annual.empty:
         return None
@@ -626,14 +684,22 @@ def _valuation_metrics(
     history: pd.DataFrame,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    for ticker, group in securities.groupby("ticker", sort=False):
-        required = group.loc[pd.to_numeric(group["issued_shares"], errors="coerce") > 0]
-        priced = required.loc[required["priced"].astype(bool)]
+    for ticker_value, group in securities.groupby("ticker", sort=False):
+        ticker = str(ticker_value)
+        required = group.loc[
+            pd.to_numeric(group["issued_shares"], errors="coerce").gt(0)
+        ]
+        priced_mask = required["priced"].astype(bool)
+        priced = required.loc[priced_mask]
         complete = len(required) > 0 and len(priced) == len(required)
-        proxy = float(pd.to_numeric(priced["security_market_value"], errors="coerce").sum())
+        proxy = float(
+            pd.to_numeric(priced["security_market_value"], errors="coerce").sum()
+        )
         market_cap = proxy if complete else None
-        missing = sorted(required.loc[~required["priced"].astype(bool), "security_name"].astype(str))
-        annual = _latest_annual(history, str(ticker))
+        missing = sorted(
+            required.loc[~priced_mask, "security_name"].astype(str).tolist()
+        )
+        annual = _latest_annual(history, ticker)
         revenue = _number(annual.get("revenue")) if annual else None
         net_income = _number(annual.get("net_income")) if annual else None
         equity = _number(annual.get("equity")) if annual else None
@@ -645,7 +711,7 @@ def _valuation_metrics(
         earnings_yield = _ratio(net_income, market_cap) if market_cap is not None else None
         rows.append(
             {
-                "ticker": str(ticker),
+                "ticker": ticker,
                 "share_period_end": group["period_end"].max(),
                 "share_available_date": group["available_date"].max(),
                 "priced_security_classes": len(priced),
@@ -655,7 +721,7 @@ def _valuation_metrics(
                 "market_cap_proxy": proxy if len(priced) else None,
                 "market_cap": market_cap,
                 "annual_reference_year": (
-                    int(annual["business_year"]) if annual is not None else None
+                    int(str(annual["business_year"])) if annual is not None else None
                 ),
                 "annual_revenue": revenue,
                 "annual_net_income": net_income,
@@ -685,7 +751,8 @@ def _valuation_metrics(
         ranks = pd.DataFrame(index=eligible.index)
         for metric in ("pe", "pb", "ps"):
             ranks[metric] = pd.to_numeric(eligible[metric], errors="coerce").rank(
-                ascending=False, pct=True
+                ascending=False,
+                pct=True,
             )
         ranks["fcf_yield"] = pd.to_numeric(
             eligible["fcf_yield"], errors="coerce"
@@ -695,20 +762,16 @@ def _valuation_metrics(
         shrinkage = len(eligible) / (len(eligible) + 3.0)
         scores = 3.0 + (raw_score - 3.0) * shrinkage
         result.loc[eligible.index, "valuation_score"] = scores
-        result.loc[eligible.index, "valuation_status"] = "complete_peer_relative_scored"
+        result.loc[eligible.index, "valuation_status"] = (
+            "complete_peer_relative_scored"
+        )
     return result
-
-
-def _raw_company_payload(value: object) -> Mapping[str, object]:
-    if not isinstance(value, dict):
-        return {}
-    return cast(Mapping[str, object], value)
 
 
 def build_valuation_evidence_snapshot(
     research_snapshot: str | Path,
     market_snapshot: str | Path,
-    client: OpenDartValuationClient,
+    client: ValuationDataClient,
     *,
     history_years: int = 3,
     fs_div: str = "CFS",
@@ -726,8 +789,12 @@ def build_valuation_evidence_snapshot(
     linked_market = str(research_manifest.get("market_snapshot_id", "")).strip()
     if linked_market and linked_market != market_id:
         raise ValueError("Research snapshot is linked to a different market snapshot")
-    evaluation_date = date.fromisoformat(str(research_manifest.get("evaluation_date", "")))
-    market_captured = datetime.fromisoformat(str(market_manifest.get("captured_at", "")))
+    evaluation_date = date.fromisoformat(
+        str(research_manifest.get("evaluation_date", ""))
+    )
+    market_captured = datetime.fromisoformat(
+        str(market_manifest.get("captured_at", ""))
+    )
     if market_captured.tzinfo is None or market_captured.utcoffset() is None:
         raise ValueError("Market manifest captured_at must be timezone-aware")
     if market_captured.astimezone(KOREA_TZ).date() > evaluation_date:
@@ -738,7 +805,10 @@ def build_valuation_evidence_snapshot(
     prices = _load_prices(market_dir)
     share_frames: list[pd.DataFrame] = []
     periods: list[FinancialPeriodPayload] = []
-    raw: dict[str, object] = {}
+    raw: dict[str, object] = {
+        "source_research_snapshot_id": research_id,
+        "source_market_snapshot_id": market_id,
+    }
     warnings: list[str] = []
     for ticker in sorted(corps):
         corp = corps[ticker]
@@ -769,9 +839,6 @@ def build_valuation_evidence_snapshot(
                 }
                 for period in company_periods
             ],
-            "source_research_company": dict(
-                _raw_company_payload(raw_opendart.get(ticker))
-            ),
         }
     shares = pd.concat(share_frames, ignore_index=True)
     financial_history = build_financial_history(periods)
@@ -832,13 +899,12 @@ def write_valuation_evidence_snapshot(
         shutil.rmtree(temporary)
     temporary.mkdir()
     try:
-        frames = {
+        for name, frame in {
             "shares.csv": snapshot.shares,
             "security_values.csv": snapshot.security_values,
             "financial_history.csv": snapshot.financial_history,
             "valuation_metrics.csv": snapshot.valuation_metrics,
-        }
-        for name, frame in frames.items():
+        }.items():
             frame.to_csv(temporary / name, index=False)
         (temporary / "raw_valuation.json").write_text(
             json.dumps(snapshot.raw_valuation, ensure_ascii=False, indent=2, sort_keys=True),
@@ -877,6 +943,13 @@ def write_valuation_evidence_snapshot(
     return tuple(directory / name for name in names)
 
 
+def _decode_json_list(value: object) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    parsed: object = json.loads(value)
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
 def apply_valuation_to_scorecards(
     scorecards: pd.DataFrame,
     valuation_metrics: pd.DataFrame,
@@ -893,14 +966,13 @@ def apply_valuation_to_scorecards(
     lookup = metrics.set_index("ticker").to_dict(orient="index")
     rows: list[dict[str, object]] = []
     for raw in result.to_dict(orient="records"):
-        row = dict(raw)
+        row = {str(key): value for key, value in raw.items()}
         ticker = str(row["ticker"])
         valuation = cast(Mapping[str, object], lookup.get(ticker, {}))
         valuation_score = _number(valuation.get("valuation_score"))
+        valuation_status = str(valuation.get("valuation_status", "not_available"))
         row["valuation_score"] = valuation_score
-        row["valuation_status"] = str(
-            valuation.get("valuation_status", "not_available")
-        )
+        row["valuation_status"] = valuation_status
         weighted = 0.0
         available = 0.0
         for component, weight in COMPONENT_WEIGHTS.items():
@@ -928,22 +1000,22 @@ def apply_valuation_to_scorecards(
             state, action = "negative_setup", "avoid_or_reduce_candidate"
         row["decision_state"] = state
         row["action_bias"] = action
-        opposing = _decode_json_list(row.get("opposing_evidence"))
         opposing = [
-            item for item in opposing if item != "밸류에이션·컨센서스 데이터 미연결"
+            item
+            for item in _decode_json_list(row.get("opposing_evidence"))
+            if item != "밸류에이션·컨센서스 데이터 미연결"
         ]
+        positives = _decode_json_list(row.get("positive_evidence"))
         if valuation_score is None:
-            opposing.append(f"밸류에이션 상태: {row['valuation_status']}")
+            opposing.append(f"밸류에이션 상태: {valuation_status}")
+        elif valuation_score >= 3.5:
+            positives.append(f"동일 스냅샷 상대 밸류에이션 {valuation_score:.2f}/5")
+        elif valuation_score <= 2.5:
+            opposing.append(f"동일 스냅샷 상대 밸류에이션 {valuation_score:.2f}/5")
+        row["positive_evidence"] = json.dumps(positives, ensure_ascii=False)
         row["opposing_evidence"] = json.dumps(opposing, ensure_ascii=False)
         rows.append(row)
     return pd.DataFrame(rows).sort_values("ticker", kind="stable").reset_index(drop=True)
-
-
-def _decode_json_list(value: object) -> list[str]:
-    if not isinstance(value, str):
-        return []
-    parsed: object = json.loads(value)
-    return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
 
 def append_valuation_report(
@@ -951,7 +1023,11 @@ def append_valuation_report(
     valuation_metrics: pd.DataFrame,
     financial_history: pd.DataFrame,
 ) -> str:
-    lines = [report.rstrip(), "", "## 밸류에이션 및 다기간 실적", ""]
+    base = report.replace(
+        "- 밸류에이션·컨센서스 미연결 시 최종 매수 판단이 아닌 의사결정 보조",
+        "- 밸류에이션 연결·컨센서스 미연결; 최종 매수 판단이 아닌 의사결정 보조",
+    ).replace("- 밸류에이션: 미평가", "- 밸류에이션: 하단 상세 섹션 참조")
+    lines = [base.rstrip(), "", "## 밸류에이션 및 다기간 실적", ""]
     metrics = valuation_metrics.set_index("ticker")
     for ticker in metrics.index.astype(str):
         row = cast(Mapping[str, object], metrics.loc[ticker].to_dict())
@@ -971,7 +1047,7 @@ def append_valuation_report(
                 f"- PSR: {_fmt_multiple(row.get('ps'))}",
                 f"- FCF 수익률: {_fmt_percent(row.get('fcf_yield'))}",
                 f"- 밸류에이션 점수: {_fmt_score(row.get('valuation_score'))}",
-                "- 점수는 이 스냅샷 내 완전한 기업끼리의 상대순위를 중립값으로 축소한 값",
+                "- 점수는 완전한 기업끼리의 상대순위를 중립값으로 축소한 값",
             ]
         )
         if not history.empty:
@@ -1011,6 +1087,7 @@ def _fmt_score(value: object) -> str:
 
 __all__ = [
     "CompanySecurityMapping",
+    "ValuationDataClient",
     "ValuationEvidenceSnapshot",
     "append_valuation_report",
     "apply_valuation_to_scorecards",
