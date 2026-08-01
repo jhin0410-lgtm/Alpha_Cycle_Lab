@@ -153,6 +153,57 @@ def _write_source_snapshots(root: Path) -> tuple[Path, Path]:
     return research, market
 
 
+def _write_valuation_snapshot(
+    root: Path,
+    *,
+    research_id: str = "a" * 64,
+    market_id: str = "b" * 64,
+) -> Path:
+    valuation = root / "valuation"
+    valuation.mkdir()
+    (valuation / "manifest.json").write_text(
+        json.dumps(
+            {
+                "snapshot_id": "c" * 64,
+                "evaluation_date": "2026-07-29",
+                "research_snapshot_id": research_id,
+                "market_snapshot_id": market_id,
+                "warnings": ["peer-relative valuation"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {
+                "ticker": "005930",
+                "valuation_score": 4.2,
+                "valuation_status": "complete_peer_relative_scored",
+                "market_cap": 100000,
+                "market_cap_proxy": 100000,
+                "pe": 10,
+                "pb": 1.2,
+                "ps": 2,
+                "fcf_yield": 0.05,
+            }
+        ]
+    ).to_csv(valuation / "valuation_metrics.csv", index=False)
+    pd.DataFrame(
+        [
+            {
+                "ticker": "005930",
+                "business_year": 2026,
+                "period_label": "Q1",
+                "period_end": "2026-03-31",
+                "revenue_yoy": 0.2,
+                "operating_income_yoy": 0.3,
+                "operating_income_yoy_acceleration": 0.1,
+            }
+        ]
+    ).to_csv(valuation / "financial_history.csv", index=False)
+    return valuation
+
+
 def test_build_and_write_integrated_decision_snapshot(tmp_path: Path) -> None:
     research, market = _write_source_snapshots(tmp_path)
     snapshot = build_investment_decision_snapshot(
@@ -184,6 +235,45 @@ def test_build_and_write_integrated_decision_snapshot(tmp_path: Path) -> None:
     assert (written[0].parent / "financial_history.csv").is_file()
     assert (written[0].parent / "scorecards.csv").is_file()
     assert (written[0].parent / "report.md").is_file()
+
+
+def test_connected_valuation_updates_score_and_report(tmp_path: Path) -> None:
+    research, market = _write_source_snapshots(tmp_path)
+    valuation = _write_valuation_snapshot(tmp_path)
+    baseline = build_investment_decision_snapshot(
+        research,
+        market,
+        policy=DecisionPolicy(minimum_coverage=0.5),
+        now=datetime(2026, 7, 29, 3, tzinfo=UTC),
+    )
+    snapshot = build_investment_decision_snapshot(
+        research,
+        market,
+        valuation_snapshot=valuation,
+        policy=DecisionPolicy(minimum_coverage=0.5),
+        now=datetime(2026, 7, 29, 3, tzinfo=UTC),
+    )
+    score = snapshot.scorecards.iloc[0]
+    assert snapshot.valuation_snapshot_id == "c" * 64
+    assert score["valuation_score"] == 4.2
+    assert score["score_coverage"] > baseline.scorecards.iloc[0]["score_coverage"]
+    assert "밸류에이션 연결·컨센서스 미연결" in snapshot.report_markdown
+    assert "밸류에이션·컨센서스 미연결 시" not in snapshot.report_markdown
+
+
+def test_rejects_mismatched_valuation_source_snapshot(tmp_path: Path) -> None:
+    research, market = _write_source_snapshots(tmp_path)
+    valuation = _write_valuation_snapshot(tmp_path, market_id="d" * 64)
+    try:
+        build_investment_decision_snapshot(
+            research,
+            market,
+            valuation_snapshot=valuation,
+        )
+    except ValueError as exc:
+        assert "different market snapshot" in str(exc)
+    else:
+        raise AssertionError("Expected mismatched valuation snapshot rejection")
 
 
 def test_rejects_mismatched_linked_market_snapshot(tmp_path: Path) -> None:
