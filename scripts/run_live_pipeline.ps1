@@ -90,7 +90,7 @@ if (Test-Path $StatusPath) {
         $status.reason -eq "tossinvest_ip_allowlist"
     ) {
         Write-Host "TossInvest blocked the current public IP: $($status.public_ip)"
-        Write-Host "Attempting fail-closed resume from a linked same-day market/research snapshot."
+        Write-Host "Attempting fail-closed resume from a fresh linked market/research snapshot."
         & python -m alpha_cycle.resume_pipeline_cli
         $pipelineExitCode = $LASTEXITCODE
         if (Test-Path $StatusPath) {
@@ -100,9 +100,14 @@ if (Test-Path $StatusPath) {
 
     if ($status.status -eq "completed" -and $status.report_path) {
         Write-Host "Live research pipeline completed."
-        if ($status.execution_mode -eq "resumed_same_day_snapshots") {
-            Write-Host "Execution mode: resumed same-day snapshots"
+        if ($status.execution_mode -eq "resumed_linked_snapshots") {
+            Write-Host "Execution mode: resumed linked snapshots"
+            Write-Host "Source evaluation date: $($status.evaluation_date)"
             Write-Host "Market snapshot age: $($status.market_snapshot_age_minutes) minutes"
+            if ($status.cross_date_resume) {
+                Write-Host "Requested date: $($status.requested_evaluation_date)"
+                Write-Host "Market capture date: $($status.market_capture_date)"
+            }
         }
         Write-Host "Report: $($status.report_path)"
         if (-not $NoReport) {
