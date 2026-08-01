@@ -2,8 +2,10 @@
 
 from alpha_cycle.intelligence.decision import (
     InvestmentDecisionSnapshot,
-    build_investment_decision_snapshot,
     write_investment_decision_snapshot,
+)
+from alpha_cycle.intelligence.decision_resilient import (
+    build_investment_decision_snapshot,
 )
 from alpha_cycle.intelligence.decision_scoring import (
     CompanyExposure,
