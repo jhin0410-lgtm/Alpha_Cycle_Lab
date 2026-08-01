@@ -32,14 +32,16 @@ The launcher:
 - reads `latest_run.json` safely;
 - prints the report only when the pipeline completed and `report_path` exists.
 
-The first run asks for four values without echoing them:
+The first run asks only for values that are not already configured:
 
 ```text
 TOSSINVEST_CLIENT_ID
 TOSSINVEST_CLIENT_SECRET
 OPENDART_API_KEY
-ECOS_API_KEY
+BOK_ECOS_API_KEY
 ```
+
+`BOK_ECOS_API_KEY` is the canonical Bank of Korea key name for this repository. The older internal alias `ECOS_API_KEY` is still accepted and migrated automatically, but users do not need to rename an existing `BOK_ECOS_API_KEY` variable.
 
 The values are stored in the current Windows user's environment and copied into the current PowerShell process. They are not written to repository files, printed, or committed. As with all user-level environment variables, other processes running as the same Windows user may be able to read them.
 
@@ -75,7 +77,7 @@ Additional arguments are forwarded to the Python pipeline:
 
 ## Direct Python command
 
-The direct command remains available when all four environment variables already exist in the current process:
+The direct command remains available when the required environment variables already exist. Package startup maps `BOK_ECOS_API_KEY` to the process-local compatibility alias expected by the ECOS provider.
 
 ```powershell
 python -m alpha_cycle.live_pipeline_cli
