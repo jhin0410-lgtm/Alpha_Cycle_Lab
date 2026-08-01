@@ -66,7 +66,8 @@ def _append_unresolved_security_rows(
         for row in result.to_dict(orient="records")
     }
     additions: list[dict[str, object]] = []
-    for raw in unresolved.to_dict(orient="records"):
+    for raw_value in unresolved.to_dict(orient="records"):
+        raw = {str(key): value for key, value in raw_value.items()}
         key = (str(raw["ticker"]), str(raw["security_name"]))
         if key in existing:
             mask = (
