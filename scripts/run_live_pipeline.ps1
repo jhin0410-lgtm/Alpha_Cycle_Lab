@@ -85,14 +85,32 @@ $pipelineExitCode = $LASTEXITCODE
 
 if (Test-Path $StatusPath) {
     $status = Get-Content $StatusPath -Raw -Encoding utf8 | ConvertFrom-Json
+    if (
+        $status.status -eq "blocked" -and
+        $status.reason -eq "tossinvest_ip_allowlist"
+    ) {
+        Write-Host "TossInvest blocked the current public IP: $($status.public_ip)"
+        Write-Host "Attempting fail-closed resume from a linked same-day market/research snapshot."
+        & python -m alpha_cycle.resume_pipeline_cli
+        $pipelineExitCode = $LASTEXITCODE
+        if (Test-Path $StatusPath) {
+            $status = Get-Content $StatusPath -Raw -Encoding utf8 | ConvertFrom-Json
+        }
+    }
+
     if ($status.status -eq "completed" -and $status.report_path) {
         Write-Host "Live research pipeline completed."
+        if ($status.execution_mode -eq "resumed_same_day_snapshots") {
+            Write-Host "Execution mode: resumed same-day snapshots"
+            Write-Host "Market snapshot age: $($status.market_snapshot_age_minutes) minutes"
+        }
         Write-Host "Report: $($status.report_path)"
         if (-not $NoReport) {
             Get-Content $status.report_path -Encoding utf8
         }
     }
     else {
+        Write-Host "No completed report is available for this run."
         $status | ConvertTo-Json -Depth 8
     }
 }
