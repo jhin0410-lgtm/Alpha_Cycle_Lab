@@ -40,9 +40,6 @@ if ($missing.Count -gt 0) {
     Write-Host "Missing local API credentials: $($missing -join ', ')"
     Write-Host "Starting secure one-time credential setup. Values will not be printed or committed."
     & $SetupScript
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
 }
 
 $remaining = @(
