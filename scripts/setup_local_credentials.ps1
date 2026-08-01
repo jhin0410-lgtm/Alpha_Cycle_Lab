@@ -17,11 +17,15 @@ function Get-EffectiveCredentialValue {
     param([Parameter(Mandatory = $true)][string]$Name)
 
     $processValue = [Environment]::GetEnvironmentVariable($Name, "Process")
+    $userValue = [Environment]::GetEnvironmentVariable($Name, "User")
+
     if (-not [string]::IsNullOrWhiteSpace($processValue)) {
+        if ([string]::IsNullOrWhiteSpace($userValue)) {
+            [Environment]::SetEnvironmentVariable($Name, $processValue, "User")
+        }
         return $processValue
     }
 
-    $userValue = [Environment]::GetEnvironmentVariable($Name, "User")
     if (-not [string]::IsNullOrWhiteSpace($userValue)) {
         [Environment]::SetEnvironmentVariable($Name, $userValue, "Process")
         return $userValue
