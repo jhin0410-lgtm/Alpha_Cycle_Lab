@@ -296,10 +296,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
         _validate_args(args)
-        payload = _execute(args)
-        status_path = _write_status(args.output, payload)
-        payload["status_path"] = str(status_path.resolve())
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        result_payload = _execute(args)
+        status_path = _write_status(args.output, result_payload)
+        result_payload["status_path"] = str(status_path.resolve())
+        print(json.dumps(result_payload, ensure_ascii=False, sort_keys=True))
         return 0
     except PipelineStageError as exc:
         if args is None:
@@ -309,7 +309,7 @@ def main(argv: list[str] | None = None) -> int:
             if exc.stage == "resume_validation"
             else "pipeline_error"
         )
-        payload: dict[str, object] = {
+        stage_error_payload: dict[str, object] = {
             "status": "failed",
             "stage": exc.stage,
             "reason": reason,
@@ -323,13 +323,16 @@ def main(argv: list[str] | None = None) -> int:
             "outputs_available": False,
             "order_api_enabled": False,
         }
-        status_path = _write_status(args.output, payload)
-        payload["status_path"] = str(status_path.resolve())
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
+        status_path = _write_status(args.output, stage_error_payload)
+        stage_error_payload["status_path"] = str(status_path.resolve())
+        print(
+            json.dumps(stage_error_payload, ensure_ascii=False, sort_keys=True),
+            file=sys.stderr,
+        )
         return 4 if exc.stage == "resume_validation" else 2
     except (ValueError, OSError, TypeError) as exc:
         output = args.output if args is not None else DEFAULT_OUTPUT_ROOT
-        payload = {
+        validation_error_payload = {
             "status": "failed",
             "stage": "validation",
             "reason": "invalid_configuration",
@@ -337,8 +340,11 @@ def main(argv: list[str] | None = None) -> int:
             "outputs_available": False,
             "order_api_enabled": False,
         }
-        _write_status(output, payload)
-        print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
+        _write_status(output, validation_error_payload)
+        print(
+            json.dumps(validation_error_payload, ensure_ascii=False, sort_keys=True),
+            file=sys.stderr,
+        )
         return 2
 
 
