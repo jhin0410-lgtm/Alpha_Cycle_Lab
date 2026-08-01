@@ -5,11 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import TypeVar
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -42,6 +42,7 @@ PUBLIC_IP_ENDPOINT = "https://api.ipify.org"
 DEFAULT_DECISION_SYMBOLS = ("005930", "000660")
 DEFAULT_MARKET_SYMBOLS = ("005930", "005935", "000660")
 DEFAULT_OUTPUT_ROOT = Path("data/private/live-research")
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -176,9 +177,9 @@ def _write_status(output_root: Path, payload: Mapping[str, object]) -> Path:
     return destination
 
 
-def _run_stage(stage: str, operation: object) -> object:
+def _run_stage(stage: str, operation: Callable[[], T]) -> T:
     try:
-        return cast("callable[[], object]", operation)()
+        return operation()
     except (ValueError, OSError, TypeError) as exc:
         raise PipelineStageError(stage, exc) from exc
 
@@ -213,7 +214,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
             market_snapshot,
         ),
     )
-    market_directory = cast(tuple[Path, ...], market_files)[0].parent
+    market_directory = market_files[0].parent
 
     opendart = OpenDartReadOnlyClient.from_env()
     ecos = EcosReadOnlyClient(EcosCredentials.from_env())
@@ -245,7 +246,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
             research_snapshot,
         ),
     )
-    research_directory = cast(tuple[Path, ...], research_files)[0].parent
+    research_directory = research_files[0].parent
 
     valuation_client = OpenDartValuationClient(
         OpenDartCredentials.from_env(),
@@ -270,7 +271,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
             valuation_snapshot,
         ),
     )
-    valuation_directory = cast(tuple[Path, ...], valuation_files)[0].parent
+    valuation_directory = valuation_files[0].parent
 
     company_config = Path("config/company_exposures.local.yaml")
     exposures = load_company_exposures(company_config if company_config.is_file() else None)
@@ -291,7 +292,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
             decision_snapshot,
         ),
     )
-    decision_directory = cast(tuple[Path, ...], decision_files)[0].parent
+    decision_directory = decision_files[0].parent
 
     valuation_frame = valuation_snapshot.valuation_metrics
     scorecards = decision_snapshot.scorecards
@@ -373,6 +374,7 @@ def _validate_args(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    args: argparse.Namespace | None = None
     try:
         args = parser.parse_args(argv)
         _validate_args(args)
@@ -382,6 +384,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         return 0
     except PipelineStageError as exc:
+        if args is None:
+            raise
         allowlist = exc.stage == "market" and _is_ip_allowlist_error(exc.cause)
         public_ip = (
             None
@@ -408,7 +412,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True), file=sys.stderr)
         return 3 if allowlist else 2
     except (ValueError, OSError, TypeError) as exc:
-        output = getattr(locals().get("args"), "output", DEFAULT_OUTPUT_ROOT)
+        output = args.output if args is not None else DEFAULT_OUTPUT_ROOT
         payload = {
             "status": "failed",
             "stage": "validation",
