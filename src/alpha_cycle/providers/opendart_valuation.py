@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import cast
 
 import pandas as pd
@@ -36,6 +38,26 @@ STOCK_TOTAL_COLUMNS = (
     "floating_shares",
 )
 
+_MISSING_INTEGER_MARKERS = frozenset(
+    {
+        "",
+        "-",
+        "--",
+        "–",
+        "—",
+        "−",
+        "none",
+        "null",
+        "nan",
+        "n/a",
+        "na",
+        "해당사항없음",
+        "해당없음",
+        "없음",
+    }
+)
+_WHOLE_SHARE_PATTERN = re.compile(r"^\+?[0-9]+(?:\.0+)?$")
+
 
 @dataclass(frozen=True)
 class StockTotalsBatch:
@@ -56,17 +78,36 @@ class FinancialPeriodPayload:
 
 
 def _integer(value: object, field: str, *, optional: bool = True) -> int | None:
-    text = str(value).strip().replace(",", "")
-    if text in {"", "-", "None", "nan"}:
+    """Parse OpenDART whole-share counts without accepting ambiguous quantities."""
+
+    if value is None:
+        text = ""
+    else:
+        text = "".join(str(value).strip().split()).replace(",", "")
+    if text.endswith("주"):
+        text = text[:-1]
+    normalized = text.casefold()
+    if normalized in _MISSING_INTEGER_MARKERS:
         if optional:
             return None
         raise ValueError(f"OpenDART {field} is required")
+    if not _WHOLE_SHARE_PATTERN.fullmatch(text):
+        raise ValueError(
+            f"OpenDART {field} must be a non-negative whole-share count; value={text!r}"
+        )
     try:
-        result = int(text)
-    except ValueError as exc:
-        raise ValueError(f"OpenDART {field} must be an integer") from exc
+        decimal_value = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError(
+            f"OpenDART {field} must be a non-negative whole-share count; value={text!r}"
+        ) from exc
+    if not decimal_value.is_finite() or decimal_value != decimal_value.to_integral_value():
+        raise ValueError(
+            f"OpenDART {field} must be a non-negative whole-share count; value={text!r}"
+        )
+    result = int(decimal_value)
     if result < 0:
-        raise ValueError(f"OpenDART {field} cannot be negative")
+        raise ValueError(f"OpenDART {field} cannot be negative; value={text!r}")
     return result
 
 
