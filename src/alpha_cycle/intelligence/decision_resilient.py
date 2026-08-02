@@ -17,6 +17,11 @@ from alpha_cycle.intelligence.decision import (
 from alpha_cycle.intelligence.decision import (
     build_investment_decision_snapshot as _build_investment_decision_snapshot,
 )
+from alpha_cycle.intelligence.decision_playbook import (
+    append_execution_playbook_report,
+    build_decision_records,
+    enrich_scorecards_with_playbook,
+)
 from alpha_cycle.intelligence.decision_scoring import (
     CompanyExposure,
     DecisionPolicy,
@@ -100,6 +105,46 @@ def align_valuation_metrics_to_decisions(
     )
 
 
+def _attach_execution_playbook(
+    snapshot: InvestmentDecisionSnapshot,
+) -> InvestmentDecisionSnapshot:
+    scorecards = enrich_scorecards_with_playbook(
+        snapshot.scorecards,
+        snapshot.financial_kpis,
+        snapshot.catalysts,
+        snapshot.market_context,
+        evaluation_date=snapshot.evaluation_date,
+    )
+    price_lookup = snapshot.market_context.set_index("ticker")["last_price"].to_dict()
+    decision_records = build_decision_records(
+        scorecards,
+        evaluation_date=snapshot.evaluation_date,
+        price_lookup=price_lookup,
+    )
+    report = build_report(
+        snapshot.evaluation_date,
+        scorecards,
+        snapshot.financial_kpis,
+        snapshot.catalysts,
+        snapshot.macro_regime,
+        snapshot.market_context,
+        snapshot.warnings,
+    )
+    if snapshot.valuation_snapshot_id is not None:
+        report = append_valuation_report(
+            report,
+            snapshot.valuation_metrics,
+            snapshot.financial_history,
+        )
+    report = append_execution_playbook_report(report, scorecards)
+    return replace(
+        snapshot,
+        scorecards=scorecards,
+        decision_records=decision_records,
+        report_markdown=report,
+    )
+
+
 def build_investment_decision_snapshot(
     research_snapshot: str | Path,
     market_snapshot: str | Path,
@@ -122,7 +167,7 @@ def build_investment_decision_snapshot(
         now=now,
     )
     if valuation_snapshot is None:
-        return base
+        return _attach_execution_playbook(base)
 
     valuation_id, valuation_metrics, financial_history, valuation_warnings = (
         _load_valuation_snapshot(
@@ -143,26 +188,20 @@ def build_investment_decision_snapshot(
         valuation_metrics,
         decision_policy,
     )
+    scorecards = enrich_scorecards_with_playbook(
+        scorecards,
+        base.financial_kpis,
+        base.catalysts,
+        base.market_context,
+        evaluation_date=base.evaluation_date,
+    )
 
     price_lookup = base.market_context.set_index("ticker")["last_price"].to_dict()
-    decision_records = scorecards.loc[
-        :,
-        [
-            "ticker",
-            "decision_state",
-            "action_bias",
-            "composite_score",
-            "score_coverage",
-        ],
-    ].copy()
-    decision_records.insert(1, "evaluation_date", base.evaluation_date)
-    decision_records.insert(
-        2,
-        "reference_price",
-        decision_records["ticker"].map(price_lookup),
+    decision_records = build_decision_records(
+        scorecards,
+        evaluation_date=base.evaluation_date,
+        price_lookup=price_lookup,
     )
-    if decision_records["reference_price"].isna().any():
-        raise ValueError("Decision records are missing reference prices")
 
     warnings = [
         item
@@ -187,6 +226,7 @@ def build_investment_decision_snapshot(
         tuple(warnings),
     )
     report = append_valuation_report(report, valuation_metrics, financial_history)
+    report = append_execution_playbook_report(report, scorecards)
 
     return replace(
         base,
