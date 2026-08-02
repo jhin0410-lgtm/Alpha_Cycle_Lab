@@ -105,6 +105,11 @@ def align_valuation_metrics_to_decisions(
     )
 
 
+def _price_lookup(market_context: pd.DataFrame) -> dict[str, object]:
+    raw = market_context.set_index("ticker")["last_price"].to_dict()
+    return {str(key).zfill(6): value for key, value in raw.items()}
+
+
 def _attach_execution_playbook(
     snapshot: InvestmentDecisionSnapshot,
 ) -> InvestmentDecisionSnapshot:
@@ -115,11 +120,10 @@ def _attach_execution_playbook(
         snapshot.market_context,
         evaluation_date=snapshot.evaluation_date,
     )
-    price_lookup = snapshot.market_context.set_index("ticker")["last_price"].to_dict()
     decision_records = build_decision_records(
         scorecards,
         evaluation_date=snapshot.evaluation_date,
-        price_lookup=price_lookup,
+        price_lookup=_price_lookup(snapshot.market_context),
     )
     report = build_report(
         snapshot.evaluation_date,
@@ -196,11 +200,10 @@ def build_investment_decision_snapshot(
         evaluation_date=base.evaluation_date,
     )
 
-    price_lookup = base.market_context.set_index("ticker")["last_price"].to_dict()
     decision_records = build_decision_records(
         scorecards,
         evaluation_date=base.evaluation_date,
-        price_lookup=price_lookup,
+        price_lookup=_price_lookup(base.market_context),
     )
 
     warnings = [
