@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date
 from typing import cast
+
+import pandas as pd
 
 from alpha_cycle.providers.opendart import CorpCode
 from alpha_cycle.providers.opendart_valuation import (
@@ -11,6 +14,7 @@ from alpha_cycle.providers.opendart_valuation import (
 )
 from alpha_cycle.providers.opendart_valuation import (
     StockTotalsBatch,
+    _candidate_periods,
     _integer,
     _security_class,
 )
@@ -89,6 +93,22 @@ def _set_repaired_issued_count(
     row["istc_totqy"] = str(replacement)
 
 
+def _usable_economic_stock_frame(frame: pd.DataFrame) -> bool:
+    """Return whether a visible stock-total frame can safely support valuation."""
+
+    if frame.empty:
+        return False
+    economic = frame.loc[
+        frame["security_class"].astype("string").isin(_ECONOMIC_SECURITY_CLASSES)
+    ]
+    if economic.empty:
+        return False
+    issued = pd.to_numeric(economic["issued_shares"], errors="coerce")
+    warnings = economic["normalization_warning"].astype("string").fillna("")
+    unresolved = warnings.str.contains(_UNRESOLVED_ECONOMIC_SOURCE, regex=False)
+    return bool(issued.gt(0).any() and not unresolved.any())
+
+
 class OpenDartValuationClient(_BaseOpenDartValuationClient):
     """Preserve ambiguous share rows without manufacturing usable share counts.
 
@@ -96,8 +116,14 @@ class OpenDartValuationClient(_BaseOpenDartValuationClient):
     ``istc_totqy`` values. For an economic security row, the official schema also
     exposes two independent identities: issued-to-date minus reduced-to-date, and
     treasury shares plus floating shares. A missing issued-share count is recovered
-    only when the available identities agree. Conflicting or insufficient evidence
-    remains explicitly unresolved and is failed closed by the valuation guard.
+    only when the available identities agree. A blank class can additionally be proven
+    to be zero, or recovered as a single residual class, when an explicit aggregate
+    issued-share total reconciles exactly to all known economic classes.
+
+    Some filings expose only aggregate and note rows. Those periods cannot identify the
+    priced economic classes, so ``latest_stock_totals`` walks backward to the newest
+    visible period with complete economic-class evidence. If none exists, it returns
+    the latest visible evidence unchanged so the valuation guard still fails closed.
     """
 
     def _json_get(
@@ -122,21 +148,23 @@ class OpenDartValuationClient(_BaseOpenDartValuationClient):
 
         changed = False
         valid_economic_counts: list[int] = []
-        unresolved_economic_names: list[str] = []
+        unresolved_economic_rows: list[dict[str, object]] = []
+        total_rows: list[dict[str, object]] = []
+
         for row in rows:
             security_name = str(row.get("se", "")).strip()
             security_class = _security_class(security_name)
+            if security_class == "total":
+                total_rows.append(row)
             if security_class not in _ECONOMIC_SECURITY_CLASSES:
                 continue
             count = _whole_share_or_none(row.get("istc_totqy"))
             if count is None:
                 derived = _derived_economic_share_count(row)
                 if derived is None:
-                    replacement = 0
-                    source = _UNRESOLVED_ECONOMIC_SOURCE
-                    unresolved_economic_names.append(security_name or "<blank>")
-                else:
-                    replacement, source = derived
+                    unresolved_economic_rows.append(row)
+                    continue
+                replacement, source = derived
                 _set_repaired_issued_count(
                     row,
                     security_name=security_name,
@@ -146,6 +174,50 @@ class OpenDartValuationClient(_BaseOpenDartValuationClient):
                 count = replacement
                 changed = True
             valid_economic_counts.append(count)
+
+        explicit_total = (
+            _whole_share_or_none(total_rows[0].get("istc_totqy"))
+            if len(total_rows) == 1
+            else None
+        )
+        unresolved_economic_names: list[str] = []
+        if unresolved_economic_rows and explicit_total is not None:
+            residual = explicit_total - sum(valid_economic_counts)
+            if residual == 0:
+                for row in unresolved_economic_rows:
+                    security_name = str(row.get("se", "")).strip()
+                    _set_repaired_issued_count(
+                        row,
+                        security_name=security_name,
+                        replacement=0,
+                        source="derived_zero_total_residual",
+                    )
+                    valid_economic_counts.append(0)
+                unresolved_economic_rows = []
+                changed = True
+            elif residual > 0 and len(unresolved_economic_rows) == 1:
+                row = unresolved_economic_rows.pop()
+                security_name = str(row.get("se", "")).strip()
+                _set_repaired_issued_count(
+                    row,
+                    security_name=security_name,
+                    replacement=residual,
+                    source="derived_single_class_total_residual",
+                )
+                valid_economic_counts.append(residual)
+                changed = True
+
+        for row in unresolved_economic_rows:
+            security_name = str(row.get("se", "")).strip()
+            unresolved_economic_names.append(security_name or "<blank>")
+            _set_repaired_issued_count(
+                row,
+                security_name=security_name,
+                replacement=0,
+                source=_UNRESOLVED_ECONOMIC_SOURCE,
+            )
+            valid_economic_counts.append(0)
+            changed = True
 
         for row in rows:
             if _whole_share_or_none(row.get("istc_totqy")) is not None:
@@ -232,6 +304,87 @@ class OpenDartValuationClient(_BaseOpenDartValuationClient):
             raw_payload=diagnostic_payload,
             corp=batch.corp,
             warnings=tuple(warnings),
+        )
+
+    def latest_stock_totals(
+        self,
+        corp: CorpCode,
+        *,
+        evaluation_date: date,
+    ) -> StockTotalsBatch:
+        """Select the newest visible period with usable economic-class evidence."""
+
+        attempts: list[dict[str, object]] = []
+        newest_visible_unusable: StockTotalsBatch | None = None
+        skipped_visible_periods: list[str] = []
+
+        for business_year, report_code in _candidate_periods(evaluation_date, 2):
+            batch = self.stock_totals(
+                corp,
+                business_year=business_year,
+                report_code=report_code,
+            )
+            attempt: dict[str, object] = {
+                "business_year": business_year,
+                "report_code": report_code,
+                "raw_payload": batch.raw_payload,
+                "selection_status": "empty",
+            }
+            attempts.append(attempt)
+            if batch.frame.empty:
+                continue
+            visible = batch.frame.loc[
+                (batch.frame["period_end"] <= evaluation_date)
+                & (batch.frame["available_date"] <= evaluation_date)
+            ].copy()
+            if visible.empty:
+                attempt["selection_status"] = "not_visible"
+                continue
+            if _usable_economic_stock_frame(visible):
+                attempt["selection_status"] = "selected_usable"
+                warnings = list(batch.warnings)
+                if skipped_visible_periods:
+                    warnings.append(
+                        f"{corp.stock_code}: selected older usable stock-total period "
+                        f"{business_year}/{report_code} after unusable newer periods "
+                        f"{','.join(skipped_visible_periods)}"
+                    )
+                return StockTotalsBatch(
+                    visible.reset_index(drop=True),
+                    {"selected": batch.raw_payload, "attempts": attempts},
+                    corp,
+                    tuple(warnings),
+                )
+
+            attempt["selection_status"] = "visible_unusable"
+            skipped_visible_periods.append(f"{business_year}/{report_code}")
+            if newest_visible_unusable is None:
+                newest_visible_unusable = StockTotalsBatch(
+                    visible.reset_index(drop=True),
+                    batch.raw_payload,
+                    corp,
+                    batch.warnings,
+                )
+
+        if newest_visible_unusable is not None:
+            warnings = list(newest_visible_unusable.warnings)
+            warnings.append(
+                f"{corp.stock_code}: no usable economic-class stock-total period was "
+                "available; latest visible evidence retained fail-closed"
+            )
+            return StockTotalsBatch(
+                newest_visible_unusable.frame,
+                {
+                    "selected": newest_visible_unusable.raw_payload,
+                    "attempts": attempts,
+                },
+                corp,
+                tuple(warnings),
+            )
+
+        raise ValueError(
+            f"No OpenDART stock totals were available by {evaluation_date} "
+            f"for {corp.stock_code}"
         )
 
 
