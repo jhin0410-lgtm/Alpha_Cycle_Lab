@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from alpha_cycle import correction_lineage_cli as cli
 
@@ -108,7 +109,7 @@ def test_load_correction_lineage_filters_ticker_and_latest(tmp_path: Path) -> No
 
 def test_main_prints_korean_lineage_without_manual_path_join(
     tmp_path: Path,
-    capsys: object,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     status_path = _write_live_artifacts(tmp_path)
 
@@ -123,7 +124,7 @@ def test_main_prints_korean_lineage_without_manual_path_join(
 
 def test_main_reports_missing_decision_directory(
     tmp_path: Path,
-    capsys: object,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     status_path = tmp_path / "latest_run.json"
     status_path.write_text(
