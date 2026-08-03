@@ -34,6 +34,9 @@ from alpha_cycle.intelligence.decision_scoring import (
     DecisionPolicy,
     build_report,
 )
+from alpha_cycle.intelligence.disclosure_provenance import (
+    normalize_disclosure_tables,
+)
 from alpha_cycle.intelligence.valuation import (
     append_valuation_report,
     apply_valuation_to_scorecards,
@@ -119,6 +122,24 @@ def align_valuation_metrics_to_decisions(
 def _price_lookup(market_context: pd.DataFrame) -> dict[str, object]:
     raw = market_context.set_index("ticker")["last_price"].to_dict()
     return {str(key).zfill(6): value for key, value in raw.items()}
+
+
+def _normalize_disclosure_provenance(
+    snapshot: InvestmentDecisionSnapshot,
+) -> InvestmentDecisionSnapshot:
+    events, catalysts, summary, provenance_warnings = normalize_disclosure_tables(
+        snapshot.disclosure_events,
+        snapshot.catalysts,
+        snapshot.disclosure_summary,
+    )
+    warnings = tuple(dict.fromkeys([*snapshot.warnings, *provenance_warnings]))
+    return replace(
+        snapshot,
+        disclosure_events=events,
+        catalysts=catalysts,
+        disclosure_summary=summary,
+        warnings=warnings,
+    )
 
 
 def _attach_valuation_context(
@@ -243,6 +264,7 @@ def build_investment_decision_snapshot(
         policy=policy,
         now=now,
     )
+    base = _normalize_disclosure_provenance(base)
     if valuation_snapshot is None:
         return _attach_execution_playbook(base)
 
@@ -286,6 +308,7 @@ def build_investment_decision_snapshot(
         )
     if "consensus_not_available" not in warnings:
         warnings.append("consensus_not_available")
+    warnings = list(dict.fromkeys(warnings))
 
     report = build_report(
         base.evaluation_date,
