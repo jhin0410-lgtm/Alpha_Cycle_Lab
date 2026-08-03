@@ -6,7 +6,6 @@ import argparse
 import json
 import sys
 from dataclasses import asdict, dataclass
-from datetime import datetime
 from pathlib import Path
 
 from alpha_cycle.providers.kiwoom_rest import (
