@@ -37,6 +37,7 @@ class BridgeProbeReport:
     login_event_code: int | None
     connected: bool
     service_registration_verified: bool
+    market_data_session_ready: bool
     market_data_enabled: bool
     account_api_enabled: bool
     order_api_enabled: bool
@@ -55,6 +56,7 @@ def _base_report(
     login_event_code: int | None = None,
     connected: bool = False,
     service_registration_verified: bool = False,
+    market_data_session_ready: bool = False,
     market_data_enabled: bool = False,
     failure: str | None = None,
 ) -> BridgeProbeReport:
@@ -72,6 +74,7 @@ def _base_report(
         login_event_code=login_event_code,
         connected=connected,
         service_registration_verified=service_registration_verified,
+        market_data_session_ready=market_data_session_ready,
         market_data_enabled=market_data_enabled,
         account_api_enabled=False,
         order_api_enabled=False,
@@ -165,6 +168,7 @@ def run_probe(*, mode: str, timeout_seconds: int) -> BridgeProbeReport:
             control_created=True,
             connected=connected,
             service_registration_verified=False,
+            market_data_session_ready=False,
             market_data_enabled=False,
         )
 
@@ -254,7 +258,8 @@ def run_probe(*, mode: str, timeout_seconds: int) -> BridgeProbeReport:
         login_event_code=login_event_code,
         connected=True,
         service_registration_verified=True,
-        market_data_enabled=True,
+        market_data_session_ready=True,
+        market_data_enabled=False,
     )
 
 
@@ -311,6 +316,11 @@ def main(argv: list[str] | None = None) -> int:
             f"{report.service_registration_verified}",
             file=stream,
         )
+        print(
+            f"market data session ready: {report.market_data_session_ready}",
+            file=stream,
+        )
+        print(f"market data adapter enabled: {report.market_data_enabled}", file=stream)
         print("account API: disabled", file=stream)
         print("order API: disabled", file=stream)
         if report.failure:
