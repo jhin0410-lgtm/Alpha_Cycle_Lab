@@ -77,14 +77,18 @@ def _title_correction_flag(report_name: str) -> bool:
 
 
 def _normalized_report_name(report_name: str) -> str:
-    return re.sub(r"[^0-9a-z가-힣]+", "", _base_report_name(report_name).casefold())
+    base = _base_report_name(report_name).casefold()
+    return re.sub(r"[^0-9a-z가-힣]+", "", base)
 
 
 def _family_key(report_name: str) -> str:
     return _normalized_report_name(report_name)
 
 
-def _normalized_flag(raw: Mapping[str, object], report_name: str) -> tuple[bool, str, bool]:
+def _normalized_flag(
+    raw: Mapping[str, object],
+    report_name: str,
+) -> tuple[bool, str, bool]:
     explicit = _optional_bool(raw.get("is_correction"))
     if report_name:
         title_flag = _title_correction_flag(report_name)
@@ -110,7 +114,9 @@ def _validate_events(events: pd.DataFrame) -> pd.DataFrame:
     result["rcept_no"] = result["rcept_no"].astype("string").str.strip()
     if result["rcept_no"].duplicated().any():
         raise ValueError("Disclosure receipt numbers must be unique")
-    result["report_name"] = result["report_name"].astype("string").fillna("").str.strip()
+    result["report_name"] = (
+        result["report_name"].astype("string").fillna("").str.strip()
+    )
     result["receipt_date"] = pd.to_datetime(
         result["receipt_date"], errors="raise"
     ).dt.date
@@ -147,16 +153,23 @@ def _add_materiality(events: pd.DataFrame) -> pd.DataFrame:
         is_correction = bool(raw.get("is_correction", False))
         priority = str(raw.get("priority", "low")).strip().casefold()
         is_noise = bool(raw.get("is_noise", True))
-        material = is_correction and not is_noise and priority in _MATERIAL_PRIORITIES
+        material = (
+            is_correction
+            and not is_noise
+            and priority in _MATERIAL_PRIORITIES
+        )
         materiality_source = "classifier" if material else "not_material"
-        normalized_name = _normalized_report_name(str(raw.get("report_name", "")))
+        normalized_name = _normalized_report_name(
+            str(raw.get("report_name", ""))
+        )
         financing_override = is_correction and any(
-            pattern in normalized_name for pattern in _MATERIAL_FINANCING_PATTERNS
+            pattern in normalized_name
+            for pattern in _MATERIAL_FINANCING_PATTERNS
         )
         if financing_override:
             raw["category"] = "financing"
             raw["priority"] = "high"
-            raw["material_score"] = max(int(raw.get("material_score", 0) or 0), 4)
+            raw["material_score"] = 4
             raw["is_noise"] = False
             material = True
             materiality_source = "financing_title_override"
@@ -236,13 +249,22 @@ def _add_lineage(events: pd.DataFrame, *, lineage_days: int) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
-def _normalized_catalysts(catalysts: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+def _normalized_catalysts(
+    catalysts: pd.DataFrame,
+    events: pd.DataFrame,
+) -> pd.DataFrame:
     context = events.loc[:, ["ticker", "rcept_no", *_PROVENANCE_COLUMNS]].copy()
     result = catalysts.drop(
-        columns=[column for column in _PROVENANCE_COLUMNS if column in catalysts.columns]
+        columns=[
+            column
+            for column in _PROVENANCE_COLUMNS
+            if column in catalysts.columns
+        ]
     ).copy()
     if not result.empty:
-        result["ticker"] = result["ticker"].astype("string").str.strip().str.zfill(6)
+        result["ticker"] = (
+            result["ticker"].astype("string").str.strip().str.zfill(6)
+        )
         result["rcept_no"] = result["rcept_no"].astype("string").str.strip()
         result["_source_order"] = range(len(result))
         result = result.merge(
@@ -260,32 +282,66 @@ def _normalized_catalysts(catalysts: pd.DataFrame, events: pd.DataFrame) -> pd.D
             if column not in result.columns:
                 result[column] = pd.Series(dtype=context[column].dtype)
 
-    promoted = events.loc[events["correction_materiality_source"].eq(
-        "financing_title_override"
-    )].copy()
+    promoted = events.loc[
+        events["correction_materiality_source"].eq(
+            "financing_title_override"
+        )
+    ].copy()
     if "is_recent" in promoted.columns:
         promoted = promoted.loc[promoted["is_recent"].astype(bool)]
     existing_receipts = (
-        set(result["rcept_no"].astype(str)) if "rcept_no" in result.columns else set()
+        set(result["rcept_no"].astype(str))
+        if "rcept_no" in result.columns
+        else set()
     )
-    promoted = promoted.loc[~promoted["rcept_no"].astype(str).isin(existing_receipts)]
+    promoted = promoted.loc[
+        ~promoted["rcept_no"].astype(str).isin(existing_receipts)
+    ]
     if not promoted.empty:
         columns = list(dict.fromkeys([*result.columns, *promoted.columns]))
         result = pd.concat(
-            [result.reindex(columns=columns), promoted.reindex(columns=columns)],
+            [
+                result.reindex(columns=columns),
+                promoted.reindex(columns=columns),
+            ],
             ignore_index=True,
             sort=False,
         )
+
+    if {
+        "is_correction",
+        "is_latest_in_correction_chain",
+    }.issubset(result.columns):
+        correction = result["is_correction"].map(_optional_bool).fillna(False)
+        latest = (
+            result["is_latest_in_correction_chain"]
+            .map(_optional_bool)
+            .fillna(True)
+        )
+        result = result.loc[(~correction.astype(bool)) | latest.astype(bool)]
+
     sort_columns = [
-        column for column in ("material_score", "receipt_date", "ticker") if column in result.columns
+        column
+        for column in ("material_score", "receipt_date", "ticker")
+        if column in result.columns
     ]
     if sort_columns:
-        ascending = [False if column in {"material_score", "receipt_date"} else True for column in sort_columns]
-        result = result.sort_values(sort_columns, ascending=ascending, kind="stable")
+        ascending = [
+            column not in {"material_score", "receipt_date"}
+            for column in sort_columns
+        ]
+        result = result.sort_values(
+            sort_columns,
+            ascending=ascending,
+            kind="stable",
+        )
     return result.reset_index(drop=True)
 
 
-def _normalized_summary(summary: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+def _normalized_summary(
+    summary: pd.DataFrame,
+    events: pd.DataFrame,
+) -> pd.DataFrame:
     result = summary.copy()
     if "ticker" not in result.columns:
         result["ticker"] = pd.Series(dtype="string")
@@ -294,7 +350,10 @@ def _normalized_summary(summary: pd.DataFrame, events: pd.DataFrame) -> pd.DataF
         events.groupby("ticker", sort=True)
         .agg(
             correction_disclosures=("is_correction", "sum"),
-            material_correction_disclosures=("is_material_correction", "sum"),
+            material_correction_disclosures=(
+                "is_material_correction",
+                "sum",
+            ),
             correction_flag_conflicts=("correction_flag_conflict", "sum"),
             orphan_corrections=(
                 "correction_lineage_status",
@@ -315,12 +374,16 @@ def _normalized_summary(summary: pd.DataFrame, events: pd.DataFrame) -> pd.DataF
             if column in result.columns
         ]
     )
-    return result.merge(
-        diagnostics,
-        on="ticker",
-        how="outer",
-        validate="one_to_one",
-    ).sort_values("ticker", kind="stable").reset_index(drop=True)
+    return (
+        result.merge(
+            diagnostics,
+            on="ticker",
+            how="outer",
+            validate="one_to_one",
+        )
+        .sort_values("ticker", kind="stable")
+        .reset_index(drop=True)
+    )
 
 
 def normalize_disclosure_tables(
@@ -342,7 +405,9 @@ def normalize_disclosure_tables(
     normalized_summary = _normalized_summary(summary, normalized_events)
     conflict_count = int(normalized_events["correction_flag_conflict"].sum())
     orphan_count = int(
-        normalized_events["correction_lineage_status"].eq("orphan_correction").sum()
+        normalized_events[
+            "correction_lineage_status"
+        ].eq("orphan_correction").sum()
     )
     warnings: list[str] = []
     if conflict_count:
