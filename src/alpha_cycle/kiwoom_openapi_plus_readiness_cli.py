@@ -152,7 +152,11 @@ def _check_registration(runner: CommandRunner) -> tuple[bool, str | None]:
             continue
         combined = f"{result.stdout}\n{result.stderr}".casefold()
         if result.returncode == 0 and "khopenapi" in combined:
-            evidence = "progid" if OPENAPI_PROGID.casefold() in combined else "wow6432_clsid"
+            evidence = (
+                "progid"
+                if OPENAPI_PROGID.casefold() in combined
+                else "wow6432_clsid"
+            )
             return True, evidence
     return False, None
 
@@ -167,7 +171,9 @@ def inspect_openapi_plus(
 ) -> KiwoomOpenApiPlusReport:
     values = os.environ if environ is None else environ
     resolved_system = platform.system() if system_name is None else system_name
-    resolved_bitness = struct.calcsize("P") * 8 if python_bitness is None else python_bitness
+    resolved_bitness = (
+        struct.calcsize("P") * 8 if python_bitness is None else python_bitness
+    )
     warnings: list[str] = []
 
     if resolved_system != "Windows":
@@ -221,7 +227,8 @@ def inspect_openapi_plus(
             account_api_enabled=False,
             order_api_enabled=False,
             warnings=(
-                "No OpenAPI+ installation directory was found. Use --install-root when installed outside C:\\OpenAPI.",
+                "No OpenAPI+ installation directory was found. "
+                "Use --install-root when installed outside C:\\OpenAPI.",
             ),
         )
 
@@ -245,7 +252,9 @@ def inspect_openapi_plus(
             market_data_enabled=False,
             account_api_enabled=False,
             order_api_enabled=False,
-            warnings=("KHOpenAPI.ocx was not found below the installation directory.",),
+            warnings=(
+                "KHOpenAPI.ocx was not found below the installation directory.",
+            ),
         )
 
     registered, registry_evidence = _check_registration(runner or _default_runner)
@@ -261,11 +270,14 @@ def inspect_openapi_plus(
 
     if not registered:
         status = "ocx_not_registered"
-        warnings.append("The OpenAPI+ COM registration was not found in the Windows registry.")
+        warnings.append(
+            "The OpenAPI+ COM registration was not found in the Windows registry."
+        )
     elif bridge_required:
         status = "passed_bridge_required"
         warnings.append(
-            "The installed OCX and current Python process have different bitness; use a separate compatible bridge process."
+            "The installed OCX and current Python process have different bitness; "
+            "use a separate compatible bridge process."
         )
     elif direct_compatible is None:
         status = "passed_unverified_bitness"
@@ -274,9 +286,12 @@ def inspect_openapi_plus(
         status = "passed"
 
     if not koa_studio:
-        warnings.append("KOA Studio was not found; it is optional and distributed separately.")
+        warnings.append(
+            "KOA Studio was not found; it is optional and distributed separately."
+        )
     warnings.append(
-        "Installation inspection does not prove OpenAPI+ service registration or a successful Kiwoom login."
+        "Installation inspection does not prove OpenAPI+ service registration "
+        "or a successful Kiwoom login."
     )
 
     return KiwoomOpenApiPlusReport(
@@ -311,7 +326,10 @@ def _write_report(report: KiwoomOpenApiPlusReport, output: Path) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-kiwoom-openapi-plus-ready",
-        description="Inspect the installed Kiwoom OpenAPI+ COM/OCX module without login or credentials",
+        description=(
+            "Inspect the installed Kiwoom OpenAPI+ COM/OCX module without login "
+            "or credentials"
+        ),
     )
     parser.add_argument("--install-root", type=Path)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT_PATH)
