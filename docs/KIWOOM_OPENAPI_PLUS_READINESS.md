@@ -48,36 +48,99 @@ process.
 
 The OpenAPI+ installation is valid, but the OCX architecture and the repository's
 current Python process have different bitness. The correct integration is a
-separate compatible Windows bridge process that communicates with the main
-pipeline through a narrow local protocol. The main environment should not be
-replaced or downgraded merely to host the OCX.
+separate compatible Windows bridge process. The main environment is not replaced
+or downgraded merely to host the OCX.
 
-### `ocx_not_registered`
+## Isolated x86 bridge
 
-The file exists but Windows COM registration could not be found. Reinstalling or
-repairing the official OpenAPI+ module may be required.
+When the installation check returns `passed_bridge_required`, configure the bridge:
 
-### `installation_not_found` / `ocx_not_found`
+```powershell
+.\scripts\setup_kiwoom_openapi_plus_bridge.cmd -InstallPython
+```
 
-The default directory was not found or does not contain `KHOpenAPI.ocx`. Supply
-`-InstallRoot` when the official module was installed in another directory.
+The command:
+
+1. Locates an existing Python 3.10, 3.11, or 3.12 x86 interpreter.
+2. With `-InstallPython`, may install official Python 3.12 x86 through `winget` when
+   no compatible interpreter is present.
+3. Creates `.venv-kiwoom-x86` without changing the main project environment.
+4. Installs pinned Windows x86 PyQt5 ActiveX dependencies only.
+5. Creates `KHOPENAPI.KHOpenAPICtrl.1` without opening the login window.
+6. Leaves market-data, account, and order features disabled.
+
+The isolated runtime intentionally does not install the main package, NumPy, or
+pandas. It exists only to host the 32-bit ActiveX control.
+
+Recheck the configured bridge without login:
+
+```powershell
+.\scripts\check_kiwoom_openapi_plus_bridge.cmd
+```
+
+Expected status:
+
+```text
+KIWOOM OPENAPI+ BRIDGE: PASS
+status: passed_environment
+ActiveX control created: True
+connected: False
+account API: disabled
+order API: disabled
+```
+
+## Interactive login probe
+
+After the environment check passes, verify OpenAPI+ service registration and the
+login event:
+
+```powershell
+.\scripts\login_probe_kiwoom_openapi_plus.cmd
+```
+
+The official Kiwoom login window opens. The bridge calls only:
+
+- `CommConnect()`
+- `OnEventConnect`
+- `GetConnectState()`
+
+It does not call account-information or order functions. Login credentials are
+handled by the official Kiwoom window and are not read or stored by the project.
+A successful result is:
+
+```text
+KIWOOM OPENAPI+ BRIDGE: PASS
+status: passed_login
+connected: True
+service registration verified: True
+account API: disabled
+order API: disabled
+```
+
+The next integration gate is source-provenanced, read-only market data. It is not
+enabled until the login probe succeeds.
 
 ## Deliberate limits
 
-This check does not prove:
+The installation and bridge checks do not enable:
 
-- OpenAPI+ service-use registration on the Kiwoom account
-- successful real or mock login
-- certificate or account-password availability
-- market-data permission
-- account or order permission
+- account-number lookup
+- holdings or balance collection
+- certificate or account-password collection
+- order placement, cancellation, or modification
+- automatic replacement of TossInvest evidence
 
-Those require an interactive OpenAPI+ bridge and explicit user login. The first
-bridge milestone will remain read-only and collect only source-provenanced market
-and investor-flow evidence. Account queries and order submission stay disabled.
+The bridge environment result is written locally to:
 
-The local inspection result is written to:
+```text
+data/private/live-research/kiwoom_openapi_plus_bridge_readiness.json
+```
+
+The earlier installation-only result remains at:
 
 ```text
 data/private/live-research/kiwoom_openapi_plus_readiness.json
 ```
+
+PyQt5 is installed only in the isolated x86 environment. Its upstream GPL or
+commercial licensing terms apply independently of the Alpha Cycle Lab repository.
