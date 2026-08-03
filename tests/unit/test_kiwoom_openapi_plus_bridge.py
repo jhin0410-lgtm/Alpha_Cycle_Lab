@@ -133,6 +133,7 @@ def test_environment_probe_creates_control_without_login(
     assert report.control_created is True
     assert report.login_attempted is False
     assert report.connected is False
+    assert report.market_data_session_ready is False
     assert report.market_data_enabled is False
 
 
@@ -150,7 +151,8 @@ def test_login_probe_verifies_connection_without_account_access(
     assert report.login_event_code == 0
     assert report.connected is True
     assert report.service_registration_verified is True
-    assert report.market_data_enabled is True
+    assert report.market_data_session_ready is True
+    assert report.market_data_enabled is False
     assert report.account_api_enabled is False
     assert report.order_api_enabled is False
 
