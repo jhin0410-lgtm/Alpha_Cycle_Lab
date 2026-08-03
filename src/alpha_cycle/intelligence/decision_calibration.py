@@ -113,12 +113,7 @@ def calibrate_decision_scorecards(
             gaps.append("정정공시 본문·변경 수치·투자 영향 미분석")
         valuation_status = str(row.get("valuation_status", "not_available"))
         if valuation_status == "insufficient_peer_universe":
-            peer_count = row.get("valuation_peer_count")
-            peer_minimum = row.get("valuation_peer_minimum")
-            gaps.append(
-                "상대 밸류에이션 비교기업 수 부족"
-                f" ({peer_count}/{peer_minimum})"
-            )
+            gaps.append("상대 밸류에이션 비교기업 수 부족")
         row["review_priority"] = _calibrated_review_priority(
             row,
             events,
