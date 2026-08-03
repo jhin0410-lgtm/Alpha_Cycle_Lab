@@ -85,7 +85,12 @@ def load_correction_lineage(
 
     events = pd.read_csv(
         events_path,
-        dtype={"ticker": "string", "rcept_no": "string"},
+        dtype={
+            "ticker": "string",
+            "rcept_no": "string",
+            "correction_parent_rcept_no": "string",
+            "correction_chain_root_rcept_no": "string",
+        },
     )
     required = {"ticker", "receipt_date", "report_name", "is_correction"}
     missing = sorted(required - set(events.columns))
@@ -125,9 +130,9 @@ def load_correction_lineage(
 
 def _render(frame: pd.DataFrame, output_format: str) -> str:
     if output_format == "json":
-        return frame.to_json(orient="records", force_ascii=False, indent=2)
+        return cast(str, frame.to_json(orient="records", force_ascii=False, indent=2))
     if output_format == "csv":
-        return frame.to_csv(index=False)
+        return cast(str, frame.to_csv(index=False))
     return frame.to_string(index=False, na_rep="")
 
 
@@ -172,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(_render(frame, args.format))
         return 0
-    except (ValueError, OSError, TypeError, json.JSONDecodeError) as exc:
+    except (ValueError, OSError, TypeError) as exc:
         print(f"correction-lineage error: {exc}", file=sys.stderr)
         return 2
 
