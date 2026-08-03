@@ -45,15 +45,11 @@ def _optional_bool(value: object) -> bool | None:
     if isinstance(value, bool):
         return value
     if isinstance(value, int):
-        if value in {0, 1}:
-            return bool(value)
-        return None
+        return bool(value) if value in {0, 1} else None
     if isinstance(value, float):
         if pd.isna(value):
             return None
-        if value in {0.0, 1.0}:
-            return bool(int(value))
-        return None
+        return bool(int(value)) if value in {0.0, 1.0} else None
     text = str(value).strip().casefold()
     if text in _TRUE_VALUES:
         return True
@@ -308,17 +304,14 @@ def _normalized_catalysts(
             sort=False,
         )
 
-    if {
-        "is_correction",
-        "is_latest_in_correction_chain",
-    }.issubset(result.columns):
-        correction = result["is_correction"].map(_optional_bool).fillna(False)
+    if "is_latest_in_correction_chain" in result.columns:
         latest = (
             result["is_latest_in_correction_chain"]
             .map(_optional_bool)
             .fillna(True)
+            .astype(bool)
         )
-        result = result.loc[(~correction.astype(bool)) | latest.astype(bool)]
+        result = result.loc[latest]
 
     sort_columns = [
         column
