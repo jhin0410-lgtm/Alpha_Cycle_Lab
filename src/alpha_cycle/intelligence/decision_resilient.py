@@ -17,6 +17,10 @@ from alpha_cycle.intelligence.decision import (
 from alpha_cycle.intelligence.decision import (
     build_investment_decision_snapshot as _build_investment_decision_snapshot,
 )
+from alpha_cycle.intelligence.decision_calibration import (
+    calibrate_decision_scorecards,
+    clarify_report_coverage,
+)
 from alpha_cycle.intelligence.decision_playbook import (
     append_execution_playbook_report,
     build_decision_records,
@@ -110,16 +114,28 @@ def _price_lookup(market_context: pd.DataFrame) -> dict[str, object]:
     return {str(key).zfill(6): value for key, value in raw.items()}
 
 
-def _attach_execution_playbook(
+def _calibrated_playbook_scorecards(
     snapshot: InvestmentDecisionSnapshot,
-) -> InvestmentDecisionSnapshot:
-    scorecards = enrich_scorecards_with_playbook(
-        snapshot.scorecards,
+    scorecards: pd.DataFrame,
+) -> pd.DataFrame:
+    enriched = enrich_scorecards_with_playbook(
+        scorecards,
         snapshot.financial_kpis,
         snapshot.catalysts,
         snapshot.market_context,
         evaluation_date=snapshot.evaluation_date,
     )
+    return calibrate_decision_scorecards(
+        enriched,
+        snapshot.catalysts,
+        evaluation_date=snapshot.evaluation_date,
+    )
+
+
+def _attach_execution_playbook(
+    snapshot: InvestmentDecisionSnapshot,
+) -> InvestmentDecisionSnapshot:
+    scorecards = _calibrated_playbook_scorecards(snapshot, snapshot.scorecards)
     decision_records = build_decision_records(
         scorecards,
         evaluation_date=snapshot.evaluation_date,
@@ -134,6 +150,7 @@ def _attach_execution_playbook(
         snapshot.market_context,
         snapshot.warnings,
     )
+    report = clarify_report_coverage(report)
     if snapshot.valuation_snapshot_id is not None:
         report = append_valuation_report(
             report,
@@ -192,13 +209,7 @@ def build_investment_decision_snapshot(
         valuation_metrics,
         decision_policy,
     )
-    scorecards = enrich_scorecards_with_playbook(
-        scorecards,
-        base.financial_kpis,
-        base.catalysts,
-        base.market_context,
-        evaluation_date=base.evaluation_date,
-    )
+    scorecards = _calibrated_playbook_scorecards(base, scorecards)
 
     decision_records = build_decision_records(
         scorecards,
@@ -228,6 +239,7 @@ def build_investment_decision_snapshot(
         base.market_context,
         tuple(warnings),
     )
+    report = clarify_report_coverage(report)
     report = append_valuation_report(report, valuation_metrics, financial_history)
     report = append_execution_playbook_report(report, scorecards)
 
