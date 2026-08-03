@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 from typing import cast
 
 import pandas as pd
@@ -15,6 +15,11 @@ _EXTERNAL_EVIDENCE_GAPS = (
     "기관·외국인 수급 데이터 미연결",
     "향후 촉매의 확정 일정·시장 기대치 데이터 미연결",
     "글로벌 비교기업과 과거 밸류에이션 밴드 미연결",
+)
+_VALUATION_GAP_PREFIXES = (
+    "밸류에이션 미평가",
+    "밸류에이션 근거 불완전:",
+    "상대 밸류에이션 비교기업 수 부족",
 )
 
 
@@ -52,20 +57,30 @@ def _ticker_events(
     ]
 
 
+def _receipt_date(value: object) -> date | None:
+    if value is None or value is pd.NA or value is pd.NaT:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()
+    if len(text) == 8 and text.isdigit():
+        text = f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
 def _event_age_days(event: Mapping[str, object], evaluation_date: date) -> int | None:
+    receipt_date = _receipt_date(event.get("receipt_date"))
+    if receipt_date is not None:
+        return (evaluation_date - receipt_date).days
     raw_age = event.get("age_days")
     if isinstance(raw_age, (int, float)) and not isinstance(raw_age, bool):
         return int(raw_age)
-    raw_date = event.get("receipt_date")
-    try:
-        receipt_date = (
-            raw_date
-            if isinstance(raw_date, date)
-            else date.fromisoformat(str(raw_date))
-        )
-    except ValueError:
-        return None
-    return (evaluation_date - receipt_date).days
+    return None
 
 
 def _calibrated_review_priority(
@@ -90,6 +105,41 @@ def _calibrated_review_priority(
     return "low"
 
 
+def _whole_number(value: object) -> int | None:
+    converted = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(converted):
+        return None
+    return int(converted)
+
+
+def _calibrated_evidence_gaps(
+    row: Mapping[str, object],
+    events: list[Mapping[str, object]],
+) -> list[str]:
+    gaps = _decode_list(row.get("evidence_gaps"))
+    gaps.extend(_EXTERNAL_EVIDENCE_GAPS)
+    if any(bool(event.get("is_correction", False)) for event in events):
+        gaps.append("정정공시 본문·변경 수치·투자 영향 미분석")
+
+    valuation_status = str(row.get("valuation_status", "not_available"))
+    if valuation_status == "insufficient_peer_universe":
+        gaps = [
+            item
+            for item in gaps
+            if not item.startswith(_VALUATION_GAP_PREFIXES)
+        ]
+        peer_count = _whole_number(row.get("valuation_peer_count"))
+        peer_minimum = _whole_number(row.get("valuation_peer_minimum"))
+        if peer_count is not None and peer_minimum is not None:
+            gaps.append(
+                "상대 밸류에이션 비교기업 수 부족 "
+                f"({peer_count}개/최소 {peer_minimum}개)"
+            )
+        else:
+            gaps.append("상대 밸류에이션 비교기업 수 부족")
+    return gaps
+
+
 def calibrate_decision_scorecards(
     scorecards: pd.DataFrame,
     catalysts: pd.DataFrame,
@@ -107,19 +157,14 @@ def calibrate_decision_scorecards(
         row = {str(key): value for key, value in raw.items()}
         ticker = str(row["ticker"])
         events = _ticker_events(catalysts, ticker)
-        gaps = _decode_list(row.get("evidence_gaps"))
-        gaps.extend(_EXTERNAL_EVIDENCE_GAPS)
-        if any(bool(event.get("is_correction", False)) for event in events):
-            gaps.append("정정공시 본문·변경 수치·투자 영향 미분석")
-        valuation_status = str(row.get("valuation_status", "not_available"))
-        if valuation_status == "insufficient_peer_universe":
-            gaps.append("상대 밸류에이션 비교기업 수 부족")
         row["review_priority"] = _calibrated_review_priority(
             row,
             events,
             evaluation_date,
         )
-        row["evidence_gaps"] = _json_list(gaps)
+        row["evidence_gaps"] = _json_list(
+            _calibrated_evidence_gaps(row, events)
+        )
         row["evidence_scope_status"] = "partial_external_data"
         rows.append(row)
     return pd.DataFrame(rows).sort_values("ticker", kind="stable").reset_index(drop=True)
@@ -149,7 +194,53 @@ def clarify_report_coverage(report: str) -> str:
     return clarified
 
 
+def clarify_valuation_report(
+    report: str,
+    valuation_metrics: pd.DataFrame,
+) -> str:
+    """Replace generic score language with the actual peer-universe limitation."""
+
+    if valuation_metrics.empty or "ticker" not in valuation_metrics.columns:
+        return report
+    lookup = {
+        str(raw["ticker"]).zfill(6): {str(key): value for key, value in raw.items()}
+        for raw in valuation_metrics.to_dict(orient="records")
+    }
+    lines: list[str] = []
+    in_valuation_section = False
+    current_ticker: str | None = None
+    generic_explanation = "- 점수는 완전한 기업끼리의 상대순위를 중립값으로 축소한 값"
+    for line in report.splitlines():
+        if line == "## 밸류에이션 및 다기간 실적":
+            in_valuation_section = True
+            current_ticker = None
+        elif line.startswith("## ") and in_valuation_section:
+            in_valuation_section = False
+            current_ticker = None
+        elif in_valuation_section and line.startswith("### "):
+            current_ticker = line.removeprefix("### ").strip().zfill(6)
+
+        if (
+            in_valuation_section
+            and line == generic_explanation
+            and current_ticker in lookup
+        ):
+            metric = lookup[current_ticker]
+            if str(metric.get("valuation_status")) == "insufficient_peer_universe":
+                peer_count = _whole_number(metric.get("valuation_peer_count"))
+                peer_minimum = _whole_number(metric.get("valuation_peer_minimum"))
+                if peer_count is not None and peer_minimum is not None:
+                    lines.append(
+                        "- 상대 점수 미산출: 비교기업 "
+                        f"{peer_count}개 / 최소 {peer_minimum}개 필요"
+                    )
+                    continue
+        lines.append(line)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 __all__ = [
     "calibrate_decision_scorecards",
     "clarify_report_coverage",
+    "clarify_valuation_report",
 ]
