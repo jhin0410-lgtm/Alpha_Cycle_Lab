@@ -15,12 +15,21 @@ _CORRECTION_PREFIX = re.compile(
 )
 _TRUE_VALUES = frozenset({"1", "true", "t", "yes", "y", "예", "정정"})
 _FALSE_VALUES = frozenset({"0", "false", "f", "no", "n", "아니오", "일반"})
+_MATERIAL_PRIORITIES = frozenset({"high", "critical"})
+_MATERIAL_FINANCING_PATTERNS = (
+    "증권신고서지분증권",
+    "증권예탁증권dr발행결정",
+    "증권예탁증권발행결정",
+    "해외증권시장주권등상장결정",
+)
 _PROVENANCE_COLUMNS = (
     "is_correction",
     "correction_flag_source",
     "correction_flag_conflict",
     "correction_base_report_name",
     "correction_family_key",
+    "is_material_correction",
+    "correction_materiality_source",
     "correction_parent_rcept_no",
     "correction_chain_root_rcept_no",
     "correction_chain_order",
@@ -67,12 +76,19 @@ def _title_correction_flag(report_name: str) -> bool:
     return _base_report_name(report_name) != report_name.strip()
 
 
-def _family_key(report_name: str) -> str:
+def _normalized_report_name(report_name: str) -> str:
     base = _base_report_name(report_name).casefold()
     return re.sub(r"[^0-9a-z가-힣]+", "", base)
 
 
-def _normalized_flag(raw: Mapping[str, object], report_name: str) -> tuple[bool, str, bool]:
+def _family_key(report_name: str) -> str:
+    return _normalized_report_name(report_name)
+
+
+def _normalized_flag(
+    raw: Mapping[str, object],
+    report_name: str,
+) -> tuple[bool, str, bool]:
     explicit = _optional_bool(raw.get("is_correction"))
     if report_name:
         title_flag = _title_correction_flag(report_name)
@@ -98,7 +114,9 @@ def _validate_events(events: pd.DataFrame) -> pd.DataFrame:
     result["rcept_no"] = result["rcept_no"].astype("string").str.strip()
     if result["rcept_no"].duplicated().any():
         raise ValueError("Disclosure receipt numbers must be unique")
-    result["report_name"] = result["report_name"].astype("string").fillna("").str.strip()
+    result["report_name"] = (
+        result["report_name"].astype("string").fillna("").str.strip()
+    )
     result["receipt_date"] = pd.to_datetime(
         result["receipt_date"], errors="raise"
     ).dt.date
@@ -122,6 +140,41 @@ def _add_flags(events: pd.DataFrame) -> pd.DataFrame:
                 "correction_family_key": _family_key(report_name),
             }
         )
+        rows.append(raw)
+    return pd.DataFrame(rows)
+
+
+def _add_materiality(events: pd.DataFrame) -> pd.DataFrame:
+    """Promote omitted financing corrections and record the materiality basis."""
+
+    rows: list[dict[str, object]] = []
+    for raw_value in events.to_dict(orient="records"):
+        raw = {str(key): value for key, value in raw_value.items()}
+        is_correction = bool(raw.get("is_correction", False))
+        priority = str(raw.get("priority", "low")).strip().casefold()
+        is_noise = bool(raw.get("is_noise", True))
+        material = (
+            is_correction
+            and not is_noise
+            and priority in _MATERIAL_PRIORITIES
+        )
+        materiality_source = "classifier" if material else "not_material"
+        normalized_name = _normalized_report_name(
+            str(raw.get("report_name", ""))
+        )
+        financing_override = is_correction and any(
+            pattern in normalized_name
+            for pattern in _MATERIAL_FINANCING_PATTERNS
+        )
+        if financing_override:
+            raw["category"] = "financing"
+            raw["priority"] = "high"
+            raw["material_score"] = 4
+            raw["is_noise"] = False
+            material = True
+            materiality_source = "financing_title_override"
+        raw["is_material_correction"] = material
+        raw["correction_materiality_source"] = materiality_source
         rows.append(raw)
     return pd.DataFrame(rows)
 
@@ -196,32 +249,99 @@ def _add_lineage(events: pd.DataFrame, *, lineage_days: int) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 
-def _normalized_catalysts(catalysts: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+def _normalized_catalysts(
+    catalysts: pd.DataFrame,
+    events: pd.DataFrame,
+) -> pd.DataFrame:
     context = events.loc[:, ["ticker", "rcept_no", *_PROVENANCE_COLUMNS]].copy()
-    if catalysts.empty:
+    result = catalysts.drop(
+        columns=[
+            column
+            for column in _PROVENANCE_COLUMNS
+            if column in catalysts.columns
+        ]
+    ).copy()
+    if not result.empty:
+        result["ticker"] = (
+            result["ticker"].astype("string").str.strip().str.zfill(6)
+        )
+        result["rcept_no"] = result["rcept_no"].astype("string").str.strip()
+        result["_source_order"] = range(len(result))
+        result = result.merge(
+            context,
+            on=["ticker", "rcept_no"],
+            how="left",
+            validate="many_to_one",
+        )
+        result = result.sort_values("_source_order", kind="stable").drop(
+            columns="_source_order"
+        )
+    else:
         result = catalysts.copy()
         for column in _PROVENANCE_COLUMNS:
             if column not in result.columns:
                 result[column] = pd.Series(dtype=context[column].dtype)
-        return result
-    result = catalysts.drop(
-        columns=[column for column in _PROVENANCE_COLUMNS if column in catalysts.columns]
-    ).copy()
-    result["ticker"] = result["ticker"].astype("string").str.strip().str.zfill(6)
-    result["rcept_no"] = result["rcept_no"].astype("string").str.strip()
-    result["_source_order"] = range(len(result))
-    result = result.merge(
-        context,
-        on=["ticker", "rcept_no"],
-        how="left",
-        validate="many_to_one",
+
+    promoted = events.loc[
+        events["correction_materiality_source"].eq(
+            "financing_title_override"
+        )
+    ].copy()
+    if "is_recent" in promoted.columns:
+        promoted = promoted.loc[promoted["is_recent"].astype(bool)]
+    existing_receipts = (
+        set(result["rcept_no"].astype(str))
+        if "rcept_no" in result.columns
+        else set()
     )
-    return result.sort_values("_source_order", kind="stable").drop(
-        columns="_source_order"
-    ).reset_index(drop=True)
+    promoted = promoted.loc[
+        ~promoted["rcept_no"].astype(str).isin(existing_receipts)
+    ]
+    if not promoted.empty:
+        columns = list(dict.fromkeys([*result.columns, *promoted.columns]))
+        result = pd.concat(
+            [
+                result.reindex(columns=columns),
+                promoted.reindex(columns=columns),
+            ],
+            ignore_index=True,
+            sort=False,
+        )
+
+    if {
+        "is_correction",
+        "is_latest_in_correction_chain",
+    }.issubset(result.columns):
+        correction = result["is_correction"].map(_optional_bool).fillna(False)
+        latest = (
+            result["is_latest_in_correction_chain"]
+            .map(_optional_bool)
+            .fillna(True)
+        )
+        result = result.loc[(~correction.astype(bool)) | latest.astype(bool)]
+
+    sort_columns = [
+        column
+        for column in ("material_score", "receipt_date", "ticker")
+        if column in result.columns
+    ]
+    if sort_columns:
+        ascending = [
+            column not in {"material_score", "receipt_date"}
+            for column in sort_columns
+        ]
+        result = result.sort_values(
+            sort_columns,
+            ascending=ascending,
+            kind="stable",
+        )
+    return result.reset_index(drop=True)
 
 
-def _normalized_summary(summary: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
+def _normalized_summary(
+    summary: pd.DataFrame,
+    events: pd.DataFrame,
+) -> pd.DataFrame:
     result = summary.copy()
     if "ticker" not in result.columns:
         result["ticker"] = pd.Series(dtype="string")
@@ -230,6 +350,10 @@ def _normalized_summary(summary: pd.DataFrame, events: pd.DataFrame) -> pd.DataF
         events.groupby("ticker", sort=True)
         .agg(
             correction_disclosures=("is_correction", "sum"),
+            material_correction_disclosures=(
+                "is_material_correction",
+                "sum",
+            ),
             correction_flag_conflicts=("correction_flag_conflict", "sum"),
             orphan_corrections=(
                 "correction_lineage_status",
@@ -243,18 +367,23 @@ def _normalized_summary(summary: pd.DataFrame, events: pd.DataFrame) -> pd.DataF
             column
             for column in (
                 "correction_disclosures",
+                "material_correction_disclosures",
                 "correction_flag_conflicts",
                 "orphan_corrections",
             )
             if column in result.columns
         ]
     )
-    return result.merge(
-        diagnostics,
-        on="ticker",
-        how="outer",
-        validate="one_to_one",
-    ).sort_values("ticker", kind="stable").reset_index(drop=True)
+    return (
+        result.merge(
+            diagnostics,
+            on="ticker",
+            how="outer",
+            validate="one_to_one",
+        )
+        .sort_values("ticker", kind="stable")
+        .reset_index(drop=True)
+    )
 
 
 def normalize_disclosure_tables(
@@ -269,14 +398,16 @@ def normalize_disclosure_tables(
     if events.empty:
         return events.copy(), catalysts.copy(), summary.copy(), ()
     normalized_events = _add_lineage(
-        _add_flags(_validate_events(events)),
+        _add_materiality(_add_flags(_validate_events(events))),
         lineage_days=lineage_days,
     )
     normalized_catalysts = _normalized_catalysts(catalysts, normalized_events)
     normalized_summary = _normalized_summary(summary, normalized_events)
     conflict_count = int(normalized_events["correction_flag_conflict"].sum())
     orphan_count = int(
-        normalized_events["correction_lineage_status"].eq("orphan_correction").sum()
+        normalized_events[
+            "correction_lineage_status"
+        ].eq("orphan_correction").sum()
     )
     warnings: list[str] = []
     if conflict_count:

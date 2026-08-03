@@ -21,8 +21,10 @@ def _events() -> pd.DataFrame:
                 "receipt_date": date(2026, 7, 1),
                 "category": "financing",
                 "priority": "high",
+                "material_score": 4,
                 "is_noise": False,
                 "is_correction": "False",
+                "is_recent": True,
             },
             {
                 "ticker": "000660",
@@ -31,8 +33,10 @@ def _events() -> pd.DataFrame:
                 "receipt_date": date(2026, 7, 6),
                 "category": "financing",
                 "priority": "high",
+                "material_score": 4,
                 "is_noise": False,
                 "is_correction": "False",
+                "is_recent": True,
             },
             {
                 "ticker": "000660",
@@ -41,8 +45,10 @@ def _events() -> pd.DataFrame:
                 "receipt_date": date(2026, 7, 10),
                 "category": "financing",
                 "priority": "high",
+                "material_score": 4,
                 "is_noise": False,
                 "is_correction": "1",
+                "is_recent": True,
             },
             {
                 "ticker": "000660",
@@ -51,8 +57,10 @@ def _events() -> pd.DataFrame:
                 "receipt_date": date(2026, 7, 29),
                 "category": "earnings",
                 "priority": "high",
+                "material_score": 5,
                 "is_noise": False,
                 "is_correction": "0",
+                "is_recent": True,
             },
             {
                 "ticker": "005930",
@@ -61,17 +69,51 @@ def _events() -> pd.DataFrame:
                 "receipt_date": date(2026, 7, 30),
                 "category": "earnings",
                 "priority": "high",
+                "material_score": 5,
                 "is_noise": False,
                 "is_correction": None,
+                "is_recent": True,
+            },
+            {
+                "ticker": "000660",
+                "rcept_no": "20260710000006",
+                "report_name": "[기재정정]증권예탁증권(DR)발행결정",
+                "receipt_date": date(2026, 7, 10),
+                "category": "other",
+                "priority": "low",
+                "material_score": 1,
+                "is_noise": True,
+                "is_correction": True,
+                "is_recent": True,
+            },
+            {
+                "ticker": "005930",
+                "rcept_no": "20260729000007",
+                "report_name": "[기재정정]임원ㆍ주요주주특정증권등소유상황보고서",
+                "receipt_date": date(2026, 7, 29),
+                "category": "low_signal_insider",
+                "priority": "low",
+                "material_score": 0,
+                "is_noise": True,
+                "is_correction": True,
+                "is_recent": True,
             },
         ]
     )
 
 
+def _catalysts() -> pd.DataFrame:
+    events = _events()
+    return events.loc[
+        (~events["is_noise"])
+        & events["priority"].isin(["high", "critical"])
+    ].reset_index(drop=True)
+
+
 def test_title_normalization_prevents_false_like_strings_from_becoming_true() -> None:
     events, _, _, warnings = normalize_disclosure_tables(
         _events(),
-        _events(),
+        _catalysts(),
         pd.DataFrame([{"ticker": "000660"}, {"ticker": "005930"}]),
     )
     indexed = events.set_index("rcept_no")
@@ -87,7 +129,7 @@ def test_title_normalization_prevents_false_like_strings_from_becoming_true() ->
 def test_repeated_corrections_form_an_auditable_chain() -> None:
     events, catalysts, summary, warnings = normalize_disclosure_tables(
         _events(),
-        _events(),
+        _catalysts(),
         pd.DataFrame([{"ticker": "000660"}, {"ticker": "005930"}]),
     )
     indexed = events.set_index("rcept_no")
@@ -104,19 +146,59 @@ def test_repeated_corrections_form_an_auditable_chain() -> None:
     assert bool(second["is_latest_in_correction_chain"])
     assert not bool(first["is_latest_in_correction_chain"])
 
+    catalyst_receipts = set(catalysts["rcept_no"].astype(str))
+    assert "20260710000003" in catalyst_receipts
+    assert "20260706000002" not in catalyst_receipts
     catalyst = catalysts.set_index("rcept_no").loc["20260710000003"]
     assert catalyst["correction_chain_order"] == 2
     diagnostics = summary.set_index("ticker").loc["000660"]
-    assert diagnostics["correction_disclosures"] == 2
+    assert diagnostics["correction_disclosures"] == 3
+    assert diagnostics["material_correction_disclosures"] == 3
     assert diagnostics["correction_flag_conflicts"] == 1
-    assert diagnostics["orphan_corrections"] == 0
-    assert "disclosure_orphan_corrections:1" in warnings
+    assert diagnostics["orphan_corrections"] == 1
+    assert "disclosure_orphan_corrections:3" in warnings
+
+
+def test_financing_title_override_promotes_material_correction() -> None:
+    events, catalysts, summary, _ = normalize_disclosure_tables(
+        _events(),
+        _catalysts(),
+        pd.DataFrame([{"ticker": "000660"}, {"ticker": "005930"}]),
+    )
+    indexed = events.set_index("rcept_no")
+    dr = indexed.loc["20260710000006"]
+
+    assert dr["category"] == "financing"
+    assert dr["priority"] == "high"
+    assert not bool(dr["is_noise"])
+    assert bool(dr["is_material_correction"])
+    assert dr["correction_materiality_source"] == "financing_title_override"
+    assert "20260710000006" in set(catalysts["rcept_no"].astype(str))
+    assert summary.set_index("ticker").loc[
+        "000660", "material_correction_disclosures"
+    ] == 3
+
+
+def test_low_signal_correction_does_not_become_material_catalyst() -> None:
+    events, catalysts, summary, _ = normalize_disclosure_tables(
+        _events(),
+        _catalysts(),
+        pd.DataFrame([{"ticker": "000660"}, {"ticker": "005930"}]),
+    )
+    insider = events.set_index("rcept_no").loc["20260729000007"]
+
+    assert not bool(insider["is_material_correction"])
+    assert insider["correction_materiality_source"] == "not_material"
+    assert "20260729000007" not in set(catalysts["rcept_no"].astype(str))
+    assert summary.set_index("ticker").loc[
+        "005930", "material_correction_disclosures"
+    ] == 1
 
 
 def test_unmatched_correction_is_explicitly_marked_orphan() -> None:
     events, _, summary, warnings = normalize_disclosure_tables(
         _events(),
-        _events(),
+        _catalysts(),
         pd.DataFrame([{"ticker": "000660"}, {"ticker": "005930"}]),
     )
     samsung = events.set_index("rcept_no").loc["20260730000005"]
@@ -124,5 +206,5 @@ def test_unmatched_correction_is_explicitly_marked_orphan() -> None:
     assert samsung["correction_lineage_status"] == "orphan_correction"
     assert pd.isna(samsung["correction_parent_rcept_no"])
     assert samsung["correction_chain_root_rcept_no"] == "20260730000005"
-    assert summary.set_index("ticker").loc["005930", "orphan_corrections"] == 1
-    assert "disclosure_orphan_corrections:1" in warnings
+    assert summary.set_index("ticker").loc["005930", "orphan_corrections"] == 2
+    assert "disclosure_orphan_corrections:3" in warnings
