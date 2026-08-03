@@ -1,4 +1,4 @@
-"""Fail-closed valuation guard for unresolved OpenDART issued-share rows."""
+"""Fail-closed valuation guards for incomplete share and peer evidence."""
 
 from __future__ import annotations
 
@@ -22,6 +22,8 @@ from alpha_cycle.intelligence.valuation import (
 
 _UNRESOLVED_MARKER = "unresolved_missing_economic_share_count"
 _ECONOMIC_CLASSES = frozenset({"common", "preferred", "other"})
+_MINIMUM_PEER_UNIVERSE = 5
+_PEER_METRICS = ("pe", "pb", "ps", "fcf_yield")
 _CLEARED_METRICS = (
     "market_cap",
     "pe",
@@ -286,6 +288,51 @@ def apply_unresolved_share_count_guard(
     )
 
 
+def apply_minimum_peer_universe_guard(
+    snapshot: ValuationEvidenceSnapshot,
+    *,
+    minimum_peer_count: int = _MINIMUM_PEER_UNIVERSE,
+) -> ValuationEvidenceSnapshot:
+    """Disable relative scores when too few comparable companies are available."""
+
+    if minimum_peer_count < 2:
+        raise ValueError("minimum_peer_count must be at least 2")
+    metrics = snapshot.valuation_metrics.copy()
+    if metrics.empty:
+        return snapshot
+    for column in ("market_cap_complete", "valuation_score", "valuation_status"):
+        if column not in metrics.columns:
+            metrics[column] = None
+    for column in _PEER_METRICS:
+        if column not in metrics.columns:
+            metrics[column] = None
+    comparable = metrics["market_cap_complete"].fillna(False).astype(bool) & metrics[
+        list(_PEER_METRICS)
+    ].notna().any(axis=1)
+    peer_count = int(comparable.sum())
+    metrics["valuation_peer_count"] = peer_count
+    metrics["valuation_peer_minimum"] = minimum_peer_count
+    if peer_count >= minimum_peer_count:
+        return replace(snapshot, valuation_metrics=metrics)
+
+    metrics.loc[comparable, "valuation_score"] = None
+    metrics.loc[comparable, "valuation_status"] = "insufficient_peer_universe"
+    warnings = [
+        warning
+        for warning in snapshot.warnings
+        if "Valuation scores are peer-relative percentile ranks" not in warning
+    ]
+    warnings.append(
+        "Relative valuation score disabled because the comparable-company universe "
+        f"contains {peer_count} companies; minimum required is {minimum_peer_count}."
+    )
+    return replace(
+        snapshot,
+        valuation_metrics=metrics,
+        warnings=tuple(warnings),
+    )
+
+
 def build_valuation_evidence_snapshot(
     research_snapshot: str | Path,
     market_snapshot: str | Path,
@@ -296,7 +343,7 @@ def build_valuation_evidence_snapshot(
     security_mappings: Mapping[str, CompanySecurityMapping] | None = None,
     now: datetime | None = None,
 ) -> ValuationEvidenceSnapshot:
-    """Build valuation evidence and fail closed on ambiguous issued-share rows."""
+    """Build valuation evidence and fail closed on incomplete supporting evidence."""
 
     snapshot = _build_valuation_evidence_snapshot(
         research_snapshot,
@@ -307,10 +354,12 @@ def build_valuation_evidence_snapshot(
         security_mappings=security_mappings,
         now=now,
     )
-    return apply_unresolved_share_count_guard(snapshot)
+    guarded = apply_unresolved_share_count_guard(snapshot)
+    return apply_minimum_peer_universe_guard(guarded)
 
 
 __all__ = [
+    "apply_minimum_peer_universe_guard",
     "apply_unresolved_share_count_guard",
     "build_valuation_evidence_snapshot",
 ]
