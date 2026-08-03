@@ -8,8 +8,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from alpha_cycle import live_verify_cli as cli
-
+from alpha_cycle.live_verify_cli import main, verify_latest_run
 
 _REQUIRED_CSV_FILES = (
     "financial_kpis.csv",
@@ -121,7 +120,7 @@ def _write_artifacts(tmp_path: Path, *, latest: bool = True) -> Path:
 def test_verify_latest_run_passes_with_korean_local_path(tmp_path: Path) -> None:
     status_path = _write_artifacts(tmp_path)
 
-    report = cli.verify_latest_run(status_path)
+    report = verify_latest_run(status_path)
 
     assert report.status == "passed"
     assert report.failures == ()
@@ -134,7 +133,7 @@ def test_verify_latest_run_fails_when_superseded_catalyst_remains(
 ) -> None:
     status_path = _write_artifacts(tmp_path, latest=False)
 
-    report = cli.verify_latest_run(status_path)
+    report = verify_latest_run(status_path)
 
     assert report.status == "failed"
     assert "superseded disclosure remains in catalysts" in report.failures
@@ -147,7 +146,7 @@ def test_main_writes_concise_verification_artifact(
     status_path = _write_artifacts(tmp_path)
     output = tmp_path / "verification.json"
 
-    result = cli.main(["--status", str(status_path), "--output", str(output)])
+    result = main(["--status", str(status_path), "--output", str(output)])
 
     assert result == 0
     assert output.is_file()
