@@ -20,6 +20,7 @@ from alpha_cycle.intelligence.decision import (
 from alpha_cycle.intelligence.decision_calibration import (
     calibrate_decision_scorecards,
     clarify_report_coverage,
+    clarify_valuation_report,
 )
 from alpha_cycle.intelligence.decision_playbook import (
     append_execution_playbook_report,
@@ -50,6 +51,10 @@ _REQUIRED_PLACEHOLDER_COLUMNS = (
     "earnings_yield",
     "valuation_score",
     "valuation_status",
+)
+_VALUATION_CONTEXT_COLUMNS = (
+    "valuation_peer_count",
+    "valuation_peer_minimum",
 )
 
 
@@ -114,6 +119,33 @@ def _price_lookup(market_context: pd.DataFrame) -> dict[str, object]:
     return {str(key).zfill(6): value for key, value in raw.items()}
 
 
+def _attach_valuation_context(
+    scorecards: pd.DataFrame,
+    valuation_metrics: pd.DataFrame,
+) -> pd.DataFrame:
+    """Carry peer-universe diagnostics into decision and playbook outputs."""
+
+    available = [
+        column
+        for column in _VALUATION_CONTEXT_COLUMNS
+        if column in valuation_metrics.columns
+    ]
+    if not available:
+        return scorecards.copy()
+    context = valuation_metrics.loc[:, ["ticker", *available]].copy()
+    context["ticker"] = context["ticker"].astype("string").str.zfill(6)
+    if context["ticker"].duplicated().any():
+        raise ValueError("Valuation context contains duplicate tickers")
+    result = scorecards.copy()
+    result["ticker"] = result["ticker"].astype("string").str.zfill(6)
+    return result.merge(
+        context,
+        on="ticker",
+        how="left",
+        validate="one_to_one",
+    )
+
+
 def _calibrated_playbook_scorecards(
     snapshot: InvestmentDecisionSnapshot,
     scorecards: pd.DataFrame,
@@ -135,7 +167,13 @@ def _calibrated_playbook_scorecards(
 def _attach_execution_playbook(
     snapshot: InvestmentDecisionSnapshot,
 ) -> InvestmentDecisionSnapshot:
-    scorecards = _calibrated_playbook_scorecards(snapshot, snapshot.scorecards)
+    source_scorecards = snapshot.scorecards
+    if snapshot.valuation_snapshot_id is not None:
+        source_scorecards = _attach_valuation_context(
+            source_scorecards,
+            snapshot.valuation_metrics,
+        )
+    scorecards = _calibrated_playbook_scorecards(snapshot, source_scorecards)
     decision_records = build_decision_records(
         scorecards,
         evaluation_date=snapshot.evaluation_date,
@@ -157,6 +195,7 @@ def _attach_execution_playbook(
             snapshot.valuation_metrics,
             snapshot.financial_history,
         )
+        report = clarify_valuation_report(report, snapshot.valuation_metrics)
     report = append_execution_playbook_report(report, scorecards)
     return replace(
         snapshot,
@@ -209,6 +248,7 @@ def build_investment_decision_snapshot(
         valuation_metrics,
         decision_policy,
     )
+    scorecards = _attach_valuation_context(scorecards, valuation_metrics)
     scorecards = _calibrated_playbook_scorecards(base, scorecards)
 
     decision_records = build_decision_records(
@@ -241,6 +281,7 @@ def build_investment_decision_snapshot(
     )
     report = clarify_report_coverage(report)
     report = append_valuation_report(report, valuation_metrics, financial_history)
+    report = clarify_valuation_report(report, valuation_metrics)
     report = append_execution_playbook_report(report, scorecards)
 
     return replace(
