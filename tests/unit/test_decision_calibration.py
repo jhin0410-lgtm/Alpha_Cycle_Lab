@@ -8,6 +8,8 @@ from datetime import date
 import pandas as pd
 
 from alpha_cycle.intelligence.decision_calibration import (
+    append_review_priority_audit,
+    attach_priority_audit_to_records,
     calibrate_decision_scorecards,
     clarify_report_coverage,
     clarify_valuation_report,
@@ -64,44 +66,77 @@ def _catalysts() -> pd.DataFrame:
                 "receipt_date": "20260303",
                 "age_days": 1,
                 "category": "capex_investment",
+                "report_name": "[기재정정]타법인주식및출자증권취득결정",
                 "is_correction": True,
+            },
+            {
+                "ticker": "000660",
+                "receipt_date": date(2026, 7, 29),
+                "age_days": 5,
+                "category": "earnings",
+                "report_name": "연결재무제표기준영업(잠정)실적(공정공시)",
+                "is_correction": "False",
             },
             {
                 "ticker": "005930",
                 "receipt_date": date(2026, 7, 30),
                 "age_days": 100,
                 "category": "earnings",
-                "is_correction": True,
+                "report_name": "[기재정정]연결재무제표기준영업(잠정)실적(공정공시)",
+                "is_correction": "False",
             },
             {
                 "ticker": "035420",
                 "receipt_date": date(2026, 7, 25),
                 "age_days": 9,
                 "category": "operational_risk",
+                "report_name": "생산중단",
                 "is_correction": False,
             },
         ]
     )
 
 
-def test_correction_priority_uses_receipt_date_before_cached_age() -> None:
-    calibrated = calibrate_decision_scorecards(
+def _calibrated() -> pd.DataFrame:
+    return calibrate_decision_scorecards(
         _scorecards(),
         _catalysts(),
         evaluation_date=date(2026, 8, 3),
-    ).set_index("ticker")
+    )
+
+
+def test_correction_priority_uses_title_and_receipt_date() -> None:
+    calibrated = _calibrated().set_index("ticker")
 
     assert calibrated.loc["000660", "review_priority"] == "normal"
+    assert calibrated.loc["000660", "review_priority_reason"] == (
+        "중요 공시 또는 긍정 상태 정기 검토"
+    )
     assert calibrated.loc["005930", "review_priority"] == "high"
+    assert calibrated.loc["005930", "review_priority_reason"] == (
+        "최근 30일 이내 정정공시 존재"
+    )
+    assert "2026-07-30" in str(
+        calibrated.loc["005930", "review_priority_evidence"]
+    )
     assert calibrated.loc["035420", "review_priority"] == "urgent"
+    assert calibrated.loc["035420", "review_priority_reason"] == (
+        "운영 리스크 공시 존재"
+    )
+
+
+def test_false_like_correction_flag_does_not_override_normal_title() -> None:
+    calibrated = _calibrated().set_index("ticker")
+
+    assert calibrated.loc["000660", "review_priority"] == "normal"
+    evidence = json.loads(
+        str(calibrated.loc["000660", "review_priority_evidence"])
+    )
+    assert evidence == []
 
 
 def test_external_evidence_gaps_are_specific_and_deduplicated() -> None:
-    calibrated = calibrate_decision_scorecards(
-        _scorecards(),
-        _catalysts(),
-        evaluation_date=date(2026, 8, 3),
-    ).set_index("ticker")
+    calibrated = _calibrated().set_index("ticker")
 
     gaps = json.loads(str(calibrated.loc["005930", "evidence_gaps"]))
     assert "컨센서스·실적 추정치 상향·하향 데이터 미연결" in gaps
@@ -114,6 +149,39 @@ def test_external_evidence_gaps_are_specific_and_deduplicated() -> None:
     assert calibrated.loc["005930", "evidence_scope_status"] == (
         "partial_external_data"
     )
+
+
+def test_priority_audit_is_carried_into_decision_records() -> None:
+    scorecards = _calibrated()
+    records = attach_priority_audit_to_records(
+        pd.DataFrame(
+            [
+                {"ticker": "000660", "review_priority": "normal"},
+                {"ticker": "005930", "review_priority": "high"},
+                {"ticker": "035420", "review_priority": "urgent"},
+            ]
+        ),
+        scorecards,
+    ).set_index("ticker")
+
+    assert records.loc["005930", "review_priority_reason"] == (
+        "최근 30일 이내 정정공시 존재"
+    )
+    assert "2026-07-30" in str(records.loc["005930", "review_priority_evidence"])
+
+
+def test_playbook_report_exposes_priority_reason_and_trigger() -> None:
+    report = append_review_priority_audit(
+        "## 실행 플레이북\n\n"
+        "### 005930\n\n"
+        "- 행동 준비도: **wait_for_timing_confirmation**\n"
+        "- 재검토 우선순위: **high**\n",
+        _calibrated(),
+    )
+
+    assert "- 우선순위 근거: 최근 30일 이내 정정공시 존재" in report
+    assert "- 우선순위 촉발 공시" in report
+    assert "[기재정정]연결재무제표기준영업" in report
 
 
 def test_report_calls_score_coverage_by_its_actual_scope() -> None:

@@ -21,6 +21,8 @@ _VALUATION_GAP_PREFIXES = (
     "밸류에이션 근거 불완전:",
     "상대 밸류에이션 비교기업 수 부족",
 )
+_TRUE_FLAGS = frozenset({"1", "true", "t", "yes", "y", "on"})
+_FALSE_FLAGS = frozenset({"", "0", "false", "f", "no", "n", "off", "none", "nan", "null"})
 
 
 def _decode_list(value: object) -> list[str]:
@@ -83,26 +85,76 @@ def _event_age_days(event: Mapping[str, object], evaluation_date: date) -> int |
     return None
 
 
-def _calibrated_review_priority(
+def _flag_value(value: object) -> bool | None:
+    if value is None or value is pd.NA or value is pd.NaT:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if pd.isna(value):
+            return None
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        return None
+    text = str(value).strip().casefold()
+    if text in _TRUE_FLAGS:
+        return True
+    if text in _FALSE_FLAGS:
+        return False
+    return None
+
+
+def _event_is_correction(event: Mapping[str, object]) -> bool:
+    report_name = str(event.get("report_name", "")).strip()
+    if report_name:
+        return "정정" in report_name
+    return _flag_value(event.get("is_correction")) is True
+
+
+def _event_label(event: Mapping[str, object]) -> str:
+    receipt = _receipt_date(event.get("receipt_date"))
+    report_name = str(event.get("report_name", "")).strip() or "공시명 미확인"
+    prefix = f"{receipt.isoformat()} " if receipt is not None else ""
+    return prefix + report_name
+
+
+def _priority_decision(
     score: Mapping[str, object],
     events: list[Mapping[str, object]],
     evaluation_date: date,
-) -> str:
-    categories = {str(event.get("category", "")) for event in events}
-    state = str(score.get("decision_state", "insufficient_data"))
-    if "operational_risk" in categories:
-        return "urgent"
-    recent_correction = any(
-        bool(event.get("is_correction", False))
+) -> tuple[str, str, list[str]]:
+    operational = [
+        event for event in events if str(event.get("category", "")) == "operational_risk"
+    ]
+    if operational:
+        return (
+            "urgent",
+            "운영 리스크 공시 존재",
+            [_event_label(event) for event in operational],
+        )
+
+    recent_corrections = [
+        event
+        for event in events
+        if _event_is_correction(event)
         and (age := _event_age_days(event, evaluation_date)) is not None
         and 0 <= age <= 30
-        for event in events
-    )
-    if recent_correction or state in {"negative_setup", "insufficient_data"}:
-        return "high"
+    ]
+    if recent_corrections:
+        return (
+            "high",
+            "최근 30일 이내 정정공시 존재",
+            [_event_label(event) for event in recent_corrections],
+        )
+
+    state = str(score.get("decision_state", "insufficient_data"))
+    if state in {"negative_setup", "insufficient_data"}:
+        return "high", "부정적 또는 근거 부족 상태", []
     if events or state == "positive_setup":
-        return "normal"
-    return "low"
+        return "normal", "중요 공시 또는 긍정 상태 정기 검토", []
+    return "low", "우선 검토 촉발 근거 없음", []
 
 
 def _whole_number(value: object) -> int | None:
@@ -118,7 +170,7 @@ def _calibrated_evidence_gaps(
 ) -> list[str]:
     gaps = _decode_list(row.get("evidence_gaps"))
     gaps.extend(_EXTERNAL_EVIDENCE_GAPS)
-    if any(bool(event.get("is_correction", False)) for event in events):
+    if any(_event_is_correction(event) for event in events):
         gaps.append("정정공시 본문·변경 수치·투자 영향 미분석")
 
     valuation_status = str(row.get("valuation_status", "not_available"))
@@ -157,17 +209,50 @@ def calibrate_decision_scorecards(
         row = {str(key): value for key, value in raw.items()}
         ticker = str(row["ticker"])
         events = _ticker_events(catalysts, ticker)
-        row["review_priority"] = _calibrated_review_priority(
+        priority, reason, evidence = _priority_decision(
             row,
             events,
             evaluation_date,
         )
+        row["review_priority"] = priority
+        row["review_priority_reason"] = reason
+        row["review_priority_evidence"] = _json_list(evidence)
         row["evidence_gaps"] = _json_list(
             _calibrated_evidence_gaps(row, events)
         )
         row["evidence_scope_status"] = "partial_external_data"
         rows.append(row)
     return pd.DataFrame(rows).sort_values("ticker", kind="stable").reset_index(drop=True)
+
+
+def attach_priority_audit_to_records(
+    records: pd.DataFrame,
+    scorecards: pd.DataFrame,
+) -> pd.DataFrame:
+    """Carry priority reasons and triggering disclosures into compact records."""
+
+    required = {
+        "ticker",
+        "review_priority_reason",
+        "review_priority_evidence",
+    }
+    missing = sorted(required - set(scorecards.columns))
+    if missing:
+        raise ValueError("Scorecards are missing priority audit columns: " + ",".join(missing))
+    result = records.copy()
+    audit = scorecards.loc[
+        :,
+        ["ticker", "review_priority_reason", "review_priority_evidence"],
+    ].copy()
+    audit["ticker"] = audit["ticker"].astype("string").str.zfill(6)
+    if audit["ticker"].duplicated().any():
+        raise ValueError("Priority audit scorecards contain duplicate tickers")
+    return result.merge(
+        audit,
+        on="ticker",
+        how="left",
+        validate="one_to_one",
+    )
 
 
 def clarify_report_coverage(report: str) -> str:
@@ -239,7 +324,56 @@ def clarify_valuation_report(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def append_review_priority_audit(
+    report: str,
+    scorecards: pd.DataFrame,
+) -> str:
+    """Expose the exact reason and filings behind each playbook priority."""
+
+    required = {
+        "ticker",
+        "review_priority_reason",
+        "review_priority_evidence",
+    }
+    if scorecards.empty or not required.issubset(scorecards.columns):
+        return report
+    lookup = {
+        str(raw["ticker"]).zfill(6): {str(key): value for key, value in raw.items()}
+        for raw in scorecards.to_dict(orient="records")
+    }
+    lines: list[str] = []
+    in_playbook = False
+    current_ticker: str | None = None
+    for line in report.splitlines():
+        if line == "## 실행 플레이북":
+            in_playbook = True
+            current_ticker = None
+        elif line.startswith("## ") and in_playbook:
+            in_playbook = False
+            current_ticker = None
+        elif in_playbook and line.startswith("### "):
+            current_ticker = line.removeprefix("### ").strip().zfill(6)
+
+        lines.append(line)
+        if (
+            in_playbook
+            and current_ticker in lookup
+            and line.startswith("- 재검토 우선순위:")
+        ):
+            row = lookup[current_ticker]
+            lines.append(
+                f"- 우선순위 근거: {row.get('review_priority_reason', '근거 미확인')}"
+            )
+            evidence = _decode_list(row.get("review_priority_evidence"))
+            if evidence:
+                lines.append("- 우선순위 촉발 공시")
+                lines.extend(f"  - {item}" for item in evidence)
+    return "\n".join(lines).rstrip() + "\n"
+
+
 __all__ = [
+    "append_review_priority_audit",
+    "attach_priority_audit_to_records",
     "calibrate_decision_scorecards",
     "clarify_report_coverage",
     "clarify_valuation_report",

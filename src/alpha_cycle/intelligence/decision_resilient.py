@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -18,6 +18,8 @@ from alpha_cycle.intelligence.decision import (
     build_investment_decision_snapshot as _build_investment_decision_snapshot,
 )
 from alpha_cycle.intelligence.decision_calibration import (
+    append_review_priority_audit,
+    attach_priority_audit_to_records,
     calibrate_decision_scorecards,
     clarify_report_coverage,
     clarify_valuation_report,
@@ -164,6 +166,20 @@ def _calibrated_playbook_scorecards(
     )
 
 
+def _decision_records_with_audit(
+    scorecards: pd.DataFrame,
+    *,
+    evaluation_date: date,
+    price_lookup: Mapping[str, object],
+) -> pd.DataFrame:
+    records = build_decision_records(
+        scorecards,
+        evaluation_date=evaluation_date,
+        price_lookup=price_lookup,
+    )
+    return attach_priority_audit_to_records(records, scorecards)
+
+
 def _attach_execution_playbook(
     snapshot: InvestmentDecisionSnapshot,
 ) -> InvestmentDecisionSnapshot:
@@ -174,7 +190,7 @@ def _attach_execution_playbook(
             snapshot.valuation_metrics,
         )
     scorecards = _calibrated_playbook_scorecards(snapshot, source_scorecards)
-    decision_records = build_decision_records(
+    decision_records = _decision_records_with_audit(
         scorecards,
         evaluation_date=snapshot.evaluation_date,
         price_lookup=_price_lookup(snapshot.market_context),
@@ -197,6 +213,7 @@ def _attach_execution_playbook(
         )
         report = clarify_valuation_report(report, snapshot.valuation_metrics)
     report = append_execution_playbook_report(report, scorecards)
+    report = append_review_priority_audit(report, scorecards)
     return replace(
         snapshot,
         scorecards=scorecards,
@@ -251,7 +268,7 @@ def build_investment_decision_snapshot(
     scorecards = _attach_valuation_context(scorecards, valuation_metrics)
     scorecards = _calibrated_playbook_scorecards(base, scorecards)
 
-    decision_records = build_decision_records(
+    decision_records = _decision_records_with_audit(
         scorecards,
         evaluation_date=base.evaluation_date,
         price_lookup=_price_lookup(base.market_context),
@@ -283,6 +300,7 @@ def build_investment_decision_snapshot(
     report = append_valuation_report(report, valuation_metrics, financial_history)
     report = clarify_valuation_report(report, valuation_metrics)
     report = append_execution_playbook_report(report, scorecards)
+    report = append_review_priority_audit(report, scorecards)
 
     return replace(
         base,
