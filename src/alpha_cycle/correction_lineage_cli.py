@@ -130,9 +130,9 @@ def load_correction_lineage(
 
 def _render(frame: pd.DataFrame, output_format: str) -> str:
     if output_format == "json":
-        return cast(str, frame.to_json(orient="records", force_ascii=False, indent=2))
+        return frame.to_json(orient="records", force_ascii=False, indent=2)
     if output_format == "csv":
-        return cast(str, frame.to_csv(index=False))
+        return frame.to_csv(index=False)
     return frame.to_string(index=False, na_rep="")
 
 
