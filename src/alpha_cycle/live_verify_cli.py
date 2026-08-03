@@ -31,6 +31,9 @@ _REQUIRED_DECISION_FILES = (
     "report.md",
 )
 _TRUE_VALUES = frozenset({"1", "true", "t", "yes", "y", "on"})
+_FALSE_VALUES = frozenset(
+    {"", "0", "false", "f", "no", "n", "off", "none", "nan", "null"}
+)
 _HEX_64 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -72,6 +75,17 @@ def _string_mapping(value: object) -> dict[str, int]:
     return result
 
 
+def _whole_number(value: object, default: int = -1) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float, str)):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+    return default
+
+
 def _as_bool(value: object) -> bool | None:
     if value is None or value is pd.NA or value is pd.NaT:
         return None
@@ -88,7 +102,7 @@ def _as_bool(value: object) -> bool | None:
     text = str(value).strip().casefold()
     if text in _TRUE_VALUES:
         return True
-    if text in {"", "0", "false", "f", "no", "n", "off", "none", "nan", "null"}:
+    if text in _FALSE_VALUES:
         return False
     return None
 
@@ -100,13 +114,26 @@ def _resolve_path(raw: object, *, relative_to: Path) -> Path | None:
     return path if path.is_absolute() else (relative_to / path).resolve()
 
 
-def _read_csv(path: Path, *, dtype: Mapping[str, str] | None = None) -> pd.DataFrame:
+def _read_csv(
+    path: Path,
+    *,
+    dtype: Mapping[str, str] | None = None,
+) -> pd.DataFrame:
     if not path.is_file():
         raise ValueError(f"CSV file does not exist: {path}")
     return pd.read_csv(path, dtype=dtype)
 
 
-def verify_latest_run(status_path: str | Path = DEFAULT_STATUS_PATH) -> VerificationReport:
+def _ticker_set(frame: pd.DataFrame) -> set[str]:
+    if "ticker" not in frame.columns:
+        return set()
+    values = frame["ticker"].astype("string").str.zfill(6).dropna()
+    return {str(value) for value in values}
+
+
+def verify_latest_run(
+    status_path: str | Path = DEFAULT_STATUS_PATH,
+) -> VerificationReport:
     """Verify linked live artifacts and active-catalyst invariants."""
 
     path = Path(status_path)
@@ -127,7 +154,10 @@ def verify_latest_run(status_path: str | Path = DEFAULT_STATUS_PATH) -> Verifica
 
     snapshot_id = str(status.get("decision_snapshot_id", "")) or None
     evaluation_date = str(status.get("evaluation_date", "")) or None
-    directory = _resolve_path(status.get("decision_directory"), relative_to=path.parent)
+    directory = _resolve_path(
+        status.get("decision_directory"),
+        relative_to=path.parent,
+    )
 
     def check(condition: bool, message: str) -> None:
         nonlocal passed
@@ -136,9 +166,18 @@ def verify_latest_run(status_path: str | Path = DEFAULT_STATUS_PATH) -> Verifica
         else:
             failures.append(message)
 
-    check(status.get("status") == "completed", "latest run status is not completed")
-    check(snapshot_id is not None and bool(_HEX_64.fullmatch(snapshot_id)), "invalid decision snapshot id")
-    check(directory is not None and directory.is_dir(), "decision directory is missing")
+    check(
+        status.get("status") == "completed",
+        "latest run status is not completed",
+    )
+    check(
+        snapshot_id is not None and bool(_HEX_64.fullmatch(snapshot_id)),
+        "invalid decision snapshot id",
+    )
+    check(
+        directory is not None and directory.is_dir(),
+        "decision directory is missing",
+    )
     if directory is None or not directory.is_dir():
         return VerificationReport(
             status="failed",
@@ -150,8 +189,15 @@ def verify_latest_run(status_path: str | Path = DEFAULT_STATUS_PATH) -> Verifica
             informational_warnings=tuple(_string_list(status.get("warnings"))),
         )
 
-    missing_files = [name for name in _REQUIRED_DECISION_FILES if not (directory / name).is_file()]
-    check(not missing_files, "missing decision files: " + ", ".join(missing_files))
+    missing_files = [
+        name
+        for name in _REQUIRED_DECISION_FILES
+        if not (directory / name).is_file()
+    ]
+    check(
+        not missing_files,
+        "missing decision files: " + ", ".join(missing_files),
+    )
 
     try:
         manifest = _read_json(directory / "manifest.json")
@@ -163,8 +209,14 @@ def verify_latest_run(status_path: str | Path = DEFAULT_STATUS_PATH) -> Verifica
                 "correction_chain_root_rcept_no": "string",
             },
         )
-        scorecards = _read_csv(directory / "scorecards.csv", dtype={"ticker": "string"})
-        records = _read_csv(directory / "decision_records.csv", dtype={"ticker": "string"})
+        scorecards = _read_csv(
+            directory / "scorecards.csv",
+            dtype={"ticker": "string"},
+        )
+        records = _read_csv(
+            directory / "decision_records.csv",
+            dtype={"ticker": "string"},
+        )
     except (ValueError, OSError, json.JSONDecodeError, pd.errors.ParserError) as exc:
         failures.append(str(exc))
         return VerificationReport(
@@ -177,20 +229,51 @@ def verify_latest_run(status_path: str | Path = DEFAULT_STATUS_PATH) -> Verifica
             informational_warnings=tuple(_string_list(status.get("warnings"))),
         )
 
-    check(manifest.get("snapshot_id") == snapshot_id, "status and manifest snapshot ids differ")
-    check(manifest.get("evaluation_date") == evaluation_date, "status and manifest evaluation dates differ")
+    check(
+        manifest.get("snapshot_id") == snapshot_id,
+        "status and manifest snapshot ids differ",
+    )
+    check(
+        manifest.get("evaluation_date") == evaluation_date,
+        "status and manifest evaluation dates differ",
+    )
 
-    expected_symbols = {value.zfill(6) for value in _string_list(status.get("decision_symbols"))}
-    score_symbols = set(scorecards.get("ticker", pd.Series(dtype="string")).astype("string").str.zfill(6).dropna())
-    record_symbols = set(records.get("ticker", pd.Series(dtype="string")).astype("string").str.zfill(6).dropna())
-    check(bool(expected_symbols) and score_symbols == expected_symbols, "scorecard ticker set differs from status")
-    check(record_symbols == expected_symbols, "decision-record ticker set differs from status")
-    check(not scorecards.get("ticker", pd.Series(dtype="string")).duplicated().any(), "duplicate scorecard tickers")
-    check(not records.get("ticker", pd.Series(dtype="string")).duplicated().any(), "duplicate decision-record tickers")
+    expected_symbols = {
+        value.zfill(6)
+        for value in _string_list(status.get("decision_symbols"))
+    }
+    score_symbols = _ticker_set(scorecards)
+    record_symbols = _ticker_set(records)
+    check(
+        bool(expected_symbols) and score_symbols == expected_symbols,
+        "scorecard ticker set differs from status",
+    )
+    check(
+        record_symbols == expected_symbols,
+        "decision-record ticker set differs from status",
+    )
+    check(
+        "ticker" in scorecards.columns
+        and not bool(scorecards["ticker"].duplicated().any()),
+        "duplicate scorecard tickers",
+    )
+    check(
+        "ticker" in records.columns
+        and not bool(records["ticker"].duplicated().any()),
+        "duplicate decision-record tickers",
+    )
 
     expected_states = _string_mapping(status.get("decision_states"))
-    actual_states = Counter(str(value) for value in scorecards.get("decision_state", pd.Series(dtype="string")).dropna())
-    check(dict(actual_states) == expected_states, "decision-state counts differ from status")
+    state_values = (
+        scorecards["decision_state"].dropna()
+        if "decision_state" in scorecards.columns
+        else pd.Series(dtype="string")
+    )
+    actual_states = Counter(str(value) for value in state_values)
+    check(
+        dict(actual_states) == expected_states,
+        "decision-state counts differ from status",
+    )
 
     required_catalyst_columns = {
         "ticker",
@@ -202,40 +285,89 @@ def verify_latest_run(status_path: str | Path = DEFAULT_STATUS_PATH) -> Verifica
         "is_correction",
         "is_latest_in_correction_chain",
     }
-    missing_columns = sorted(required_catalyst_columns - set(catalysts.columns))
-    check(not missing_columns, "catalysts missing columns: " + ", ".join(missing_columns))
-    check(not catalysts.get("rcept_no", pd.Series(dtype="string")).duplicated().any(), "duplicate catalyst receipt numbers")
+    missing_columns = sorted(
+        required_catalyst_columns - set(catalysts.columns)
+    )
+    check(
+        not missing_columns,
+        "catalysts missing columns: " + ", ".join(missing_columns),
+    )
+    check(
+        "rcept_no" in catalysts.columns
+        and not bool(catalysts["rcept_no"].duplicated().any()),
+        "duplicate catalyst receipt numbers",
+    )
 
     if not missing_columns:
         latest_flags = catalysts["is_latest_in_correction_chain"].map(_as_bool)
-        check(latest_flags.notna().all() and latest_flags.fillna(False).all(), "superseded disclosure remains in catalysts")
+        check(
+            bool(latest_flags.notna().all())
+            and bool(latest_flags.fillna(False).all()),
+            "superseded disclosure remains in catalysts",
+        )
 
-        roots = catalysts.get("correction_chain_root_rcept_no", pd.Series(dtype="string"))
-        root_frame = pd.DataFrame({"ticker": catalysts["ticker"], "root": roots})
-        root_frame = root_frame.loc[root_frame["root"].notna() & root_frame["root"].astype(str).ne("")]
-        check(not root_frame.duplicated(["ticker", "root"]).any(), "multiple active catalysts share one correction lineage")
+        roots = (
+            catalysts["correction_chain_root_rcept_no"]
+            if "correction_chain_root_rcept_no" in catalysts.columns
+            else pd.Series(dtype="string")
+        )
+        root_frame = pd.DataFrame(
+            {"ticker": catalysts["ticker"], "root": roots}
+        )
+        populated_roots = root_frame["root"].notna() & root_frame[
+            "root"
+        ].astype(str).ne("")
+        root_frame = root_frame.loc[populated_roots]
+        check(
+            not bool(root_frame.duplicated(["ticker", "root"]).any()),
+            "multiple active catalysts share one correction lineage",
+        )
 
         if "is_material_correction" in catalysts.columns:
             correction = catalysts["is_correction"].map(_as_bool).fillna(False)
-            material = catalysts["is_material_correction"].map(_as_bool).fillna(False)
-            check((~correction | material).all(), "non-material correction remains in catalysts")
+            material = catalysts["is_material_correction"].map(_as_bool).fillna(
+                False
+            )
+            check(
+                bool((~correction.astype(bool) | material.astype(bool)).all()),
+                "non-material correction remains in catalysts",
+            )
 
-    valuation_scored = int(scorecards.get("valuation_score", pd.Series(dtype="float64")).notna().sum())
-    try:
-        expected_valuation_scored = int(status.get("valuation_scored_count", -1))
-    except (TypeError, ValueError):
-        expected_valuation_scored = -1
-    check(valuation_scored == expected_valuation_scored, "valuation scored count differs from status")
+    valuation_values = (
+        scorecards["valuation_score"]
+        if "valuation_score" in scorecards.columns
+        else pd.Series(dtype="float64")
+    )
+    valuation_scored = int(valuation_values.notna().sum())
+    expected_valuation_scored = _whole_number(
+        status.get("valuation_scored_count")
+    )
+    check(
+        valuation_scored == expected_valuation_scored,
+        "valuation scored count differs from status",
+    )
 
-    report_path = _resolve_path(status.get("report_path"), relative_to=path.parent)
-    check(report_path is not None and report_path.is_file(), "report path is missing")
+    report_path = _resolve_path(
+        status.get("report_path"),
+        relative_to=path.parent,
+    )
+    check(
+        report_path is not None and report_path.is_file(),
+        "report path is missing",
+    )
     if report_path is not None and report_path.is_file():
         report_text = report_path.read_text(encoding="utf-8")
-        check(all(f"## {ticker}" in report_text for ticker in expected_symbols), "report is missing a decision ticker section")
+        check(
+            all(f"## {ticker}" in report_text for ticker in expected_symbols),
+            "report is missing a decision ticker section",
+        )
 
     manifest_warnings = set(_string_list(manifest.get("warnings")))
     status_warnings = set(_string_list(status.get("warnings")))
-    check(manifest_warnings == status_warnings, "status and manifest warnings differ")
+    check(
+        manifest_warnings == status_warnings,
+        "status and manifest warnings differ",
+    )
 
     return VerificationReport(
         status="passed" if not failures else "failed",
@@ -251,7 +383,12 @@ def verify_latest_run(status_path: str | Path = DEFAULT_STATUS_PATH) -> Verifica
 def _write_report(report: VerificationReport, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        json.dumps(asdict(report), ensure_ascii=False, indent=2, sort_keys=True),
+        json.dumps(
+            asdict(report),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
 
@@ -263,7 +400,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--status", type=Path, default=DEFAULT_STATUS_PATH)
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--json", action="store_true", help="print full JSON report")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print full JSON report",
+    )
     return parser
 
 
@@ -274,7 +415,14 @@ def main(argv: list[str] | None = None) -> int:
     _write_report(report, output)
 
     if args.json:
-        print(json.dumps(asdict(report), ensure_ascii=False, indent=2, sort_keys=True))
+        print(
+            json.dumps(
+                asdict(report),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+        )
     elif report.status == "passed":
         print("LIVE VERIFICATION: PASS")
         print(f"snapshot: {report.snapshot_id}")
