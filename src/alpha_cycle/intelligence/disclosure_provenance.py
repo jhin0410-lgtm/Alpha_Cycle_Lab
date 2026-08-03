@@ -162,7 +162,7 @@ def _add_lineage(events: pd.DataFrame, *, lineage_days: int) -> pd.DataFrame:
         else:
             parent_rcept_no = str(parent["rcept_no"])
             root_rcept_no = str(parent["correction_chain_root_rcept_no"])
-            chain_order = int(parent["correction_chain_order"]) + 1
+            chain_order = cast(int, parent["correction_chain_order"]) + 1
             lineage_status = "linked_correction"
         raw.update(
             {
