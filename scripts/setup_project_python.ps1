@@ -140,6 +140,8 @@ if ($LASTEXITCODE -ne 0) {
 
 $verification = & $VirtualEnvironmentPython -c @"
 import struct
+import sys
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import alpha_cycle
@@ -148,13 +150,13 @@ import pandas
 import yaml
 
 assert struct.calcsize('P') * 8 == 64
-assert ZoneInfo('Asia/Seoul').utcoffset(None) is not None
+assert datetime(2026, 1, 1, tzinfo=ZoneInfo('Asia/Seoul')).utcoffset() is not None
 print('PROJECT PYTHON: PASS')
-print(f'Python bitness: {struct.calcsize("P") * 8}')
-print(f'NumPy: {numpy.__version__}')
-print(f'pandas: {pandas.__version__}')
-print(f'PyYAML: {yaml.__version__}')
-print(f'Python executable: {__import__("sys").executable}')
+print(f"Python bitness: {struct.calcsize('P') * 8}")
+print(f"NumPy: {numpy.__version__}")
+print(f"pandas: {pandas.__version__}")
+print(f"PyYAML: {yaml.__version__}")
+print(f"Python executable: {sys.executable}")
 "@
 if ($LASTEXITCODE -ne 0) {
     throw "The main project environment verification failed."
