@@ -100,9 +100,10 @@ def _boolean(value: object, *, field: str) -> bool:
 
 
 def _integer(value: object, *, field: str) -> int:
+    text = str(value).strip()
     try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
+        parsed = int(text)
+    except ValueError as exc:
         raise DiagnosticError(f"invalid integer {field}: {value}") from exc
     if parsed < 0:
         raise DiagnosticError(f"negative integer {field}: {value}")
