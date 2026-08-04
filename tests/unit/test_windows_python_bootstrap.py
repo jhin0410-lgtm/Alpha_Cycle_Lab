@@ -26,7 +26,7 @@ def test_python_module_cmd_wrappers_use_project_python_launcher() -> None:
     for path, module in (
         (
             "scripts/check_market_source_consistency.cmd",
-            "alpha_cycle.market_consistency_cli",
+            "alpha_cycle.market_consistency_runner_cli",
         ),
         ("scripts/verify_latest_run.cmd", "alpha_cycle.live_verify_cli"),
         (

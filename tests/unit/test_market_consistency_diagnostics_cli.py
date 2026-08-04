@@ -158,14 +158,14 @@ def test_diagnostics_detects_full_series_and_symbol_mapping_conflicts(
     assert passed.suspected_patterns == ()
 
 
-def test_consistency_cmd_runs_diagnostics_without_masking_original_failure() -> None:
+def test_consistency_cmd_routes_through_scope_aware_runner() -> None:
     script = (
         Path(__file__).resolve().parents[2]
         / "scripts"
         / "check_market_source_consistency.cmd"
     ).read_text(encoding="utf-8")
 
-    assert "alpha_cycle.market_consistency_cli" in script
-    assert "alpha_cycle.market_consistency_diagnostics_cli" in script
-    assert 'if not "%EXIT_CODE%"=="0"' in script
+    assert "alpha_cycle.market_consistency_runner_cli" in script
+    assert "alpha_cycle.market_consistency_cli" not in script
+    assert "alpha_cycle.market_consistency_diagnostics_cli" not in script
     assert "endlocal & exit /b %EXIT_CODE%" in script
