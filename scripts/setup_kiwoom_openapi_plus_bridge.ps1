@@ -10,6 +10,7 @@ $RepositoryRoot = Split-Path -Parent $ScriptDirectory
 $BridgeRoot = Join-Path $RepositoryRoot "bridge\kiwoom_openapi_plus"
 $Requirements = Join-Path $BridgeRoot "requirements-win32.txt"
 $Probe = Join-Path $BridgeRoot "probe.py"
+$QtInitializer = Join-Path $ScriptDirectory "initialize_kiwoom_openapi_plus_qt.ps1"
 $VenvRoot = Join-Path $RepositoryRoot ".venv-kiwoom-x86"
 $VenvPython = Join-Path $VenvRoot "Scripts\python.exe"
 
@@ -116,6 +117,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to install the pinned x86 PyQt5 bridge dependencies."
 }
 
+. $QtInitializer -BridgePython $VenvPython
 & $VenvPython $Probe --mode environment
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE

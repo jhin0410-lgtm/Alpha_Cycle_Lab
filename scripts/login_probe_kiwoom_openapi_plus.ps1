@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryRoot = Split-Path -Parent $ScriptDirectory
 $Probe = Join-Path $RepositoryRoot "bridge\kiwoom_openapi_plus\probe.py"
+$QtInitializer = Join-Path $ScriptDirectory "initialize_kiwoom_openapi_plus_qt.ps1"
 $DefaultPython = Join-Path $RepositoryRoot ".venv-kiwoom-x86\Scripts\python.exe"
 
 Set-Location $RepositoryRoot
@@ -30,6 +31,7 @@ if (-not [System.IO.File]::Exists($BridgePython)) {
     exit 2
 }
 
+. $QtInitializer -BridgePython $BridgePython
 Write-Host "The official Kiwoom login window will open."
 Write-Host "This probe does not read or store login credentials or account identifiers."
 & $BridgePython $Probe `
