@@ -244,6 +244,7 @@ def _classify_scope(
         and control_pattern
         and source_contract_allows_inference
     )
+    rationale: tuple[str, ...]
 
     if inferred_scope_mismatch:
         scope_rows = sum(
@@ -281,15 +282,17 @@ def _classify_scope(
         "No strict venue-scope mismatch pattern was established from the local evidence.",
         "Raw completed-session OHLC differences remain fail-closed conflicts.",
     )
+    verified_controls = tuple(
+        ticker
+        for ticker in KRX_ONLY_CONTROL_SYMBOLS
+        if by_ticker[ticker].price_difference_rows == 0
+        and by_ticker[ticker].volume_difference_rows == 0
+    )
     return (
         result.status,
         classification,
         (),
-        tuple(
-            item.ticker
-            for item in evidence
-            if item.price_difference_rows == 0 and item.volume_difference_rows == 0
-        ),
+        verified_controls,
         0,
         comparable_conflicts,
         rationale,
@@ -389,7 +392,7 @@ def assess_consistency_result(
             "assessment_id": assessment.assessment_id,
             "assessment_path": str(assessment_path),
             "raw_result_id": assessment.raw_result_id,
-            "decision_integration_eligible": False,
+            "decision_integration_eligible": assessment.decision_integration_eligible,
             "automatic_provider_substitution_enabled": False,
             "account_api_enabled": False,
             "order_api_enabled": False,
