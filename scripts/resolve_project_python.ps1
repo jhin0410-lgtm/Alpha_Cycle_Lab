@@ -74,53 +74,180 @@ print(f"{struct.calcsize('P') * 8}|{sys.version_info.major}|{sys.version_info.mi
     return [System.IO.Path]::GetFullPath($resolved)
 }
 
+function Add-DirectoryCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.List[object]]$Candidates,
+        [string]$Root
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Root) -or -not [System.IO.Directory]::Exists($Root)) {
+        return
+    }
+
+    $direct = Join-Path $Root "python.exe"
+    if ([System.IO.File]::Exists($direct)) {
+        $Candidates.Add((New-PythonCandidate -Executable $direct))
+    }
+
+    Get-ChildItem $Root -Directory -Filter "Python3*" -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        ForEach-Object {
+            $candidate = Join-Path $_.FullName "python.exe"
+            if ([System.IO.File]::Exists($candidate)) {
+                $Candidates.Add((New-PythonCandidate -Executable $candidate))
+            }
+        }
+}
+
+function Add-RegistryCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.List[object]]$Candidates
+    )
+
+    $hives = @(
+        [Microsoft.Win32.RegistryHive]::CurrentUser,
+        [Microsoft.Win32.RegistryHive]::LocalMachine
+    )
+    $views = @(
+        [Microsoft.Win32.RegistryView]::Registry64,
+        [Microsoft.Win32.RegistryView]::Registry32
+    )
+
+    foreach ($hive in $hives) {
+        foreach ($view in $views) {
+            $baseKey = $null
+            $pythonCore = $null
+            try {
+                $baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, $view)
+                $pythonCore = $baseKey.OpenSubKey("Software\Python\PythonCore")
+                if ($null -eq $pythonCore) {
+                    continue
+                }
+                foreach ($versionName in $pythonCore.GetSubKeyNames()) {
+                    $installPath = $pythonCore.OpenSubKey("$versionName\InstallPath")
+                    if ($null -eq $installPath) {
+                        continue
+                    }
+                    try {
+                        $executable = [string]$installPath.GetValue("ExecutablePath", "")
+                        if ([string]::IsNullOrWhiteSpace($executable)) {
+                            $installRoot = [string]$installPath.GetValue("", "")
+                            if (-not [string]::IsNullOrWhiteSpace($installRoot)) {
+                                $executable = Join-Path $installRoot "python.exe"
+                            }
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace($executable)) {
+                            $Candidates.Add((New-PythonCandidate -Executable $executable))
+                        }
+                    }
+                    finally {
+                        $installPath.Dispose()
+                    }
+                }
+            }
+            catch {
+                continue
+            }
+            finally {
+                if ($null -ne $pythonCore) {
+                    $pythonCore.Dispose()
+                }
+                if ($null -ne $baseKey) {
+                    $baseKey.Dispose()
+                }
+            }
+        }
+    }
+}
+
+function Add-LauncherCandidates {
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Collections.Generic.List[object]]$Candidates
+    )
+
+    $launcherPaths = [System.Collections.Generic.List[string]]::new()
+    $command = Get-Command "py.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $command) {
+        $launcherPaths.Add($command.Source)
+    }
+    foreach ($knownPath in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Launcher\py.exe"),
+        (Join-Path $env:WINDIR "py.exe"),
+        (Join-Path $env:ProgramFiles "Python Launcher\py.exe")
+    )) {
+        if ([System.IO.File]::Exists($knownPath)) {
+            $launcherPaths.Add($knownPath)
+        }
+    }
+
+    $seenLaunchers = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($launcher in $launcherPaths) {
+        if (-not $seenLaunchers.Add($launcher)) {
+            continue
+        }
+        foreach ($selector in @("-3.12-64", "-V:3.12", "-3-64")) {
+            $Candidates.Add(
+                (New-PythonCandidate -Executable $launcher -PrefixArguments @($selector))
+            )
+        }
+        try {
+            $installed = & $launcher -0p 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                foreach ($line in @($installed)) {
+                    $match = [regex]::Match(
+                        $line.ToString(),
+                        "([A-Za-z]:\\.*?python(?:w)?\.exe)\s*$",
+                        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    )
+                    if ($match.Success) {
+                        $Candidates.Add(
+                            (New-PythonCandidate -Executable $match.Groups[1].Value)
+                        )
+                    }
+                }
+            }
+        }
+        catch {
+            continue
+        }
+    }
+}
+
 $candidates = [System.Collections.Generic.List[object]]::new()
 
 foreach ($scope in @("Process", "User")) {
     $configured = [Environment]::GetEnvironmentVariable("ALPHA_CYCLE_PYTHON", $scope)
     if (-not [string]::IsNullOrWhiteSpace($configured)) {
-        $candidates.Add(
-            (New-PythonCandidate -Executable $configured)
-        )
+        $candidates.Add((New-PythonCandidate -Executable $configured))
     }
 }
 
 $projectVirtualEnvironment = Join-Path $RepositoryRoot ".venv\Scripts\python.exe"
 if ([System.IO.File]::Exists($projectVirtualEnvironment)) {
-    $candidates.Add(
-        (New-PythonCandidate -Executable $projectVirtualEnvironment)
-    )
+    $candidates.Add((New-PythonCandidate -Executable $projectVirtualEnvironment))
 }
 
-$launcher = Get-Command "py.exe" -ErrorAction SilentlyContinue
-if ($null -ne $launcher) {
-    $candidates.Add(
-        (New-PythonCandidate -Executable $launcher.Source -PrefixArguments @("-3.12-64"))
-    )
-    $candidates.Add(
-        (New-PythonCandidate -Executable $launcher.Source -PrefixArguments @("-3-64"))
-    )
-}
+Add-LauncherCandidates -Candidates $candidates
+Add-RegistryCandidates -Candidates $candidates
 
-$localPythonRoot = Join-Path $env:LOCALAPPDATA "Programs\Python"
-if ([System.IO.Directory]::Exists($localPythonRoot)) {
-    Get-ChildItem $localPythonRoot -Directory -Filter "Python3*" -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending |
-        ForEach-Object {
-            $candidate = Join-Path $_.FullName "python.exe"
-            if ([System.IO.File]::Exists($candidate)) {
-                $candidates.Add(
-                    (New-PythonCandidate -Executable $candidate)
-                )
-            }
-        }
+foreach ($root in @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Python"),
+    $env:ProgramFiles,
+    $env:ProgramW6432,
+    "C:\Python312",
+    "C:\Python313"
+)) {
+    Add-DirectoryCandidates -Candidates $candidates -Root $root
 }
 
 $pathPython = Get-Command "python.exe" -ErrorAction SilentlyContinue
 if ($null -ne $pathPython) {
-    $candidates.Add(
-        (New-PythonCandidate -Executable $pathPython.Source)
-    )
+    $candidates.Add((New-PythonCandidate -Executable $pathPython.Source))
 }
 
 $seen = [System.Collections.Generic.HashSet[string]]::new(
