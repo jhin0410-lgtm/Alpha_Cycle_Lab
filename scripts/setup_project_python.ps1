@@ -57,6 +57,98 @@ print(f"{struct.calcsize('P') * 8}|{sys.version_info.major}|{sys.version_info.mi
     )
 }
 
+function Test-X64PythonInvocation {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Executable,
+        [string[]]$PrefixArguments = @()
+    )
+
+    try {
+        $probe = & $Executable @PrefixArguments -c @"
+import struct
+import sys
+print(f"{struct.calcsize('P') * 8}|{sys.version_info.major}|{sys.version_info.minor}|{sys.executable}")
+"@ 2>$null
+    }
+    catch {
+        return $false
+    }
+    if ($LASTEXITCODE -ne 0 -or $null -eq $probe) {
+        return $false
+    }
+    $parts = @($probe)[-1].ToString().Trim().Split("|", 4)
+    if ($parts.Count -ne 4) {
+        return $false
+    }
+    $bitness = 0
+    $major = 0
+    $minor = 0
+    if (
+        -not [int]::TryParse($parts[0], [ref]$bitness) -or
+        -not [int]::TryParse($parts[1], [ref]$major) -or
+        -not [int]::TryParse($parts[2], [ref]$minor)
+    ) {
+        return $false
+    }
+    if ($bitness -ne 64) {
+        return $false
+    }
+    if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 12)) {
+        return $false
+    }
+    $resolved = $parts[3].Trim()
+    return (
+        -not [string]::IsNullOrWhiteSpace($resolved) -and
+        $resolved -notlike "*.venv-kiwoom-x86*"
+    )
+}
+
+function Resolve-X64PythonInvocation {
+    $launcherPaths = [System.Collections.Generic.List[string]]::new()
+    $pathLauncher = Get-Command "py.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $pathLauncher) {
+        $launcherPaths.Add($pathLauncher.Source)
+    }
+    foreach ($knownPath in @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python\Launcher\py.exe"),
+        (Join-Path $env:WINDIR "py.exe"),
+        (Join-Path $env:ProgramFiles "Python Launcher\py.exe")
+    )) {
+        if ([System.IO.File]::Exists($knownPath)) {
+            $launcherPaths.Add($knownPath)
+        }
+    }
+
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($launcher in $launcherPaths) {
+        if (-not $seen.Add($launcher)) {
+            continue
+        }
+        foreach ($selector in @(
+            "-V:3.13",
+            "-3.13-64",
+            "-V:3.12",
+            "-3.12-64",
+            "-3"
+        )) {
+            if (
+                Test-X64PythonInvocation `
+                    -Executable $launcher `
+                    -PrefixArguments @($selector)
+            ) {
+                return [pscustomobject]@{
+                    Executable = $launcher
+                    PrefixArguments = [string[]]@($selector)
+                }
+            }
+        }
+    }
+    return $null
+}
+
 function Resolve-X64ProjectPython {
     try {
         $resolved = & $Resolver 2>$null
@@ -116,12 +208,19 @@ function Install-X64Python {
 
 Set-Location $RepositoryRoot
 $BasePython = Resolve-X64ProjectPython
-if (-not $BasePython -and $InstallPython) {
+$BaseInvocation = $null
+if (-not $BasePython) {
+    $BaseInvocation = Resolve-X64PythonInvocation
+}
+if (-not $BasePython -and $null -eq $BaseInvocation -and $InstallPython) {
     Install-X64Python
     Write-Host "Waiting for the new x64 Python registration to become visible..."
     $BasePython = Wait-X64ProjectPython
+    if (-not $BasePython) {
+        $BaseInvocation = Resolve-X64PythonInvocation
+    }
 }
-if (-not $BasePython) {
+if (-not $BasePython -and $null -eq $BaseInvocation) {
     Write-Host "A separate 64-bit Python 3.12+ runtime is required for Alpha Cycle Lab."
     Write-Host "The Kiwoom OpenAPI+ x86 bridge Python cannot be used for analysis."
     Write-Host "Run this command to install and configure it automatically:"
@@ -129,13 +228,29 @@ if (-not $BasePython) {
     exit 2
 }
 
-Write-Host "Using main x64 Python: $BasePython"
+if ($BasePython) {
+    Write-Host "Using main x64 Python: $BasePython"
+}
+else {
+    $invocationLabel = (
+        @($BaseInvocation.Executable) + @($BaseInvocation.PrefixArguments)
+    ) -join " "
+    Write-Host "Using verified main x64 Python command: $invocationLabel"
+}
+
 if ($Force -and [System.IO.Directory]::Exists($VirtualEnvironmentRoot)) {
     Remove-Item -Recurse -Force $VirtualEnvironmentRoot
 }
 if (-not [System.IO.File]::Exists($VirtualEnvironmentPython)) {
     Write-Host "Creating the main project virtual environment..."
-    & $BasePython -m venv $VirtualEnvironmentRoot
+    if ($BasePython) {
+        & $BasePython -m venv $VirtualEnvironmentRoot
+    }
+    else {
+        & $BaseInvocation.Executable `
+            @($BaseInvocation.PrefixArguments) `
+            -m venv $VirtualEnvironmentRoot
+    }
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to create the main project virtual environment."
     }

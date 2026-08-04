@@ -33,6 +33,20 @@ def test_setup_waits_for_post_install_python_registration() -> None:
     assert 'Write-Host "Using main x64 Python: $BasePython"' in script
 
 
+def test_setup_can_create_venv_through_verified_python_launcher() -> None:
+    script = _read("scripts/setup_project_python.ps1")
+
+    assert "function Test-X64PythonInvocation" in script
+    assert "function Resolve-X64PythonInvocation" in script
+    assert '"-V:3.13"' in script
+    assert '"-V:3.12"' in script
+    assert "$BaseInvocation = Resolve-X64PythonInvocation" in script
+    assert "Using verified main x64 Python command" in script
+    assert "& $BaseInvocation.Executable" in script
+    assert "@($BaseInvocation.PrefixArguments)" in script
+    assert "-m venv $VirtualEnvironmentRoot" in script
+
+
 def test_setup_rejects_kiwoom_x86_runtime_for_main_analysis() -> None:
     script = _read("scripts/setup_project_python.ps1")
 
