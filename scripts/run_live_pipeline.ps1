@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryRoot = Split-Path -Parent $ScriptDirectory
 $SetupScript = Join-Path $ScriptDirectory "setup_local_credentials.ps1"
-$StatusPath = Join-Path $RepositoryRoot "data/private/live-research/latest_run.json"
+$DefaultOutputRoot = Join-Path $RepositoryRoot "data/private/live-research"
 $RequiredVariables = @(
     "TOSSINVEST_CLIENT_ID",
     "TOSSINVEST_CLIENT_SECRET",
@@ -17,7 +17,89 @@ $RequiredVariables = @(
     "BOK_ECOS_API_KEY"
 )
 
+function Get-PipelineOptionValue {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$OptionName
+    )
+
+    $value = $null
+    for ($index = 0; $index -lt $Arguments.Count; $index++) {
+        $argument = [string]$Arguments[$index]
+        if ($argument -eq $OptionName) {
+            if ($index + 1 -ge $Arguments.Count) {
+                throw "$OptionName requires a value"
+            }
+            $value = [string]$Arguments[$index + 1]
+            $index++
+            continue
+        }
+        $prefix = "$OptionName="
+        if ($argument.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+            $value = $argument.Substring($prefix.Length)
+        }
+    }
+    return $value
+}
+
+function New-ResumeArguments {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $result = [System.Collections.Generic.List[string]]::new()
+    foreach ($option in @(
+        "--evaluation-date",
+        "--output",
+        "--history-years",
+        "--timeout-seconds",
+        "--max-retries"
+    )) {
+        $value = Get-PipelineOptionValue -Arguments $Arguments -OptionName $option
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $result.Add($option)
+            $result.Add($value)
+        }
+    }
+    return [string[]]$result.ToArray()
+}
+
+function Resolve-OutputRoot {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+
+    $configured = Get-PipelineOptionValue -Arguments $Arguments -OptionName "--output"
+    if ([string]::IsNullOrWhiteSpace($configured)) {
+        return [System.IO.Path]::GetFullPath($DefaultOutputRoot)
+    }
+    if ([System.IO.Path]::IsPathRooted($configured)) {
+        return [System.IO.Path]::GetFullPath($configured)
+    }
+    return [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $configured))
+}
+
+function Get-StatusWriteTicks {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not [System.IO.File]::Exists($Path)) {
+        return [long]-1
+    }
+    return (Get-Item -LiteralPath $Path).LastWriteTimeUtc.Ticks
+}
+
+function Test-CurrentStatusFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][long]$PreviousTicks
+    )
+
+    if (-not [System.IO.File]::Exists($Path)) {
+        return $false
+    }
+    return (Get-StatusWriteTicks -Path $Path) -ne $PreviousTicks
+}
+
 Set-Location $RepositoryRoot
+$OutputRoot = Resolve-OutputRoot -Arguments $PipelineArguments
+$StatusPath = Join-Path $OutputRoot "latest_run.json"
+$ResumeArguments = New-ResumeArguments -Arguments $PipelineArguments
 
 foreach ($name in $RequiredVariables) {
     $processValue = [Environment]::GetEnvironmentVariable($name, "Process")
@@ -92,10 +174,14 @@ if ([string]::IsNullOrWhiteSpace($ProjectPython)) {
     $ProjectPython = "python"
 }
 
+$statusTicksBefore = Get-StatusWriteTicks -Path $StatusPath
 & $ProjectPython -m alpha_cycle.live_pipeline_cli @PipelineArguments
 $pipelineExitCode = $LASTEXITCODE
+$statusIsCurrent = Test-CurrentStatusFile `
+    -Path $StatusPath `
+    -PreviousTicks $statusTicksBefore
 
-if (Test-Path $StatusPath) {
+if ($statusIsCurrent) {
     $status = Get-Content $StatusPath -Raw -Encoding utf8 | ConvertFrom-Json
     if (
         $status.status -eq "blocked" -and
@@ -103,10 +189,23 @@ if (Test-Path $StatusPath) {
     ) {
         Write-Host "TossInvest blocked the current public IP: $($status.public_ip)"
         Write-Host "Attempting fail-closed resume from a fresh linked market/research snapshot."
-        & $ProjectPython -m alpha_cycle.resume_pipeline_cli
+        $resumeTicksBefore = Get-StatusWriteTicks -Path $StatusPath
+        & $ProjectPython -m alpha_cycle.resume_pipeline_cli @ResumeArguments
         $pipelineExitCode = $LASTEXITCODE
-        if (Test-Path $StatusPath) {
+        if (
+            Test-CurrentStatusFile `
+                -Path $StatusPath `
+                -PreviousTicks $resumeTicksBefore
+        ) {
             $status = Get-Content $StatusPath -Raw -Encoding utf8 | ConvertFrom-Json
+        }
+        else {
+            [Console]::Error.WriteLine(
+                "Resume did not create a current status file: $StatusPath"
+            )
+            if ($pipelineExitCode -eq 0) {
+                $pipelineExitCode = 2
+            }
         }
     }
 
@@ -132,7 +231,9 @@ if (Test-Path $StatusPath) {
     }
 }
 else {
-    [Console]::Error.WriteLine("Pipeline status file was not created: $StatusPath")
+    [Console]::Error.WriteLine(
+        "Pipeline did not create a current status file: $StatusPath"
+    )
     if ($pipelineExitCode -eq 0) {
         $pipelineExitCode = 2
     }
