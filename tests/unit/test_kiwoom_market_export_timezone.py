@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
 
@@ -61,7 +61,7 @@ def test_available_zoneinfo_is_not_replaced() -> None:
         pass
 
     def available_factory(_key: str) -> timezone:
-        return timezone.utc
+        return UTC
 
     fake.ZoneInfo = available_factory
     fake.ZoneInfoNotFoundError = MissingZoneError
@@ -80,7 +80,7 @@ def test_fixed_fallback_is_limited_to_kst_and_utc() -> None:
 
     assert datetime(2026, 1, 1, tzinfo=kst).utcoffset() == timedelta(hours=9)
     assert datetime(2026, 7, 1, tzinfo=kst).utcoffset() == timedelta(hours=9)
-    assert utc is timezone.utc
+    assert utc is UTC
     with pytest.raises(bootstrap.zoneinfo.ZoneInfoNotFoundError):
         bootstrap._fixed_supported_zone("Europe/London")
 
