@@ -7,10 +7,11 @@ from dataclasses import asdict
 from pathlib import Path
 
 from alpha_cycle import market_consistency_runner_cli as runner
+from alpha_cycle.market_consistency_cli import ConsistencyResult
 
 
 def _validate_live_quote_rows(
-    result: runner.ConsistencyResult,
+    result: ConsistencyResult,
     result_path: Path,
 ) -> None:
     quote_path = result_path.parent / result.quote_comparisons_file
@@ -46,7 +47,7 @@ def _validate_live_quote_rows(
 
 
 def assess_consistency_result(
-    result: runner.ConsistencyResult,
+    result: ConsistencyResult,
     result_path: Path,
     *,
     output_root: Path,
