@@ -26,9 +26,9 @@ def test_all_kiwoom_bridge_launchers_initialize_qt_runtime() -> None:
     for launcher in LAUNCHERS:
         script = launcher.read_text(encoding="utf-8")
         assert "initialize_kiwoom_openapi_plus_qt.ps1" in script
-        assert ". $QtInitializer -BridgePython" in script
-        assert script.index(". $QtInitializer -BridgePython") < script.index("$Probe") or (
-            launcher.name == "setup_kiwoom_openapi_plus_bridge.ps1"
-            and script.rindex(". $QtInitializer -BridgePython")
-            < script.rindex("& $VenvPython $Probe")
-        )
+        initialization = script.rindex(". $QtInitializer -BridgePython")
+        if launcher.name == "setup_kiwoom_openapi_plus_bridge.ps1":
+            invocation = script.rindex("& $VenvPython $Probe")
+        else:
+            invocation = script.rindex("& $BridgePython $Probe")
+        assert initialization < invocation
