@@ -114,8 +114,8 @@ def test_resolver_uses_script_probe_without_native_argument_quoting_risk() -> No
 def test_resolver_discovers_direct_launcher_registry_and_install_roots() -> None:
     resolver = _read("scripts/resolve_project_python.ps1")
 
-    assert '"Python312\\python.exe"' in resolver
-    assert '"Python312-32\\python.exe"' in resolver
+    assert "Python312\\python.exe" in resolver
+    assert "Python312-32\\python.exe" in resolver
     assert '"-3.12-64"' in resolver
     assert '"-3-64"' in resolver
     assert "-0p" in resolver
