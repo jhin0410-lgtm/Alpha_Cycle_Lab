@@ -2,6 +2,7 @@
 param(
     [switch]$NoReport,
     [Parameter(ValueFromRemainingArguments = $true)]
+    [AllowEmptyCollection()]
     [string[]]$PipelineArguments = @()
 )
 
@@ -19,7 +20,9 @@ $RequiredVariables = @(
 
 function Get-PipelineOptionValue {
     param(
-        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$Arguments,
         [Parameter(Mandatory = $true)][string]$OptionName
     )
 
@@ -43,7 +46,11 @@ function Get-PipelineOptionValue {
 }
 
 function New-ResumeArguments {
-    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$Arguments
+    )
 
     $result = [System.Collections.Generic.List[string]]::new()
     foreach ($option in @(
@@ -63,7 +70,11 @@ function New-ResumeArguments {
 }
 
 function Resolve-OutputRoot {
-    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [string[]]$Arguments
+    )
 
     $configured = Get-PipelineOptionValue -Arguments $Arguments -OptionName "--output"
     if ([string]::IsNullOrWhiteSpace($configured)) {
