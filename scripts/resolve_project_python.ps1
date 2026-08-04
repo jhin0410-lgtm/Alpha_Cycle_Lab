@@ -143,6 +143,6 @@ foreach ($candidate in $candidates) {
 Write-Error @"
 No compatible 64-bit Python 3.12+ interpreter was found for Alpha Cycle Lab.
 The Kiwoom OpenAPI+ x86 bridge Python is intentionally excluded.
-Install or restore 64-bit Python, create .venv, or set ALPHA_CYCLE_PYTHON to a 64-bit python.exe.
+Run .\scripts\setup_project_python.cmd -InstallPython to install Python x64, create .venv, and install project dependencies.
 "@
 exit 2
