@@ -68,6 +68,21 @@ def test_resolver_discovers_launcher_registry_and_common_install_roots() -> None
     assert 'Join-Path $env:LOCALAPPDATA "Programs\\Python"' in resolver
 
 
+def test_resolver_candidate_collectors_accept_an_initially_empty_list() -> None:
+    resolver = _read("scripts/resolve_project_python.ps1")
+
+    assert resolver.count("[AllowEmptyCollection()]") == 3
+    for function_name in (
+        "Add-DirectoryCandidates",
+        "Add-RegistryCandidates",
+        "Add-LauncherCandidates",
+    ):
+        function_start = resolver.index(f"function {function_name}")
+        function_body = resolver[function_start : function_start + 400]
+        assert "[AllowEmptyCollection()]" in function_body
+        assert "List[object]]$Candidates" in function_body
+
+
 def test_resolver_points_to_automatic_setup_when_x64_is_missing() -> None:
     resolver = _read("scripts/resolve_project_python.ps1")
 
