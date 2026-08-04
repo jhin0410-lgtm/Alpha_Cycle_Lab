@@ -193,25 +193,32 @@ function Add-LauncherCandidates {
         if (-not $seenLaunchers.Add($launcher)) {
             continue
         }
-        foreach ($selector in @("-3.12-64", "-V:3.12", "-3-64")) {
+        foreach ($selector in @(
+            "-3.12-64",
+            "-V:3.12",
+            "-3.13-64",
+            "-V:3.13",
+            "-3-64",
+            "-3"
+        )) {
             $Candidates.Add(
                 (New-PythonCandidate -Executable $launcher -PrefixArguments @($selector))
             )
         }
         try {
-            $installed = & $launcher -0p 2>$null
-            if ($LASTEXITCODE -eq 0) {
-                foreach ($line in @($installed)) {
-                    $match = [regex]::Match(
-                        $line.ToString(),
-                        "([A-Za-z]:\\.*?python(?:w)?\.exe)\s*$",
-                        [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+            # Python Launcher writes the runtime inventory to stderr on some versions.
+            # Capture both streams so an installed interpreter is never discarded.
+            $installed = & $launcher -0p 2>&1
+            foreach ($line in @($installed)) {
+                $match = [regex]::Match(
+                    $line.ToString(),
+                    '["'']?([A-Za-z]:\\.*?python(?:w)?\.exe)["'']?\s*$',
+                    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+                )
+                if ($match.Success) {
+                    $Candidates.Add(
+                        (New-PythonCandidate -Executable $match.Groups[1].Value)
                     )
-                    if ($match.Success) {
-                        $Candidates.Add(
-                            (New-PythonCandidate -Executable $match.Groups[1].Value)
-                        )
-                    }
                 }
             }
         }
