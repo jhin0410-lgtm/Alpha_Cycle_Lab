@@ -44,6 +44,9 @@ def test_runner_loads_user_credentials_and_never_reads_missing_report_path() -> 
 
 def test_cmd_launcher_bypasses_local_execution_policy_for_repo_script() -> None:
     launcher = _read("scripts/run_live_pipeline.cmd")
+    bootstrap = _read("scripts/run_live_pipeline_bootstrap.ps1")
+
     assert "-ExecutionPolicy Bypass" in launcher
-    assert '"%~dp0run_live_pipeline.ps1"' in launcher
+    assert '"%~dp0run_live_pipeline_bootstrap.ps1"' in launcher
     assert "%*" in launcher
+    assert '"run_live_pipeline.ps1"' in bootstrap
