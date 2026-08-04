@@ -15,8 +15,9 @@ def test_project_python_resolver_rejects_kiwoom_x86_runtime() -> None:
     assert "alpha_cycle_python" in resolver
     assert ".venv\\scripts\\python.exe" in resolver
     assert "-3.12-64" in resolver
-    assert "-3-64" in resolver
+    assert '"-3"' in resolver
     assert "$bitness -ne 64" in resolver
+    assert "rejected_32_bit" in resolver
     assert ".venv-kiwoom-x86" in resolver
     assert "python 3.12+" in resolver
 
