@@ -1,5 +1,7 @@
 """Regression tests for Kiwoom bridge Qt platform plugin initialization."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 
