@@ -2,17 +2,30 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import struct
 import subprocess
 import sys
 from pathlib import Path
+from types import ModuleType
 
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def _load_probe() -> ModuleType:
+    path = ROOT / "scripts/project_python_probe.py"
+    spec = importlib.util.spec_from_file_location("project_python_probe_test", path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_project_python_probe_reports_machine_readable_identity() -> None:
@@ -32,15 +45,13 @@ def test_project_python_probe_reports_machine_readable_identity() -> None:
 
 
 def test_project_python_probe_serializes_unicode_paths_as_ascii_json() -> None:
-    probe = _read("scripts/project_python_probe.py")
+    probe = _load_probe()
     sample_path = r"C:\Download\쿠쿠\coding\Alpha_Cycle_Lab\.venv\Scripts\python.exe"
-    serialized = json.dumps(
-        {"schema_version": "1.1", "executable": sample_path},
-        ensure_ascii=True,
-        sort_keys=True,
+
+    serialized = probe.serialize_runtime_identity(
+        {"schema_version": "1.1", "executable": sample_path}
     )
 
-    assert "ensure_ascii=True" in probe
     assert serialized.isascii()
     assert "쿠쿠" not in serialized
     assert json.loads(serialized)["executable"] == sample_path
@@ -106,6 +117,18 @@ def test_setup_rejects_kiwoom_x86_runtime_for_main_analysis() -> None:
     assert "Kiwoom bridge Python remains isolated in .venv-kiwoom-x86" in script
 
 
+def test_forced_setup_resolves_an_external_base_before_deleting_venv() -> None:
+    script = _read("scripts/setup_project_python.ps1")
+
+    resolve = script.index(
+        "$BasePython = Resolve-X64ProjectPython -ExcludeProjectVenv:$Force"
+    )
+    remove = script.index("Remove-Item -Recurse -Force $VirtualEnvironmentRoot")
+    assert resolve < remove
+    assert "[switch]$ExcludeProjectVenv" in script
+    assert '"-ExcludeProjectVenv"' in script
+
+
 def test_setup_cmd_preserves_arguments_and_exit_code() -> None:
     launcher = _read("scripts/setup_project_python.cmd")
 
@@ -142,6 +165,27 @@ def test_resolver_discovers_direct_launcher_registry_and_install_roots() -> None
     assert 'Join-Path $env:LOCALAPPDATA "Microsoft\\WindowsApps"' in resolver
 
 
+def test_resolver_prioritizes_active_candidates_before_recursive_scans() -> None:
+    resolver = _read("scripts/resolve_project_python.ps1")
+
+    phase_one = resolver.index("# Phase 1:")
+    path_candidate = resolver.index('Get-Command "python.exe"', phase_one)
+    phase_two = resolver.index("# Phase 2:")
+    recursive_phase = resolver.index("# Phase 3:")
+    assert phase_one < path_candidate < phase_two < recursive_phase
+    assert "Find-AcceptedCandidate" in resolver
+    assert "HashSet[string]" in resolver
+
+
+def test_resolver_guards_optional_windows_environment_roots() -> None:
+    resolver = _read("scripts/resolve_project_python.ps1")
+
+    assert 'IsNullOrWhiteSpace($env:LOCALAPPDATA)' in resolver
+    assert 'IsNullOrWhiteSpace($env:WINDIR)' in resolver
+    assert 'IsNullOrWhiteSpace($env:ProgramFiles)' in resolver
+    assert "@($env:ProgramFiles, $env:ProgramW6432)" in resolver
+
+
 def test_resolver_excludes_python_venv_templates_from_recursive_candidates() -> None:
     resolver = _read("scripts/resolve_project_python.ps1")
 
@@ -160,6 +204,7 @@ def test_resolver_records_candidate_rejection_reasons() -> None:
         "rejected_32_bit",
         "version_too_old",
         "rejected_kiwoom_bridge",
+        "rejected_project_venv",
         "resolved_path_missing",
         "accepted",
     ):
@@ -167,6 +212,17 @@ def test_resolver_records_candidate_rejection_reasons() -> None:
     assert "project_python_resolution.json" in resolver
     assert "Write-DiagnosticReport" in resolver
     assert 'schema_version = "1.1"' in resolver
+
+
+def test_resolver_diagnostics_cannot_mask_resolution_failure() -> None:
+    resolver = _read("scripts/resolve_project_python.ps1")
+
+    diagnostic = resolver[resolver.index("function Write-DiagnosticReport") :]
+    assert "try {" in diagnostic
+    assert "catch {" in diagnostic
+    assert "[Console]::Error.WriteLine" in diagnostic
+    assert "Write-Error" not in resolver
+    assert "exit 2" in resolver
 
 
 def test_diagnostic_cmd_preserves_exit_code_and_reports_artifact() -> None:
@@ -177,6 +233,19 @@ def test_diagnostic_cmd_preserves_exit_code_and_reports_artifact() -> None:
     assert "ERRORLEVEL" in script
     assert "project_python_resolution.json" in script
     assert "exit /b %EXIT_CODE%" in script
+
+
+def test_live_pipeline_scripts_preserve_remaining_arguments() -> None:
+    bootstrap = _read("scripts/run_live_pipeline_bootstrap.ps1")
+    pipeline = _read("scripts/run_live_pipeline.ps1")
+
+    for script in (bootstrap, pipeline):
+        assert "ValueFromRemainingArguments = $true" in script
+        assert "[string[]]$PipelineArguments = @()" in script
+        assert "@PipelineArguments" in script
+    assert "@args" not in pipeline
+    assert "[Console]::Error.WriteLine" in pipeline
+    assert "Write-Error" not in pipeline
 
 
 def test_windows_timezone_data_is_a_direct_project_dependency() -> None:
