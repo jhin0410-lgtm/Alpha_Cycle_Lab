@@ -77,6 +77,7 @@ print(f"{struct.calcsize('P') * 8}|{sys.version_info.major}|{sys.version_info.mi
 function Add-DirectoryCandidates {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [System.Collections.Generic.List[object]]$Candidates,
         [string]$Root
     )
@@ -103,6 +104,7 @@ function Add-DirectoryCandidates {
 function Add-RegistryCandidates {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [System.Collections.Generic.List[object]]$Candidates
     )
 
@@ -165,6 +167,7 @@ function Add-RegistryCandidates {
 function Add-LauncherCandidates {
     param(
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [System.Collections.Generic.List[object]]$Candidates
     )
 
