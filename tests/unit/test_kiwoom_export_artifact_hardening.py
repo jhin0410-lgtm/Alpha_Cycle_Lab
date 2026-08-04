@@ -7,7 +7,7 @@ import json
 import runpy
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
@@ -62,7 +62,7 @@ def test_writer_rejects_reuse_of_existing_snapshot_directory(tmp_path: Path) -> 
         str(EXPORTER_PATH),
         run_name="kiwoom_export_writer_namespace",
     )
-    fixed = datetime(2026, 8, 4, 8, 0, 0, 123456, tzinfo=timezone.utc)
+    fixed = datetime(2026, 8, 4, 8, 0, 0, 123456, tzinfo=UTC)
     namespace["_capture_now"] = lambda zone: fixed.astimezone(zone)
     writer = hardening.build_immutable_writer(namespace)
     exporter = SimpleNamespace(
