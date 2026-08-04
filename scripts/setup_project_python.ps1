@@ -8,155 +8,74 @@ $ErrorActionPreference = "Stop"
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryRoot = Split-Path -Parent $ScriptDirectory
 $Resolver = Join-Path $ScriptDirectory "resolve_project_python.ps1"
+$ProbeScript = Join-Path $ScriptDirectory "project_python_probe.py"
 $VirtualEnvironmentRoot = Join-Path $RepositoryRoot ".venv"
 $VirtualEnvironmentPython = Join-Path $VirtualEnvironmentRoot "Scripts\python.exe"
+$DiagnosticPath = Join-Path $RepositoryRoot "data\private\diagnostics\project_python_resolution.json"
 
 function Test-X64ProjectPython {
     param([Parameter(Mandatory = $true)][string]$PythonPath)
 
-    if (-not [System.IO.File]::Exists($PythonPath)) {
+    if (
+        -not [System.IO.File]::Exists($PythonPath) -or
+        -not [System.IO.File]::Exists($ProbeScript)
+    ) {
         return $false
     }
+
     try {
-        $probe = & $PythonPath -c @"
-import struct
-import sys
-print(f"{struct.calcsize('P') * 8}|{sys.version_info.major}|{sys.version_info.minor}|{sys.executable}")
-"@ 2>$null
+        $raw = & $PythonPath $ProbeScript 2>&1
+        $exitCode = $LASTEXITCODE
     }
     catch {
         return $false
     }
-    if ($LASTEXITCODE -ne 0 -or $null -eq $probe) {
+    if ($exitCode -ne 0 -or $null -eq $raw) {
         return $false
     }
-    $parts = @($probe)[-1].ToString().Trim().Split("|", 4)
-    if ($parts.Count -ne 4) {
-        return $false
-    }
-    $bitness = 0
-    $major = 0
-    $minor = 0
-    if (
-        -not [int]::TryParse($parts[0], [ref]$bitness) -or
-        -not [int]::TryParse($parts[1], [ref]$major) -or
-        -not [int]::TryParse($parts[2], [ref]$minor)
-    ) {
-        return $false
-    }
-    if ($bitness -ne 64) {
-        return $false
-    }
-    if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 12)) {
-        return $false
-    }
-    $resolved = $parts[3].Trim()
-    return (
-        -not [string]::IsNullOrWhiteSpace($resolved) -and
-        $resolved -notlike "*.venv-kiwoom-x86*"
-    )
-}
 
-function Test-X64PythonInvocation {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Executable,
-        [string[]]$PrefixArguments = @()
+    $jsonLine = @(
+        $raw |
+            ForEach-Object { $_.ToString().Trim() } |
+            Where-Object { $_ -like "{*" } |
+            Select-Object -Last 1
     )
+    if ($jsonLine.Count -eq 0) {
+        return $false
+    }
 
     try {
-        $probe = & $Executable @PrefixArguments -c @"
-import struct
-import sys
-print(f"{struct.calcsize('P') * 8}|{sys.version_info.major}|{sys.version_info.minor}|{sys.executable}")
-"@ 2>$null
+        $payload = $jsonLine[-1] | ConvertFrom-Json
     }
     catch {
         return $false
     }
-    if ($LASTEXITCODE -ne 0 -or $null -eq $probe) {
-        return $false
-    }
-    $parts = @($probe)[-1].ToString().Trim().Split("|", 4)
-    if ($parts.Count -ne 4) {
-        return $false
-    }
-    $bitness = 0
-    $major = 0
-    $minor = 0
-    if (
-        -not [int]::TryParse($parts[0], [ref]$bitness) -or
-        -not [int]::TryParse($parts[1], [ref]$major) -or
-        -not [int]::TryParse($parts[2], [ref]$minor)
-    ) {
-        return $false
-    }
-    if ($bitness -ne 64) {
-        return $false
-    }
-    if ($major -lt 3 -or ($major -eq 3 -and $minor -lt 12)) {
-        return $false
-    }
-    $resolved = $parts[3].Trim()
+
+    $bitness = [int]$payload.bitness
+    $major = [int]$payload.major
+    $minor = [int]$payload.minor
+    $resolved = [string]$payload.executable
     return (
+        $bitness -eq 64 -and
+        ($major -gt 3 -or ($major -eq 3 -and $minor -ge 12)) -and
         -not [string]::IsNullOrWhiteSpace($resolved) -and
+        [System.IO.File]::Exists($resolved) -and
         $resolved -notlike "*.venv-kiwoom-x86*"
     )
-}
-
-function Resolve-X64PythonInvocation {
-    $launcherPaths = [System.Collections.Generic.List[string]]::new()
-    $pathLauncher = Get-Command "py.exe" -ErrorAction SilentlyContinue
-    if ($null -ne $pathLauncher) {
-        $launcherPaths.Add($pathLauncher.Source)
-    }
-    foreach ($knownPath in @(
-        (Join-Path $env:LOCALAPPDATA "Programs\Python\Launcher\py.exe"),
-        (Join-Path $env:WINDIR "py.exe"),
-        (Join-Path $env:ProgramFiles "Python Launcher\py.exe")
-    )) {
-        if ([System.IO.File]::Exists($knownPath)) {
-            $launcherPaths.Add($knownPath)
-        }
-    }
-
-    $seen = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase
-    )
-    foreach ($launcher in $launcherPaths) {
-        if (-not $seen.Add($launcher)) {
-            continue
-        }
-        foreach ($selector in @(
-            "-V:3.13",
-            "-3.13-64",
-            "-V:3.12",
-            "-3.12-64",
-            "-3"
-        )) {
-            if (
-                Test-X64PythonInvocation `
-                    -Executable $launcher `
-                    -PrefixArguments @($selector)
-            ) {
-                return [pscustomobject]@{
-                    Executable = $launcher
-                    PrefixArguments = [string[]]@($selector)
-                }
-            }
-        }
-    }
-    return $null
 }
 
 function Resolve-X64ProjectPython {
     try {
-        $resolved = & $Resolver 2>$null
+        $resolved = & powershell.exe `
+            -NoProfile `
+            -ExecutionPolicy Bypass `
+            -File $Resolver 2>$null
+        $exitCode = $LASTEXITCODE
     }
     catch {
         return $null
     }
-    if ($LASTEXITCODE -ne 0 -or $null -eq $resolved) {
+    if ($exitCode -ne 0 -or $null -eq $resolved) {
         return $null
     }
     $path = @($resolved)[-1].ToString().Trim()
@@ -208,55 +127,38 @@ function Install-X64Python {
 
 Set-Location $RepositoryRoot
 $BasePython = Resolve-X64ProjectPython
-$BaseInvocation = $null
-if (-not $BasePython) {
-    $BaseInvocation = Resolve-X64PythonInvocation
-}
-if (-not $BasePython -and $null -eq $BaseInvocation -and $InstallPython) {
+if (-not $BasePython -and $InstallPython) {
     Install-X64Python
     Write-Host "Waiting for the new x64 Python registration to become visible..."
     $BasePython = Wait-X64ProjectPython
-    if (-not $BasePython) {
-        $BaseInvocation = Resolve-X64PythonInvocation
-    }
 }
-if (-not $BasePython -and $null -eq $BaseInvocation) {
+if (-not $BasePython) {
+    & powershell.exe `
+        -NoProfile `
+        -ExecutionPolicy Bypass `
+        -File $Resolver `
+        -Diagnostic 2>$null | Out-Null
     Write-Host "A separate 64-bit Python 3.12+ runtime is required for Alpha Cycle Lab."
     Write-Host "The Kiwoom OpenAPI+ x86 bridge Python cannot be used for analysis."
-    Write-Host "Run this command to install and configure it automatically:"
+    Write-Host "Diagnostic report: $DiagnosticPath"
+    Write-Host "Run this command only when x64 Python is genuinely absent:"
     Write-Host ".\scripts\setup_project_python.cmd -InstallPython"
     exit 2
 }
 
-if ($BasePython) {
-    Write-Host "Using main x64 Python: $BasePython"
-}
-else {
-    $invocationLabel = (
-        @($BaseInvocation.Executable) + @($BaseInvocation.PrefixArguments)
-    ) -join " "
-    Write-Host "Using verified main x64 Python command: $invocationLabel"
-}
-
+Write-Host "Using main x64 Python: $BasePython"
 if ($Force -and [System.IO.Directory]::Exists($VirtualEnvironmentRoot)) {
     Remove-Item -Recurse -Force $VirtualEnvironmentRoot
 }
 if (-not [System.IO.File]::Exists($VirtualEnvironmentPython)) {
     Write-Host "Creating the main project virtual environment..."
-    if ($BasePython) {
-        & $BasePython -m venv $VirtualEnvironmentRoot
-    }
-    else {
-        & $BaseInvocation.Executable `
-            @($BaseInvocation.PrefixArguments) `
-            -m venv $VirtualEnvironmentRoot
-    }
+    & $BasePython -m venv $VirtualEnvironmentRoot
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to create the main project virtual environment."
     }
 }
 if (-not (Test-X64ProjectPython -PythonPath $VirtualEnvironmentPython)) {
-    throw "The main project virtual environment is not using 64-bit Python 3.12+."
+    throw "The main project virtual environment is not using 64-bit Python 3.12+. Run setup with -Force."
 }
 
 Write-Host "Updating pip in the main project environment..."
@@ -275,27 +177,9 @@ if ($LASTEXITCODE -ne 0) {
     throw "Failed to install Alpha Cycle Lab dependencies."
 }
 
-$verification = & $VirtualEnvironmentPython -c @"
-import struct
-import sys
-from datetime import datetime
-from zoneinfo import ZoneInfo
-
-import alpha_cycle
-import numpy
-import pandas
-import yaml
-
-assert struct.calcsize('P') * 8 == 64
-assert datetime(2026, 1, 1, tzinfo=ZoneInfo('Asia/Seoul')).utcoffset() is not None
-print('PROJECT PYTHON: PASS')
-print(f"Python bitness: {struct.calcsize('P') * 8}")
-print(f"NumPy: {numpy.__version__}")
-print(f"pandas: {pandas.__version__}")
-print(f"PyYAML: {yaml.__version__}")
-print(f"Python executable: {sys.executable}")
-"@
+$verification = & $VirtualEnvironmentPython $ProbeScript --verify-project 2>&1
 if ($LASTEXITCODE -ne 0) {
+    $verification | ForEach-Object { Write-Host $_ }
     throw "The main project environment verification failed."
 }
 $verification | ForEach-Object { Write-Host $_ }
