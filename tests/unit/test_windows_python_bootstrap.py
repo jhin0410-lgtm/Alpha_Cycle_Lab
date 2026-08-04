@@ -1,4 +1,4 @@
-"""Static checks for Windows wrappers that must run from an uninstalled checkout."""
+"""Static checks for Windows source-tree and interpreter isolation wrappers."""
 
 from pathlib import Path
 
@@ -9,7 +9,19 @@ def _script(path: str) -> str:
     return (REPOSITORY_ROOT / path).read_text(encoding="utf-8").casefold()
 
 
-def test_python_module_cmd_wrappers_bootstrap_repository_src() -> None:
+def test_project_python_resolver_rejects_kiwoom_x86_runtime() -> None:
+    resolver = _script("scripts/resolve_project_python.ps1")
+
+    assert "alpha_cycle_python" in resolver
+    assert ".venv\\scripts\\python.exe" in resolver
+    assert "-3.12-64" in resolver
+    assert "-3-64" in resolver
+    assert "$bitness -ne 64" in resolver
+    assert ".venv-kiwoom-x86" in resolver
+    assert "python 3.12+" in resolver
+
+
+def test_python_module_cmd_wrappers_use_project_python_launcher() -> None:
     for path, module in (
         (
             "scripts/check_market_source_consistency.cmd",
@@ -22,19 +34,28 @@ def test_python_module_cmd_wrappers_bootstrap_repository_src() -> None:
         ),
     ):
         script = _script(path)
-        assert "%~dp0.." in script
-        assert "repository_root" in script
-        assert "pythonpath" in script
-        assert "\\src" in script
-        assert "pushd" in script
-        assert module in script
+        assert "run_alpha_cycle_module.ps1" in script
+        assert f'-module "{module}"' in script
+        assert "python -m" not in script
 
 
-def test_live_pipeline_wrapper_passes_repository_src_to_powershell() -> None:
-    script = _script("scripts/run_live_pipeline.cmd")
-    assert "%~dp0.." in script
-    assert "repository_root" in script
-    assert "pythonpath" in script
-    assert "\\src" in script
-    assert "pushd" in script
-    assert "run_live_pipeline.ps1" in script
+def test_module_launcher_uses_resolved_interpreter_and_source_tree() -> None:
+    launcher = _script("scripts/run_alpha_cycle_module.ps1")
+
+    assert "resolve_project_python.ps1" in launcher
+    assert "$projectpython -m $module" in launcher
+    assert "pythonpath" in launcher
+    assert 'join-path $repositoryroot "src"' in launcher
+    assert "alpha_cycle_python" in launcher
+
+
+def test_live_pipeline_bootstrap_prepends_resolved_python_to_path() -> None:
+    command = _script("scripts/run_live_pipeline.cmd")
+    bootstrap = _script("scripts/run_live_pipeline_bootstrap.ps1")
+
+    assert "run_live_pipeline_bootstrap.ps1" in command
+    assert "resolve_project_python.ps1" in bootstrap
+    assert "$env:path" in bootstrap
+    assert "$projectpythondirectory" in bootstrap
+    assert "alpha_cycle_python" in bootstrap
+    assert "run_live_pipeline.ps1" in bootstrap
