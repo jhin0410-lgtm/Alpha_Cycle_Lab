@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryRoot = Split-Path -Parent $ScriptDirectory
+$ProbeScript = Join-Path $ScriptDirectory "project_python_probe.py"
 $MinimumMajor = 3
 $MinimumMinor = 12
 $DiagnosticDirectory = Join-Path $RepositoryRoot "data\private\diagnostics"
@@ -26,13 +27,34 @@ function New-PythonCandidate {
     }
 }
 
-function Add-DirectoryCandidates {
+function Add-Candidate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [System.Collections.Generic.List[object]]$Candidates,
+        [string]$Executable,
+        [string[]]$PrefixArguments = @(),
+        [string]$Source = "unspecified"
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Executable)) {
+        return
+    }
+    $Candidates.Add(
+        (New-PythonCandidate `
+            -Executable $Executable `
+            -PrefixArguments $PrefixArguments `
+            -Source $Source)
+    )
+}
+
+function Add-RecursiveCandidates {
     param(
         [Parameter(Mandatory = $true)]
         [AllowEmptyCollection()]
         [System.Collections.Generic.List[object]]$Candidates,
         [string]$Root,
-        [string]$Source = "directory"
+        [string]$Source
     )
 
     if ([string]::IsNullOrWhiteSpace($Root) -or -not [System.IO.Directory]::Exists($Root)) {
@@ -46,13 +68,16 @@ function Add-DirectoryCandidates {
             -File `
             -Recurse `
             -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.FullName -notmatch '\\Lib\\venv\\scripts\\' -and
+                $_.FullName -notmatch '\\.venv-kiwoom-x86\\'
+            } |
             Sort-Object FullName -Unique |
             ForEach-Object {
-                $Candidates.Add(
-                    (New-PythonCandidate `
-                        -Executable $_.FullName `
-                        -Source $Source)
-                )
+                Add-Candidate `
+                    -Candidates $Candidates `
+                    -Executable $_.FullName `
+                    -Source $Source
             }
     }
     catch {
@@ -99,13 +124,10 @@ function Add-RegistryCandidates {
                                 $executable = Join-Path $installRoot "python.exe"
                             }
                         }
-                        if (-not [string]::IsNullOrWhiteSpace($executable)) {
-                            $Candidates.Add(
-                                (New-PythonCandidate `
-                                    -Executable $executable `
-                                    -Source "registry:$hive/$view/$versionName")
-                            )
-                        }
+                        Add-Candidate `
+                            -Candidates $Candidates `
+                            -Executable $executable `
+                            -Source "registry:$hive/$view/$versionName"
                     }
                     finally {
                         $installPath.Dispose()
@@ -135,9 +157,9 @@ function Add-LauncherCandidates {
     )
 
     $launcherPaths = [System.Collections.Generic.List[string]]::new()
-    $command = Get-Command "py.exe" -ErrorAction SilentlyContinue
-    if ($null -ne $command) {
-        $launcherPaths.Add($command.Source)
+    $pathLauncher = Get-Command "py.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $pathLauncher) {
+        $launcherPaths.Add($pathLauncher.Source)
     }
     foreach ($knownPath in @(
         (Join-Path $env:LOCALAPPDATA "Programs\Python\Launcher\py.exe"),
@@ -161,17 +183,16 @@ function Add-LauncherCandidates {
             "-3.13-64",
             "-V:3.12",
             "-3.12-64",
+            "-3-64",
             "-3"
         )) {
-            $Candidates.Add(
-                (New-PythonCandidate `
-                    -Executable $launcher `
-                    -PrefixArguments @($selector) `
-                    -Source "launcher:$selector")
-            )
+            Add-Candidate `
+                -Candidates $Candidates `
+                -Executable $launcher `
+                -PrefixArguments @($selector) `
+                -Source "launcher:$selector"
         }
         try {
-            # Python Launcher writes the runtime inventory to stderr on some versions.
             $installed = & $launcher -0p 2>&1
             foreach ($line in @($installed)) {
                 $match = [regex]::Match(
@@ -180,11 +201,10 @@ function Add-LauncherCandidates {
                     [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
                 )
                 if ($match.Success) {
-                    $Candidates.Add(
-                        (New-PythonCandidate `
-                            -Executable $match.Groups[1].Value `
-                            -Source "launcher_inventory")
-                    )
+                    Add-Candidate `
+                        -Candidates $Candidates `
+                        -Executable $match.Groups[1].Value `
+                        -Source "launcher_inventory"
                 }
             }
         }
@@ -194,7 +214,7 @@ function Add-LauncherCandidates {
     }
 }
 
-function Test-ProjectPython {
+function Invoke-PythonProbe {
     param(
         [Parameter(Mandatory = $true)]
         [string]$Executable,
@@ -203,14 +223,13 @@ function Test-ProjectPython {
     )
 
     $label = (@($Executable) + @($PrefixArguments)) -join " "
-    $probeCode = @"
-import struct
-import sys
-print(f"ALPHA_CYCLE_PYTHON|{struct.calcsize('P') * 8}|{sys.version_info.major}|{sys.version_info.minor}|{sys.executable}")
-"@
+    if (-not [System.IO.File]::Exists($ProbeScript)) {
+        throw "Project Python probe is missing: $ProbeScript"
+    }
 
     try {
-        $raw = & $Executable @PrefixArguments -c $probeCode 2>&1
+        $arguments = @($PrefixArguments) + @($ProbeScript)
+        $raw = & $Executable @arguments 2>&1
         $exitCode = $LASTEXITCODE
     }
     catch {
@@ -227,8 +246,8 @@ print(f"ALPHA_CYCLE_PYTHON|{struct.calcsize('P') * 8}|{sys.version_info.major}|{
     }
 
     $lines = @($raw | ForEach-Object { $_.ToString().Trim() })
-    $marker = @($lines | Where-Object { $_ -like "ALPHA_CYCLE_PYTHON|*" })
-    if ($exitCode -ne 0 -or $marker.Count -eq 0) {
+    $jsonLine = @($lines | Where-Object { $_ -like "{*" } | Select-Object -Last 1)
+    if ($exitCode -ne 0 -or $jsonLine.Count -eq 0) {
         return [pscustomobject]@{
             Candidate = $label
             Source = $Source
@@ -241,8 +260,10 @@ print(f"ALPHA_CYCLE_PYTHON|{struct.calcsize('P') * 8}|{sys.version_info.major}|{
         }
     }
 
-    $parts = $marker[-1].Split("|", 5)
-    if ($parts.Count -ne 5) {
+    try {
+        $payload = $jsonLine[-1] | ConvertFrom-Json
+    }
+    catch {
         return [pscustomobject]@{
             Candidate = $label
             Source = $Source
@@ -251,32 +272,16 @@ print(f"ALPHA_CYCLE_PYTHON|{struct.calcsize('P') * 8}|{sys.version_info.major}|{
             Bitness = $null
             Version = $null
             ResolvedPath = $null
-            Detail = $marker[-1]
+            Detail = $jsonLine[-1]
         }
     }
 
-    $bitness = 0
-    $major = 0
-    $minor = 0
-    if (
-        -not [int]::TryParse($parts[1], [ref]$bitness) -or
-        -not [int]::TryParse($parts[2], [ref]$major) -or
-        -not [int]::TryParse($parts[3], [ref]$minor)
-    ) {
-        return [pscustomobject]@{
-            Candidate = $label
-            Source = $Source
-            Status = "invalid_probe"
-            ExitCode = $exitCode
-            Bitness = $null
-            Version = $null
-            ResolvedPath = $null
-            Detail = $marker[-1]
-        }
-    }
-
-    $resolved = $parts[4].Trim()
+    $bitness = [int]$payload.bitness
+    $major = [int]$payload.major
+    $minor = [int]$payload.minor
+    $resolved = [string]$payload.executable
     $version = "$major.$minor"
+
     if ($bitness -ne 64) {
         $status = "rejected_32_bit"
         $detail = "expected 64-bit Python"
@@ -320,15 +325,18 @@ function Write-DiagnosticReport {
     )
 
     New-Item -ItemType Directory -Force -Path $DiagnosticDirectory | Out-Null
+    $pathPython = Get-Command "python.exe" -ErrorAction SilentlyContinue
+    $pathLauncher = Get-Command "py.exe" -ErrorAction SilentlyContinue
     $payload = [ordered]@{
-        schema_version = "1.0"
+        schema_version = "1.1"
         generated_at = [DateTimeOffset]::Now.ToString("o")
         repository_root = $RepositoryRoot
+        probe_script = $ProbeScript
         local_app_data = $env:LOCALAPPDATA
         program_files = $env:ProgramFiles
         program_w6432 = $env:ProgramW6432
-        path_python = [string](Get-Command "python.exe" -ErrorAction SilentlyContinue).Source
-        path_launcher = [string](Get-Command "py.exe" -ErrorAction SilentlyContinue).Source
+        path_python = if ($null -eq $pathPython) { "" } else { $pathPython.Source }
+        path_launcher = if ($null -eq $pathLauncher) { "" } else { $pathLauncher.Source }
         accepted_path = $AcceptedPath
         candidates = @($Results)
     }
@@ -341,22 +349,30 @@ $candidates = [System.Collections.Generic.List[object]]::new()
 
 foreach ($scope in @("Process", "User")) {
     $configured = [Environment]::GetEnvironmentVariable("ALPHA_CYCLE_PYTHON", $scope)
-    if (-not [string]::IsNullOrWhiteSpace($configured)) {
-        $candidates.Add(
-            (New-PythonCandidate `
-                -Executable $configured `
-                -Source "environment:$scope")
-        )
-    }
+    Add-Candidate `
+        -Candidates $candidates `
+        -Executable $configured `
+        -Source "environment:$scope"
 }
 
-$projectVirtualEnvironment = Join-Path $RepositoryRoot ".venv\Scripts\python.exe"
-if ([System.IO.File]::Exists($projectVirtualEnvironment)) {
-    $candidates.Add(
-        (New-PythonCandidate `
-            -Executable $projectVirtualEnvironment `
-            -Source "project_venv")
-    )
+Add-Candidate `
+    -Candidates $candidates `
+    -Executable (Join-Path $RepositoryRoot ".venv\Scripts\python.exe") `
+    -Source "project_venv"
+
+foreach ($knownPython in @(
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python314\python.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312\python.exe"),
+    (Join-Path $env:LOCALAPPDATA "Programs\Python\Python312-32\python.exe"),
+    "C:\Python314\python.exe",
+    "C:\Python313\python.exe",
+    "C:\Python312\python.exe"
+)) {
+    Add-Candidate `
+        -Candidates $candidates `
+        -Executable $knownPython `
+        -Source "known_path"
 }
 
 Add-LauncherCandidates -Candidates $candidates
@@ -364,19 +380,16 @@ Add-RegistryCandidates -Candidates $candidates
 
 foreach ($root in @(
     (Join-Path $env:LOCALAPPDATA "Programs\Python"),
-    (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps"),
-    (Join-Path $env:USERPROFILE "AppData\Local\Programs\Python"),
-    "C:\Python312",
-    "C:\Python313"
+    (Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps")
 )) {
-    Add-DirectoryCandidates `
+    Add-RecursiveCandidates `
         -Candidates $candidates `
         -Root $root `
         -Source "recursive:$root"
 }
 
 foreach ($programRoot in @($env:ProgramFiles, $env:ProgramW6432)) {
-    if ([string]::IsNullOrWhiteSpace($programRoot) -or -not (Test-Path $programRoot)) {
+    if ([string]::IsNullOrWhiteSpace($programRoot) -or -not [System.IO.Directory]::Exists($programRoot)) {
         continue
     }
     Get-ChildItem `
@@ -385,7 +398,7 @@ foreach ($programRoot in @($env:ProgramFiles, $env:ProgramW6432)) {
         -Filter "Python*" `
         -ErrorAction SilentlyContinue |
         ForEach-Object {
-            Add-DirectoryCandidates `
+            Add-RecursiveCandidates `
                 -Candidates $candidates `
                 -Root $_.FullName `
                 -Source "program_files:$($_.FullName)"
@@ -394,11 +407,10 @@ foreach ($programRoot in @($env:ProgramFiles, $env:ProgramW6432)) {
 
 $pathPython = Get-Command "python.exe" -ErrorAction SilentlyContinue
 if ($null -ne $pathPython) {
-    $candidates.Add(
-        (New-PythonCandidate `
-            -Executable $pathPython.Source `
-            -Source "path")
-    )
+    Add-Candidate `
+        -Candidates $candidates `
+        -Executable $pathPython.Source `
+        -Source "path"
 }
 
 $seen = [System.Collections.Generic.HashSet[string]]::new(
@@ -413,7 +425,7 @@ foreach ($candidate in $candidates) {
     if (-not $seen.Add($identity)) {
         continue
     }
-    $result = Test-ProjectPython `
+    $result = Invoke-PythonProbe `
         -Executable $executable `
         -PrefixArguments $prefixArguments `
         -Source ([string]$candidate.Source)
