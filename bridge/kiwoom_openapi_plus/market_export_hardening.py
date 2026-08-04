@@ -85,6 +85,7 @@ def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
     snapshot_id = namespace["_snapshot_id"]
     write_csv = namespace["_write_csv"]
     atomic_text = namespace["_atomic_text"]
+    capture_now = namespace.get("_capture_now", datetime.now)
 
     def write_export(
         *,
@@ -95,7 +96,7 @@ def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
         bars: list[Any],
         exporter: Any,
     ) -> tuple[Any, Path]:
-        captured_utc = datetime.now(utc_zone)
+        captured_utc = capture_now(utc_zone)
         captured_kst = captured_utc.astimezone(kst_zone)
         quote_rows = [asdict(value) for value in quotes]
         bar_rows = [asdict(value) for value in bars]
