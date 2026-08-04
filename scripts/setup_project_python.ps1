@@ -74,6 +74,26 @@ function Resolve-X64ProjectPython {
     return $null
 }
 
+function Wait-X64ProjectPython {
+    param(
+        [ValidateRange(1, 60)]
+        [int]$Attempts = 20,
+        [ValidateRange(1, 10)]
+        [int]$DelaySeconds = 1
+    )
+
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
+        $resolved = Resolve-X64ProjectPython
+        if (-not [string]::IsNullOrWhiteSpace($resolved)) {
+            return $resolved
+        }
+        if ($attempt -lt $Attempts) {
+            Start-Sleep -Seconds $DelaySeconds
+        }
+    }
+    return $null
+}
+
 function Install-X64Python {
     $winget = Get-Command "winget.exe" -ErrorAction SilentlyContinue
     if ($null -eq $winget) {
@@ -98,7 +118,8 @@ Set-Location $RepositoryRoot
 $BasePython = Resolve-X64ProjectPython
 if (-not $BasePython -and $InstallPython) {
     Install-X64Python
-    $BasePython = Resolve-X64ProjectPython
+    Write-Host "Waiting for the new x64 Python registration to become visible..."
+    $BasePython = Wait-X64ProjectPython
 }
 if (-not $BasePython) {
     Write-Host "A separate 64-bit Python 3.12+ runtime is required for Alpha Cycle Lab."
@@ -108,6 +129,7 @@ if (-not $BasePython) {
     exit 2
 }
 
+Write-Host "Using main x64 Python: $BasePython"
 if ($Force -and [System.IO.Directory]::Exists($VirtualEnvironmentRoot)) {
     Remove-Item -Recurse -Force $VirtualEnvironmentRoot
 }
