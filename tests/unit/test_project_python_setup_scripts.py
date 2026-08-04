@@ -68,6 +68,17 @@ def test_resolver_discovers_launcher_registry_and_common_install_roots() -> None
     assert 'Join-Path $env:LOCALAPPDATA "Programs\\Python"' in resolver
 
 
+def test_resolver_captures_python_launcher_inventory_from_both_streams() -> None:
+    resolver = _read("scripts/resolve_project_python.ps1")
+
+    assert "$installed = & $launcher -0p 2>&1" in resolver
+    assert '"-3.13-64"' in resolver
+    assert '"-V:3.13"' in resolver
+    assert '"-3"' in resolver
+    assert "runtime inventory to stderr" in resolver
+    assert "python(?:w)?\\.exe" in resolver
+
+
 def test_resolver_candidate_collectors_accept_an_initially_empty_list() -> None:
     resolver = _read("scripts/resolve_project_python.ps1")
 
