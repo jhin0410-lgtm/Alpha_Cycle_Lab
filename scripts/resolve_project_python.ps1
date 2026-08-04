@@ -7,6 +7,19 @@ $RepositoryRoot = Split-Path -Parent $ScriptDirectory
 $MinimumMajor = 3
 $MinimumMinor = 12
 
+function New-PythonCandidate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Executable,
+        [string[]]$PrefixArguments = @()
+    )
+
+    return [pscustomobject]@{
+        Executable = $Executable
+        PrefixArguments = $PrefixArguments
+    }
+}
+
 function Test-ProjectPython {
     param(
         [Parameter(Mandatory = $true)]
@@ -55,7 +68,7 @@ print(f"{struct.calcsize('P') * 8}|{sys.version_info.major}|{sys.version_info.mi
     if ([string]::IsNullOrWhiteSpace($resolved) -or -not [System.IO.File]::Exists($resolved)) {
         return $null
     }
-    if ($resolved -like "*$([System.IO.Path]::DirectorySeparatorChar).venv-kiwoom-x86*") {
+    if ($resolved -like "*.venv-kiwoom-x86*") {
         return $null
     }
     return [System.IO.Path]::GetFullPath($resolved)
@@ -66,19 +79,27 @@ $candidates = [System.Collections.Generic.List[object]]::new()
 foreach ($scope in @("Process", "User")) {
     $configured = [Environment]::GetEnvironmentVariable("ALPHA_CYCLE_PYTHON", $scope)
     if (-not [string]::IsNullOrWhiteSpace($configured)) {
-        $candidates.Add(@($configured, @()))
+        $candidates.Add(
+            (New-PythonCandidate -Executable $configured)
+        )
     }
 }
 
 $projectVirtualEnvironment = Join-Path $RepositoryRoot ".venv\Scripts\python.exe"
 if ([System.IO.File]::Exists($projectVirtualEnvironment)) {
-    $candidates.Add(@($projectVirtualEnvironment, @()))
+    $candidates.Add(
+        (New-PythonCandidate -Executable $projectVirtualEnvironment)
+    )
 }
 
 $launcher = Get-Command "py.exe" -ErrorAction SilentlyContinue
 if ($null -ne $launcher) {
-    $candidates.Add(@($launcher.Source, @("-3.12-64")))
-    $candidates.Add(@($launcher.Source, @("-3-64")))
+    $candidates.Add(
+        (New-PythonCandidate -Executable $launcher.Source -PrefixArguments @("-3.12-64"))
+    )
+    $candidates.Add(
+        (New-PythonCandidate -Executable $launcher.Source -PrefixArguments @("-3-64"))
+    )
 }
 
 $localPythonRoot = Join-Path $env:LOCALAPPDATA "Programs\Python"
@@ -88,22 +109,26 @@ if ([System.IO.Directory]::Exists($localPythonRoot)) {
         ForEach-Object {
             $candidate = Join-Path $_.FullName "python.exe"
             if ([System.IO.File]::Exists($candidate)) {
-                $candidates.Add(@($candidate, @()))
+                $candidates.Add(
+                    (New-PythonCandidate -Executable $candidate)
+                )
             }
         }
 }
 
 $pathPython = Get-Command "python.exe" -ErrorAction SilentlyContinue
 if ($null -ne $pathPython) {
-    $candidates.Add(@($pathPython.Source, @()))
+    $candidates.Add(
+        (New-PythonCandidate -Executable $pathPython.Source)
+    )
 }
 
 $seen = [System.Collections.Generic.HashSet[string]]::new(
     [System.StringComparer]::OrdinalIgnoreCase
 )
 foreach ($candidate in $candidates) {
-    $executable = [string]$candidate[0]
-    $prefixArguments = [string[]]$candidate[1]
+    $executable = [string]$candidate.Executable
+    $prefixArguments = [string[]]$candidate.PrefixArguments
     $identity = "$executable|$($prefixArguments -join ' ')"
     if (-not $seen.Add($identity)) {
         continue
