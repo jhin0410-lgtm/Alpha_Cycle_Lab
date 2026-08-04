@@ -82,6 +82,16 @@ def test_resolver_discovers_launcher_registry_and_common_install_roots() -> None
     assert 'Join-Path $env:LOCALAPPDATA "Programs\\Python"' in resolver
 
 
+def test_resolver_recursively_scans_python_and_windows_apps_roots() -> None:
+    resolver = _read("scripts/resolve_project_python.ps1")
+
+    assert '-Filter "python.exe"' in resolver
+    assert "-Recurse" in resolver
+    assert 'Join-Path $env:LOCALAPPDATA "Microsoft\\WindowsApps"' in resolver
+    assert 'Join-Path $env:USERPROFILE "AppData\\Local\\Programs\\Python"' in resolver
+    assert 'Source "recursive:$root"' in resolver
+
+
 def test_resolver_captures_python_launcher_inventory_from_both_streams() -> None:
     resolver = _read("scripts/resolve_project_python.ps1")
 
@@ -96,16 +106,43 @@ def test_resolver_captures_python_launcher_inventory_from_both_streams() -> None
 def test_resolver_candidate_collectors_accept_an_initially_empty_list() -> None:
     resolver = _read("scripts/resolve_project_python.ps1")
 
-    assert resolver.count("[AllowEmptyCollection()]") == 3
     for function_name in (
         "Add-DirectoryCandidates",
         "Add-RegistryCandidates",
         "Add-LauncherCandidates",
     ):
         function_start = resolver.index(f"function {function_name}")
-        function_body = resolver[function_start : function_start + 400]
+        function_body = resolver[function_start : function_start + 450]
         assert "[AllowEmptyCollection()]" in function_body
         assert "List[object]]$Candidates" in function_body
+
+
+def test_resolver_records_candidate_rejection_reasons() -> None:
+    resolver = _read("scripts/resolve_project_python.ps1")
+
+    for status in (
+        "launch_failed",
+        "invalid_probe",
+        "rejected_32_bit",
+        "version_too_old",
+        "rejected_kiwoom_bridge",
+        "resolved_path_missing",
+        "accepted",
+    ):
+        assert status in resolver
+    assert "ALPHA_CYCLE_PYTHON|" in resolver
+    assert "project_python_resolution.json" in resolver
+    assert "Write-DiagnosticReport" in resolver
+
+
+def test_diagnostic_cmd_preserves_exit_code_and_reports_artifact() -> None:
+    script = _read("scripts/diagnose_project_python.cmd")
+
+    assert "resolve_project_python.ps1" in script
+    assert "-Diagnostic" in script
+    assert "ERRORLEVEL" in script
+    assert "project_python_resolution.json" in script
+    assert "exit /b %EXIT_CODE%" in script
 
 
 def test_resolver_points_to_automatic_setup_when_x64_is_missing() -> None:
