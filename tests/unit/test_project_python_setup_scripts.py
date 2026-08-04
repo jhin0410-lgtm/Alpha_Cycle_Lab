@@ -121,12 +121,13 @@ def test_forced_setup_resolves_an_external_base_before_deleting_venv() -> None:
     script = _read("scripts/setup_project_python.ps1")
 
     resolve = script.index(
-        "$BasePython = Resolve-X64ProjectPython -ExcludeProjectVenv:$Force"
+        "$BasePython = Resolve-SetupBasePython -ForcedRebuild:$Force"
     )
     remove = script.index("Remove-Item -Recurse -Force $VirtualEnvironmentRoot")
     assert resolve < remove
-    assert "[switch]$ExcludeProjectVenv" in script
-    assert '"-ExcludeProjectVenv"' in script
+    assert "function Resolve-ConfiguredExternalPython" in script
+    assert "function Test-PathInsideDirectory" in script
+    assert "Resolve-X64ProjectPython -ExcludeProjectVenv:$ForcedRebuild" in script
 
 
 def test_setup_cmd_preserves_arguments_and_exit_code() -> None:
