@@ -24,10 +24,11 @@ def runtime_identity() -> dict[str, object]:
 
 def verify_project_environment() -> None:
     """Fail unless the main analysis environment is complete and 64-bit."""
-    import alpha_cycle
     import numpy
     import pandas
     import yaml
+
+    import alpha_cycle
 
     identity = runtime_identity()
     if identity["bitness"] != 64:
