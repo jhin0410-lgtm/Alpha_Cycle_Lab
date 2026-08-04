@@ -11,10 +11,11 @@ from __future__ import annotations
 import runpy
 import sys
 import zoneinfo
-from datetime import timedelta, timezone, tzinfo
+from collections.abc import Callable
+from datetime import UTC, timedelta, timezone, tzinfo
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 ZoneFactory = Callable[[str], tzinfo]
 
@@ -23,7 +24,7 @@ def _fixed_supported_zone(key: str) -> tzinfo:
     if key == "Asia/Seoul":
         return timezone(timedelta(hours=9), name="KST")
     if key == "UTC":
-        return timezone.utc
+        return UTC
     raise zoneinfo.ZoneInfoNotFoundError(f"No fixed fallback for time zone {key}")
 
 
@@ -37,8 +38,8 @@ def ensure_export_timezones(
     semantics.
     """
 
-    original: ZoneFactory = getattr(module, "ZoneInfo")
-    missing_error: type[BaseException] = getattr(module, "ZoneInfoNotFoundError")
+    original: ZoneFactory = module.ZoneInfo
+    missing_error: type[BaseException] = module.ZoneInfoNotFoundError
     try:
         original("Asia/Seoul")
         original("UTC")
@@ -49,7 +50,7 @@ def ensure_export_timezones(
                 return _fixed_supported_zone(key)
             return original(key)
 
-        setattr(module, "ZoneInfo", fallback)
+        module.ZoneInfo = fallback
         return True
     return False
 
