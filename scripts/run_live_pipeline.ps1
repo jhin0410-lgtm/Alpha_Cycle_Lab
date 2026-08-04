@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [switch]$NoReport
+    [switch]$NoReport,
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$PipelineArguments = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -76,11 +78,21 @@ $remaining = @(
     }
 )
 if ($remaining.Count -gt 0) {
-    Write-Error "Credential setup did not configure: $($remaining -join ', ')"
+    [Console]::Error.WriteLine(
+        "Credential setup did not configure: $($remaining -join ', ')"
+    )
     exit 2
 }
 
-& python -m alpha_cycle.live_pipeline_cli @args
+$ProjectPython = [Environment]::GetEnvironmentVariable(
+    "ALPHA_CYCLE_PYTHON",
+    "Process"
+)
+if ([string]::IsNullOrWhiteSpace($ProjectPython)) {
+    $ProjectPython = "python"
+}
+
+& $ProjectPython -m alpha_cycle.live_pipeline_cli @PipelineArguments
 $pipelineExitCode = $LASTEXITCODE
 
 if (Test-Path $StatusPath) {
@@ -91,7 +103,7 @@ if (Test-Path $StatusPath) {
     ) {
         Write-Host "TossInvest blocked the current public IP: $($status.public_ip)"
         Write-Host "Attempting fail-closed resume from a fresh linked market/research snapshot."
-        & python -m alpha_cycle.resume_pipeline_cli
+        & $ProjectPython -m alpha_cycle.resume_pipeline_cli
         $pipelineExitCode = $LASTEXITCODE
         if (Test-Path $StatusPath) {
             $status = Get-Content $StatusPath -Raw -Encoding utf8 | ConvertFrom-Json
@@ -120,7 +132,7 @@ if (Test-Path $StatusPath) {
     }
 }
 else {
-    Write-Error "Pipeline status file was not created: $StatusPath"
+    [Console]::Error.WriteLine("Pipeline status file was not created: $StatusPath")
     if ($pipelineExitCode -eq 0) {
         $pipelineExitCode = 2
     }
