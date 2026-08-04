@@ -24,6 +24,15 @@ def test_setup_installs_x64_python_and_creates_main_virtual_environment() -> Non
     assert '"ALPHA_CYCLE_PYTHON"' in script
 
 
+def test_setup_waits_for_post_install_python_registration() -> None:
+    script = _read("scripts/setup_project_python.ps1")
+
+    assert "function Wait-X64ProjectPython" in script
+    assert "Start-Sleep -Seconds $DelaySeconds" in script
+    assert "$BasePython = Wait-X64ProjectPython" in script
+    assert 'Write-Host "Using main x64 Python: $BasePython"' in script
+
+
 def test_setup_rejects_kiwoom_x86_runtime_for_main_analysis() -> None:
     script = _read("scripts/setup_project_python.ps1")
 
@@ -40,6 +49,23 @@ def test_setup_cmd_preserves_arguments_and_exit_code() -> None:
     assert '"%~dp0setup_project_python.ps1" %*' in launcher
     assert "ERRORLEVEL" in launcher
     assert "exit /b %EXIT_CODE%" in launcher
+
+
+def test_resolver_discovers_launcher_registry_and_common_install_roots() -> None:
+    resolver = _read("scripts/resolve_project_python.ps1")
+
+    assert "function Add-LauncherCandidates" in resolver
+    assert '"-3.12-64"' in resolver
+    assert '"-V:3.12"' in resolver
+    assert "-0p" in resolver
+    assert "function Add-RegistryCandidates" in resolver
+    assert "RegistryView]::Registry64" in resolver
+    assert "RegistryView]::Registry32" in resolver
+    assert 'OpenSubKey("Software\\Python\\PythonCore")' in resolver
+    assert 'GetValue("ExecutablePath", "")' in resolver
+    assert '$env:ProgramFiles' in resolver
+    assert '$env:ProgramW6432' in resolver
+    assert 'Join-Path $env:LOCALAPPDATA "Programs\\Python"' in resolver
 
 
 def test_resolver_points_to_automatic_setup_when_x64_is_missing() -> None:
