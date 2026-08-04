@@ -8,7 +8,7 @@ import hashlib
 import json
 from collections import defaultdict
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from statistics import median
@@ -47,6 +47,10 @@ class ConflictDiagnosticReport:
     rows_compared: int
     price_conflicts: int
     volume_mismatches: int
+    live_quote_status: str
+    live_quote_comparable_count: int
+    live_quote_conflict_count: int
+    raw_failures: tuple[str, ...]
     symbols: tuple[SymbolConflictDiagnostics, ...]
 
 
@@ -85,6 +89,8 @@ def _decimal(value: object, *, field: str) -> Decimal:
 
 
 def _boolean(value: object, *, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
     normalized = str(value).strip().casefold()
     if normalized in {"true", "1", "yes"}:
         return True
@@ -93,10 +99,28 @@ def _boolean(value: object, *, field: str) -> bool:
     raise DiagnosticError(f"invalid boolean {field}: {value}")
 
 
+def _integer(value: object, *, field: str) -> int:
+    text = str(value).strip()
+    try:
+        parsed = int(text)
+    except ValueError as exc:
+        raise DiagnosticError(f"invalid integer {field}: {value}") from exc
+    if parsed < 0:
+        raise DiagnosticError(f"negative integer {field}: {value}")
+    return parsed
+
+
+def _string_tuple(value: object, *, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise DiagnosticError(f"{field} must be a list")
+    return tuple(str(item) for item in value)
+
+
 def _resolve_path(text: object, *, relative_to: Path) -> Path:
-    path = Path(str(text).strip())
-    if not str(path):
+    raw = str(text).strip()
+    if not raw:
         raise DiagnosticError("artifact path is empty")
+    path = Path(raw)
     if not path.is_absolute():
         path = relative_to / path
     return path.resolve()
@@ -139,7 +163,7 @@ def _validate_linkage(
 def _ohlcv(row: Mapping[str, str], provider: str) -> tuple[Decimal, ...]:
     prefix = provider.casefold()
     return tuple(
-        _decimal(row[f"{prefix}_{field}"], field=f"{provider} {field}")
+        _decimal(row.get(f"{prefix}_{field}"), field=f"{provider} {field}")
         for field in (*PRICE_FIELDS, "volume")
     )
 
@@ -153,8 +177,8 @@ def _close_ratio_summary(
 ) -> tuple[str | None, str | None, bool]:
     ratios: list[Decimal] = []
     for row in rows:
-        toss = _decimal(row["toss_close"], field="toss_close")
-        kiwoom = _decimal(row["kiwoom_close"], field="kiwoom_close")
+        toss = _decimal(row.get("toss_close"), field="toss_close")
+        kiwoom = _decimal(row.get("kiwoom_close"), field="kiwoom_close")
         if toss != 0:
             ratios.append(kiwoom / toss)
     if not ratios:
@@ -219,17 +243,19 @@ def _diagnose_symbol(
 ) -> SymbolConflictDiagnostics:
     rows = rows_by_symbol[ticker]
     conflict_rows = [
-        row for row in rows if not _boolean(row["price_match"], field="price_match")
+        row
+        for row in rows
+        if not _boolean(row.get("price_match"), field="price_match")
     ]
     field_counts: dict[str, int] = {}
     for field in PRICE_FIELDS:
         field_counts[field] = sum(
-            _decimal(row[f"toss_{field}"], field=f"toss_{field}")
-            != _decimal(row[f"kiwoom_{field}"], field=f"kiwoom_{field}")
+            _decimal(row.get(f"toss_{field}"), field=f"toss_{field}")
+            != _decimal(row.get(f"kiwoom_{field}"), field=f"kiwoom_{field}")
             for row in rows
         )
     volume_mismatches = sum(
-        not _boolean(row["volume_match"], field="volume_match") for row in rows
+        not _boolean(row.get("volume_match"), field="volume_match") for row in rows
     )
     ratio, ratio_deviation, stable_ratio = _close_ratio_summary(conflict_rows)
     possible_symbol, mapping_rows = _possible_symbol_mapping(ticker, rows_by_symbol)
@@ -250,7 +276,11 @@ def _diagnose_symbol(
 
     representatives = tuple(
         _representative_row(row)
-        for row in sorted(conflict_rows, key=lambda value: value["date"], reverse=True)[:3]
+        for row in sorted(
+            conflict_rows,
+            key=lambda value: value["date"],
+            reverse=True,
+        )[:3]
     )
     return SymbolConflictDiagnostics(
         ticker=ticker,
@@ -270,6 +300,59 @@ def _diagnose_symbol(
     )
 
 
+def _validate_daily_aggregates(
+    result: Mapping[str, object],
+    rows: list[dict[str, str]],
+    symbols: tuple[SymbolConflictDiagnostics, ...],
+) -> None:
+    expected = set(_string_tuple(result.get("expected_symbols"), field="expected_symbols"))
+    actual = {symbol.ticker for symbol in symbols}
+    if not actual.issubset(expected):
+        raise DiagnosticError("daily comparison contains an unexpected symbol")
+    if len(rows) != _integer(
+        result.get("historical_rows_compared"), field="historical_rows_compared"
+    ):
+        raise DiagnosticError("daily comparison row count differs from linked result")
+    conflicts = sum(symbol.price_conflicts for symbol in symbols)
+    if conflicts != _integer(
+        result.get("historical_price_conflict_count"),
+        field="historical_price_conflict_count",
+    ):
+        raise DiagnosticError("daily price conflict count differs from linked result")
+    mismatches = sum(symbol.volume_mismatches for symbol in symbols)
+    if mismatches != _integer(
+        result.get("historical_volume_mismatch_count"),
+        field="historical_volume_mismatch_count",
+    ):
+        raise DiagnosticError("daily volume mismatch count differs from linked result")
+
+
+def _validate_live_aggregates(
+    result: Mapping[str, object],
+    result_path: Path,
+) -> tuple[int, int]:
+    quote_file = str(result.get("quote_comparisons_file", "")).strip()
+    if not quote_file:
+        raise DiagnosticError("consistency result has no live quote comparison file")
+    rows = _read_csv(result_path.parent / quote_file)
+    comparable = sum(
+        _boolean(row.get("comparable"), field="live comparable") for row in rows
+    )
+    conflicts = sum(
+        str(row.get("within_tolerance", "")).strip().casefold() == "false"
+        for row in rows
+    )
+    if comparable != _integer(
+        result.get("live_quote_comparable_count"), field="live_quote_comparable_count"
+    ):
+        raise DiagnosticError("live comparable count differs from linked result")
+    if conflicts != _integer(
+        result.get("live_quote_conflict_count"), field="live_quote_conflict_count"
+    ):
+        raise DiagnosticError("live conflict count differs from linked result")
+    return comparable, conflicts
+
+
 def diagnose_latest_consistency(
     pointer_path: Path = DEFAULT_POINTER,
 ) -> ConflictDiagnosticReport:
@@ -281,17 +364,25 @@ def diagnose_latest_consistency(
     daily_file = str(result.get("daily_comparisons_file", "")).strip()
     if not daily_file:
         raise DiagnosticError("consistency result has no daily comparison file")
-    daily_path = result_path.parent / daily_file
-    rows = _read_csv(daily_path)
+    rows = _read_csv(result_path.parent / daily_file)
     rows_by_symbol: dict[str, list[dict[str, str]]] = defaultdict(list)
+    seen: set[tuple[str, str]] = set()
     for row in rows:
         ticker = row.get("ticker", "").strip()
-        if not ticker:
-            raise DiagnosticError("daily comparison row has no ticker")
+        candle_date = row.get("date", "").strip()
+        if not ticker or not candle_date:
+            raise DiagnosticError("daily comparison row has no ticker or date")
+        key = (ticker, candle_date)
+        if key in seen:
+            raise DiagnosticError(f"duplicate daily comparison row: {key}")
+        seen.add(key)
         rows_by_symbol[ticker].append(row)
     symbols = tuple(
         _diagnose_symbol(ticker, rows_by_symbol) for ticker in sorted(rows_by_symbol)
     )
+    _validate_daily_aggregates(result, rows, symbols)
+    live_comparable, live_conflicts = _validate_live_aggregates(result, result_path)
+    failures = _string_tuple(result.get("failures"), field="failures")
     return ConflictDiagnosticReport(
         result_path=str(result_path),
         result_id=result_id,
@@ -299,6 +390,10 @@ def diagnose_latest_consistency(
         rows_compared=len(rows),
         price_conflicts=sum(symbol.price_conflicts for symbol in symbols),
         volume_mismatches=sum(symbol.volume_mismatches for symbol in symbols),
+        live_quote_status=str(result.get("live_quote_status", "")).strip(),
+        live_quote_comparable_count=live_comparable,
+        live_quote_conflict_count=live_conflicts,
+        raw_failures=failures,
         symbols=symbols,
     )
 
@@ -310,6 +405,11 @@ def _print_report(report: ConflictDiagnosticReport) -> None:
     print(f"rows compared: {report.rows_compared}")
     print(f"price conflicts: {report.price_conflicts}")
     print(f"volume mismatches: {report.volume_mismatches}")
+    print(f"live quote status: {report.live_quote_status}")
+    print(f"live comparable quotes: {report.live_quote_comparable_count}")
+    print(f"live quote conflicts: {report.live_quote_conflict_count}")
+    if report.raw_failures:
+        print("raw failures: " + " | ".join(report.raw_failures))
     for symbol in report.symbols:
         print("")
         print(
@@ -347,7 +447,7 @@ def _print_report(report: ConflictDiagnosticReport) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Explain the latest cross-provider market consistency result."
+        description="Explain a linked cross-provider market consistency result."
     )
     parser.add_argument(
         "--pointer",
@@ -355,6 +455,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_POINTER,
         help="Path to latest_market_consistency.json",
     )
+    parser.add_argument("--json", action="store_true")
     return parser
 
 
@@ -363,9 +464,15 @@ def main(argv: list[str] | None = None) -> int:
     try:
         report = diagnose_latest_consistency(args.pointer)
     except DiagnosticError as exc:
-        print(f"MARKET SOURCE CONFLICT DIAGNOSTICS: ERROR\n{exc}")
+        if args.json:
+            print(json.dumps({"status": "error", "failure": str(exc)}, sort_keys=True))
+        else:
+            print(f"MARKET SOURCE CONFLICT DIAGNOSTICS: ERROR\n{exc}")
         return 2
-    _print_report(report)
+    if args.json:
+        print(json.dumps(asdict(report), ensure_ascii=False, indent=2, sort_keys=True))
+    else:
+        _print_report(report)
     return 0
 
 

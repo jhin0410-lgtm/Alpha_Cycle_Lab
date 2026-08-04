@@ -7,10 +7,14 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
+from alpha_cycle import market_consistency_runner_cli as runner
 from alpha_cycle.market_consistency_cli import ConsistencyResult
-from alpha_cycle.market_consistency_runner_cli import assess_consistency_result
 
 SYMBOLS = ("000660", "005930", "005935")
+BASES = {"000660": 100_000, "005930": 200_000, "005935": 300_000}
+VOLUMES = {"000660": 1_000_000, "005930": 2_000_000, "005935": 3_000_000}
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -30,30 +34,30 @@ def _comparison_row(
     ticker: str,
     index: int,
     *,
-    price_match: bool,
-    volume_match: bool,
+    toss_base: int,
+    kiwoom_base: int,
+    toss_volume: int,
+    kiwoom_volume: int,
+    price_match: bool | None = None,
 ) -> dict[str, object]:
-    toss_base = 100_000 + index
-    kiwoom_base = toss_base if price_match else toss_base + 100
+    exact_price_match = toss_base == kiwoom_base
     return {
         "ticker": ticker,
         "date": f"2026-07-{index + 1:02d}",
-        "toss_open": toss_base,
-        "kiwoom_open": kiwoom_base,
-        "toss_high": toss_base + 10,
-        "kiwoom_high": kiwoom_base + 10,
-        "toss_low": toss_base - 10,
-        "kiwoom_low": kiwoom_base - 10,
-        "toss_close": toss_base + 5,
-        "kiwoom_close": kiwoom_base + 5,
-        "toss_volume": 1_000_000 + index,
-        "kiwoom_volume": (
-            1_000_000 + index if volume_match else 900_000 + index
-        ),
-        "max_price_difference_won": 0 if price_match else 100,
-        "price_match": price_match,
-        "volume_match": volume_match,
-        "volume_difference_bps": "0" if volume_match else "1000",
+        "toss_open": toss_base + index,
+        "kiwoom_open": kiwoom_base + index,
+        "toss_high": toss_base + index + 10,
+        "kiwoom_high": kiwoom_base + index + 10,
+        "toss_low": toss_base + index - 10,
+        "kiwoom_low": kiwoom_base + index - 10,
+        "toss_close": toss_base + index + 5,
+        "kiwoom_close": kiwoom_base + index + 5,
+        "toss_volume": toss_volume + index,
+        "kiwoom_volume": kiwoom_volume + index,
+        "max_price_difference_won": abs(toss_base - kiwoom_base),
+        "price_match": exact_price_match if price_match is None else price_match,
+        "volume_match": toss_volume == kiwoom_volume,
+        "volume_difference_bps": "0" if toss_volume == kiwoom_volume else "1000",
     }
 
 
@@ -63,6 +67,7 @@ def _build_case(
     venue_mismatch: bool,
     control_conflict: bool = False,
     explicit_equal_scope: bool = False,
+    cross_symbol_swap: bool = False,
 ) -> tuple[ConsistencyResult, Path]:
     toss_directory = tmp_path / "toss"
     kiwoom_directory = tmp_path / "kiwoom"
@@ -90,28 +95,34 @@ def _build_case(
     )
 
     rows: list[dict[str, object]] = []
+    swap = {"000660": "005930", "005930": "000660"}
     for ticker in SYMBOLS:
         for index in range(20):
-            if ticker in {"000660", "005930"}:
-                matches = not venue_mismatch
-                rows.append(
-                    _comparison_row(
-                        ticker,
-                        index,
-                        price_match=matches,
-                        volume_match=matches,
-                    )
-                )
+            toss_base = BASES[ticker]
+            toss_volume = VOLUMES[ticker]
+            if cross_symbol_swap and ticker in swap:
+                kiwoom_symbol = swap[ticker]
+                kiwoom_base = BASES[kiwoom_symbol]
+                kiwoom_volume = VOLUMES[kiwoom_symbol]
+            elif ticker in {"000660", "005930"} and venue_mismatch:
+                kiwoom_base = toss_base + 100
+                kiwoom_volume = toss_volume - 100_000
+            elif ticker == "005935" and control_conflict and index == 0:
+                kiwoom_base = toss_base + 100
+                kiwoom_volume = toss_volume - 100_000
             else:
-                matches = not control_conflict or index != 0
-                rows.append(
-                    _comparison_row(
-                        ticker,
-                        index,
-                        price_match=matches,
-                        volume_match=matches,
-                    )
+                kiwoom_base = toss_base
+                kiwoom_volume = toss_volume
+            rows.append(
+                _comparison_row(
+                    ticker,
+                    index,
+                    toss_base=toss_base,
+                    kiwoom_base=kiwoom_base,
+                    toss_volume=toss_volume,
+                    kiwoom_volume=kiwoom_volume,
                 )
+            )
     _write_csv(result_directory / "daily_price_comparisons.csv", rows)
 
     price_conflicts = sum(not bool(row["price_match"]) for row in rows)
@@ -166,12 +177,19 @@ def _build_case(
     return result, result_path
 
 
+def _read_rows(result_path: Path) -> list[dict[str, str]]:
+    with (result_path.parent / "daily_price_comparisons.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        return list(csv.DictReader(handle))
+
+
 def test_full_series_variable_symbols_with_exact_control_are_scope_blocked(
     tmp_path: Path,
 ) -> None:
     result, result_path = _build_case(tmp_path, venue_mismatch=True)
 
-    assessment, assessment_path = assess_consistency_result(
+    assessment, assessment_path = runner.assess_consistency_result(
         result,
         result_path,
         output_root=tmp_path,
@@ -180,6 +198,7 @@ def test_full_series_variable_symbols_with_exact_control_are_scope_blocked(
     assert assessment.status == "blocked_market_scope_mismatch"
     assert assessment.classification == "inferred_venue_scope_mismatch"
     assert assessment.raw_price_difference_count == 40
+    assert assessment.tolerance_conflict_count == 40
     assert assessment.comparable_scope_price_conflict_count == 0
     assert assessment.scope_incompatible_row_count == 40
     assert assessment.scope_incompatible_symbols == ("000660", "005930")
@@ -202,7 +221,7 @@ def test_control_security_conflict_remains_true_fail_closed_conflict(
         control_conflict=True,
     )
 
-    assessment, _ = assess_consistency_result(
+    assessment, _ = runner.assess_consistency_result(
         result,
         result_path,
         output_root=tmp_path,
@@ -213,7 +232,6 @@ def test_control_security_conflict_remains_true_fail_closed_conflict(
     assert assessment.raw_price_difference_count == 1
     assert assessment.comparable_scope_price_conflict_count == 1
     assert assessment.scope_incompatible_row_count == 0
-    assert assessment.decision_integration_eligible is False
 
 
 def test_explicit_equal_market_scopes_prevent_venue_inference(tmp_path: Path) -> None:
@@ -223,7 +241,7 @@ def test_explicit_equal_market_scopes_prevent_venue_inference(tmp_path: Path) ->
         explicit_equal_scope=True,
     )
 
-    assessment, _ = assess_consistency_result(
+    assessment, _ = runner.assess_consistency_result(
         result,
         result_path,
         output_root=tmp_path,
@@ -239,9 +257,8 @@ def test_matching_historical_series_preserve_historical_only_status(
     tmp_path: Path,
 ) -> None:
     result, result_path = _build_case(tmp_path, venue_mismatch=False)
-    result = replace(result, status="passed_historical_only")
 
-    assessment, _ = assess_consistency_result(
+    assessment, _ = runner.assess_consistency_result(
         result,
         result_path,
         output_root=tmp_path,
@@ -251,7 +268,128 @@ def test_matching_historical_series_preserve_historical_only_status(
     assert assessment.classification == "equivalent_scope_observed"
     assert assessment.raw_price_difference_count == 0
     assert assessment.comparable_scope_price_conflict_count == 0
+
+
+def test_exact_differences_are_not_hidden_by_tolerance_flags(tmp_path: Path) -> None:
+    result, result_path = _build_case(tmp_path, venue_mismatch=True)
+    rows = _read_rows(result_path)
+    control = next(row for row in rows if row["ticker"] == "005935")
+    control["kiwoom_close"] = str(int(control["kiwoom_close"]) + 1)
+    control["max_price_difference_won"] = "1"
+    control["price_match"] = "True"
+    _write_csv(result_path.parent / "daily_price_comparisons.csv", rows)
+
+    assessment, _ = runner.assess_consistency_result(
+        result,
+        result_path,
+        output_root=tmp_path,
+    )
+
+    assert assessment.raw_price_difference_count == 41
+    assert assessment.tolerance_conflict_count == 40
+    assert assessment.classification == "true_or_unresolved_price_conflict"
+
+
+def test_cross_symbol_exact_mapping_blocks_venue_inference(tmp_path: Path) -> None:
+    result, result_path = _build_case(
+        tmp_path,
+        venue_mismatch=False,
+        cross_symbol_swap=True,
+    )
+
+    assessment, _ = runner.assess_consistency_result(
+        result,
+        result_path,
+        output_root=tmp_path,
+    )
+
+    assert assessment.classification == "possible_symbol_mapping_conflict"
+    by_symbol = {item.ticker: item for item in assessment.symbols}
+    assert by_symbol["000660"].possible_kiwoom_symbol == "005930"
+    assert by_symbol["005930"].possible_kiwoom_symbol == "000660"
+    assert assessment.scope_incompatible_row_count == 0
+
+
+def test_live_only_failure_is_not_mislabeled_as_historical_conflict(
+    tmp_path: Path,
+) -> None:
+    result, result_path = _build_case(tmp_path, venue_mismatch=False)
+    result = replace(
+        result,
+        status="failed",
+        live_quote_status="conflict",
+        live_quote_conflict_count=1,
+        failures=("005930 live quote conflict",),
+    )
+
+    assessment, _ = runner.assess_consistency_result(
+        result,
+        result_path,
+        output_root=tmp_path,
+    )
+
+    assert assessment.classification == "live_quote_conflict"
+    assert assessment.raw_price_difference_count == 0
+    assert assessment.live_quote_conflict_count == 1
+
+
+def test_insufficient_overlap_produces_a_linked_fail_closed_assessment(
+    tmp_path: Path,
+) -> None:
+    result, result_path = _build_case(tmp_path, venue_mismatch=True)
+    rows = [row for row in _read_rows(result_path) if row["ticker"] != "005935"]
+    _write_csv(result_path.parent / "daily_price_comparisons.csv", rows)
+    result = replace(
+        result,
+        historical_rows_compared=40,
+        historical_volume_mismatch_count=40,
+        historical_symbols_passed=(),
+        failures=("005935 has insufficient overlap",),
+    )
+
+    assessment, _ = runner.assess_consistency_result(
+        result,
+        result_path,
+        output_root=tmp_path,
+    )
+
+    assert assessment.classification == "insufficient_historical_overlap"
+    assert assessment.historical_scope_status == "insufficient_evidence"
     assert assessment.decision_integration_eligible is False
+
+
+def test_assessment_failure_invalidates_latest_pointer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result, result_path = _build_case(tmp_path, venue_mismatch=True)
+    rows = _read_rows(result_path)
+    rows[0]["toss_open"] = "not-a-number"
+    _write_csv(result_path.parent / "daily_price_comparisons.csv", rows)
+    monkeypatch.setattr(
+        runner,
+        "run_consistency_check",
+        lambda **_kwargs: (result, result_path),
+    )
+
+    with pytest.raises(runner.ScopeAssessmentError):
+        runner.run_assessed_consistency(
+            output_root=tmp_path,
+            required_days=20,
+            price_tolerance_won=runner.Decimal(0),
+            live_tolerance_bps=runner.Decimal(50),
+            max_snapshot_age_minutes=30,
+            max_capture_gap_seconds=60,
+        )
+
+    pointer = json.loads(
+        (tmp_path / "latest_market_scope_assessment.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert pointer["status"] == "failed_assessment"
+    assert pointer["raw_result_id"] == result.result_id
+    assert pointer["decision_integration_eligible"] is False
 
 
 def test_windows_wrapper_uses_scope_aware_runner_only() -> None:

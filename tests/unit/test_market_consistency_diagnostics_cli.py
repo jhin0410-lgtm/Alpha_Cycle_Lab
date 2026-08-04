@@ -7,7 +7,10 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 from alpha_cycle.market_consistency_diagnostics_cli import (
+    DiagnosticError,
     diagnose_latest_consistency,
 )
 
@@ -75,6 +78,23 @@ def _write_artifacts(tmp_path: Path) -> Path:
             )
         )
     _write_csv(result_directory / "daily_price_comparisons.csv", rows)
+    _write_csv(
+        result_directory / "live_quote_comparisons.csv",
+        [
+            {
+                "ticker": ticker,
+                "toss_price": 100,
+                "kiwoom_price": 100,
+                "absolute_difference_won": 0,
+                "difference_bps": 0,
+                "capture_gap_seconds": 3600,
+                "comparable": False,
+                "within_tolerance": "",
+                "reason": "snapshots are stale",
+            }
+            for ticker in ("000660", "005930", "005935")
+        ],
+    )
 
     result_payload: dict[str, object] = {
         "schema_version": "1.0",
@@ -100,12 +120,12 @@ def _write_artifacts(tmp_path: Path) -> Path:
         "live_quote_status": "not_comparable",
         "live_quote_comparable_count": 0,
         "live_quote_conflict_count": 0,
-        "live_capture_gap_seconds": 0.0,
+        "live_capture_gap_seconds": 3600.0,
         "decision_integration_eligible": False,
         "automatic_provider_substitution_enabled": False,
         "account_api_enabled": False,
         "order_api_enabled": False,
-        "warnings": [],
+        "warnings": ["live quotes not compared"],
         "failures": ["000660 conflict", "005930 conflict"],
         "daily_comparisons_file": "daily_price_comparisons.csv",
         "quote_comparisons_file": "live_quote_comparisons.csv",
@@ -138,6 +158,11 @@ def test_diagnostics_detects_full_series_and_symbol_mapping_conflicts(
     assert report.status == "failed"
     assert report.rows_compared == 9
     assert report.price_conflicts == 6
+    assert report.volume_mismatches == 6
+    assert report.live_quote_status == "not_comparable"
+    assert report.live_quote_comparable_count == 0
+    assert report.live_quote_conflict_count == 0
+    assert report.raw_failures == ("000660 conflict", "005930 conflict")
     by_symbol = {symbol.ticker: symbol for symbol in report.symbols}
 
     first = by_symbol["000660"]
@@ -156,6 +181,23 @@ def test_diagnostics_detects_full_series_and_symbol_mapping_conflicts(
     assert passed.price_conflicts == 0
     assert passed.volume_mismatches == 0
     assert passed.suspected_patterns == ()
+
+
+def test_diagnostics_rejects_tampered_aggregate_counts(tmp_path: Path) -> None:
+    pointer_path = _write_artifacts(tmp_path)
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    result_path = Path(pointer["result_path"])
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    result["historical_price_conflict_count"] = 5
+    payload = dict(result)
+    payload.pop("result_id")
+    result["result_id"] = _result_id(payload)
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+    pointer["result_id"] = result["result_id"]
+    pointer_path.write_text(json.dumps(pointer), encoding="utf-8")
+
+    with pytest.raises(DiagnosticError, match="price conflict count"):
+        diagnose_latest_consistency(pointer_path)
 
 
 def test_consistency_cmd_routes_through_scope_aware_runner() -> None:
