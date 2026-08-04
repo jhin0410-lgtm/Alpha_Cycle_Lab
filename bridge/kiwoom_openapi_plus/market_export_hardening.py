@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 import time
 from collections import deque
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 Clock = Callable[[], float]
 Sleeper = Callable[[float], None]
