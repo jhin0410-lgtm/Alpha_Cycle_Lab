@@ -24,11 +24,26 @@ def test_project_python_probe_reports_machine_readable_identity() -> None:
     )
     payload = json.loads(completed.stdout)
 
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert payload["bitness"] == struct.calcsize("P") * 8
     assert payload["major"] == sys.version_info.major
     assert payload["minor"] == sys.version_info.minor
     assert Path(payload["executable"]).resolve() == Path(sys.executable).resolve()
+
+
+def test_project_python_probe_serializes_unicode_paths_as_ascii_json() -> None:
+    probe = _read("scripts/project_python_probe.py")
+    sample_path = r"C:\Download\쿠쿠\coding\Alpha_Cycle_Lab\.venv\Scripts\python.exe"
+    serialized = json.dumps(
+        {"schema_version": "1.1", "executable": sample_path},
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+
+    assert "ensure_ascii=True" in probe
+    assert serialized.isascii()
+    assert "쿠쿠" not in serialized
+    assert json.loads(serialized)["executable"] == sample_path
 
 
 def test_project_python_probe_verifies_installed_project_environment() -> None:

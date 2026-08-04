@@ -13,13 +13,18 @@ from zoneinfo import ZoneInfo
 def runtime_identity() -> dict[str, object]:
     """Return machine-readable runtime identity without third-party imports."""
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "bitness": struct.calcsize("P") * 8,
         "major": sys.version_info.major,
         "minor": sys.version_info.minor,
         "micro": sys.version_info.micro,
         "executable": sys.executable,
     }
+
+
+def serialize_runtime_identity(identity: dict[str, object]) -> str:
+    """Serialize identity as ASCII-only JSON for Windows PowerShell 5.1 pipes."""
+    return json.dumps(identity, ensure_ascii=True, sort_keys=True)
 
 
 def verify_project_environment() -> None:
@@ -58,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.verify_project:
         verify_project_environment()
     else:
-        print(json.dumps(runtime_identity(), ensure_ascii=False, sort_keys=True))
+        print(serialize_runtime_identity(runtime_identity()))
     return 0
 
 
