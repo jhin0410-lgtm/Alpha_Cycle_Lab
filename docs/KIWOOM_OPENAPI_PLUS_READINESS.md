@@ -67,7 +67,7 @@ The command:
 3. Creates `.venv-kiwoom-x86` without changing the main project environment.
 4. Installs pinned Windows x86 PyQt5 ActiveX dependencies only.
 5. Creates `KHOPENAPI.KHOpenAPICtrl.1` without opening the login window.
-6. Leaves market-data, account, and order features disabled.
+6. Leaves account, holdings, balance, and order functions disabled.
 
 The isolated runtime intentionally does not install the main package, NumPy, or
 pandas. It exists only to host the 32-bit ActiveX control.
@@ -95,7 +95,7 @@ After the environment check passes, verify OpenAPI+ service registration and the
 login event:
 
 ```powershell
-.\scripts\login_probe_kiwoom_openapi_plus.cmd
+.\scripts\login_probe_kiwoom_openapi_plus.cmd -TimeoutSeconds 600
 ```
 
 The official Kiwoom login window opens. The bridge calls only:
@@ -113,22 +113,84 @@ KIWOOM OPENAPI+ BRIDGE: PASS
 status: passed_login
 connected: True
 service registration verified: True
+market data session ready: True
 account API: disabled
 order API: disabled
 ```
 
-The next integration gate is source-provenanced, read-only market data. It is not
-enabled until the login probe succeeds.
+## Read-only market export
+
+After the login probe succeeds, collect an independent Kiwoom market snapshot:
+
+```powershell
+.\scripts\export_kiwoom_openapi_plus_market.cmd
+```
+
+The default universe matches the current live market pipeline:
+
+- `005930`: Samsung Electronics common
+- `005935`: Samsung Electronics preferred, retained as auxiliary valuation evidence
+- `000660`: SK hynix
+
+The exporter performs two sequential public-market TR requests per symbol:
+
+- `opt10001`: current quote and basic price fields
+- `opt10081`: daily chart, first response page only
+
+Daily bars use `수정주가구분=0`, matching the existing unadjusted-price pipeline.
+Prices are normalized to non-negative OHLC values while the exact provider strings
+are retained beside the normalized values. A negative signed current-price string
+is therefore not discarded or hidden.
+
+The exporter enforces at most four requests per second, below Kiwoom's published
+limit of five requests per second. It also records the published minute and hourly
+limits in the manifest. Requests are serialized in one ActiveX process.
+
+A successful run writes:
+
+```text
+data/private/live-research/kiwoom-openapi-plus-market/
+  latest_market_export.json
+  <capture timestamp>/
+    manifest.json
+    quotes.csv
+    daily_bars.csv
+```
+
+The manifest records:
+
+- provider and snapshot ID
+- UTC and Korea capture timestamps
+- exact symbol set
+- quote and bar counts
+- TR codes and request count
+- unadjusted-price status
+- source messages and explicit limitations
+- disabled account and order capabilities
+
+This export is not silently substituted for TossInvest or any other provider. The
+next integration gate compares providers by symbol, capture time, price basis, and
+explicit tolerances. Conflicts remain visible and fail closed.
+
+Optional overrides:
+
+```powershell
+.\scripts\export_kiwoom_openapi_plus_market.cmd `
+    -Symbols 005930,005935,000660 `
+    -DailyCount 120 `
+    -TimeoutSeconds 600
+```
 
 ## Deliberate limits
 
-The installation and bridge checks do not enable:
+The installation, login, and market-export tools do not enable:
 
 - account-number lookup
 - holdings or balance collection
 - certificate or account-password collection
 - order placement, cancellation, or modification
-- automatic replacement of TossInvest evidence
+- automatic replacement of another market-data provider
+- automatic trading from the exported evidence
 
 The bridge environment result is written locally to:
 
