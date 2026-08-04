@@ -29,7 +29,7 @@ def _fixed_supported_zone(key: str) -> tzinfo:
     if key == "Asia/Seoul":
         return timezone(timedelta(hours=9), name="KST")
     if key == "UTC":
-        return timezone.utc
+        return timezone.utc  # noqa: UP017 - bridge supports Python 3.10
     raise zoneinfo.ZoneInfoNotFoundError(f"No fixed fallback for time zone {key}")
 
 
