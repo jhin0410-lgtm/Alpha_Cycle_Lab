@@ -22,7 +22,6 @@ function Test-X64ProjectPython {
     ) {
         return $false
     }
-
     try {
         $raw = & $PythonPath $ProbeScript 2>&1
         $exitCode = $LASTEXITCODE
@@ -33,7 +32,6 @@ function Test-X64ProjectPython {
     if ($exitCode -ne 0 -or $null -eq $raw) {
         return $false
     }
-
     $jsonLine = @(
         $raw |
             ForEach-Object { $_.ToString().Trim() } |
@@ -43,14 +41,12 @@ function Test-X64ProjectPython {
     if ($jsonLine.Count -eq 0) {
         return $false
     }
-
     try {
         $payload = $jsonLine[-1] | ConvertFrom-Json
     }
     catch {
         return $false
     }
-
     $bitness = [int]$payload.bitness
     $major = [int]$payload.major
     $minor = [int]$payload.minor
@@ -65,11 +61,18 @@ function Test-X64ProjectPython {
 }
 
 function Resolve-X64ProjectPython {
+    param([switch]$ExcludeProjectVenv)
+
+    $resolverArguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $Resolver
+    )
+    if ($ExcludeProjectVenv) {
+        $resolverArguments += "-ExcludeProjectVenv"
+    }
     try {
-        $resolved = & powershell.exe `
-            -NoProfile `
-            -ExecutionPolicy Bypass `
-            -File $Resolver 2>$null
+        $resolved = & powershell.exe @resolverArguments 2>$null
         $exitCode = $LASTEXITCODE
     }
     catch {
@@ -87,14 +90,13 @@ function Resolve-X64ProjectPython {
 
 function Wait-X64ProjectPython {
     param(
-        [ValidateRange(1, 60)]
-        [int]$Attempts = 20,
-        [ValidateRange(1, 10)]
-        [int]$DelaySeconds = 1
+        [ValidateRange(1, 60)][int]$Attempts = 20,
+        [ValidateRange(1, 10)][int]$DelaySeconds = 1,
+        [switch]$ExcludeProjectVenv
     )
 
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-        $resolved = Resolve-X64ProjectPython
+        $resolved = Resolve-X64ProjectPython -ExcludeProjectVenv:$ExcludeProjectVenv
         if (-not [string]::IsNullOrWhiteSpace($resolved)) {
             return $resolved
         }
@@ -110,7 +112,6 @@ function Install-X64Python {
     if ($null -eq $winget) {
         throw "winget is unavailable; install official Python 3.12 x64 manually."
     }
-
     Write-Host "Installing official Python 3.12 x64 for the main Alpha Cycle Lab environment..."
     & $winget.Source install `
         --id Python.Python.3.12 `
@@ -126,18 +127,26 @@ function Install-X64Python {
 }
 
 Set-Location $RepositoryRoot
-$BasePython = Resolve-X64ProjectPython
+# During a forced rebuild, the base interpreter must be outside .venv because
+# .venv is removed before creation. This prevents selecting and deleting the
+# interpreter that is about to execute `-m venv`.
+$BasePython = Resolve-X64ProjectPython -ExcludeProjectVenv:$Force
 if (-not $BasePython -and $InstallPython) {
     Install-X64Python
     Write-Host "Waiting for the new x64 Python registration to become visible..."
-    $BasePython = Wait-X64ProjectPython
+    $BasePython = Wait-X64ProjectPython -ExcludeProjectVenv:$Force
 }
 if (-not $BasePython) {
-    & powershell.exe `
-        -NoProfile `
-        -ExecutionPolicy Bypass `
-        -File $Resolver `
-        -Diagnostic 2>$null | Out-Null
+    $diagnosticArguments = @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $Resolver,
+        "-Diagnostic"
+    )
+    if ($Force) {
+        $diagnosticArguments += "-ExcludeProjectVenv"
+    }
+    & powershell.exe @diagnosticArguments 2>$null | Out-Null
     Write-Host "A separate 64-bit Python 3.12+ runtime is required for Alpha Cycle Lab."
     Write-Host "The Kiwoom OpenAPI+ x86 bridge Python cannot be used for analysis."
     Write-Host "Diagnostic report: $DiagnosticPath"
