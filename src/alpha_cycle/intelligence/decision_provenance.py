@@ -260,9 +260,9 @@ def write_decision_evidence_envelope(
         (temporary / "report.md").write_text(_report(envelope), encoding="utf-8")
         try:
             temporary.rename(directory)
-        except FileExistsError:
+        except OSError:
             if not _same_existing_envelope(directory, envelope.envelope_id):
-                raise ValueError("Concurrent decision evidence envelope conflicts") from None
+                raise
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
