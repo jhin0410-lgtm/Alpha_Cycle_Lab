@@ -34,6 +34,10 @@ EnvelopeWriter = Callable[
 ]
 
 
+class DecisionProvenancePublicationError(ValueError):
+    """Envelope construction or publication failed after decision staging."""
+
+
 @dataclass(frozen=True)
 class PublishedDecisionEvidence:
     """Paths and envelope published as one fail-closed decision operation."""
@@ -107,9 +111,9 @@ def publish_decision_with_evidence(
 ) -> PublishedDecisionEvidence:
     """Publish an envelope first and expose the decision directory last.
 
-    Both artifacts are fully created under writer-unique hidden staging roots. A
-    validation or envelope failure therefore cannot leave a newly published,
-    unbound decision snapshot in the official decision output root.
+    Decision writer and final decision-directory failures remain ordinary write
+    failures. Only envelope construction or publication is reclassified as a
+    provenance failure by the live and resume wrappers.
     """
 
     decision_root = Path(decision_output_root)
@@ -142,35 +146,40 @@ def publish_decision_with_evidence(
         ):
             raise ValueError("Existing decision snapshot conflicts with publication")
 
-        envelope = build_decision_evidence_envelope(
-            staged_decision_directory,
-            decision_snapshot_id=snapshot.snapshot_id,
-            market_snapshot_id=snapshot.market_snapshot_id,
-            consistency=consistency,
-            published_decision_directory=final_decision_directory,
-            now=now,
-        )
-        staged_envelope_files = envelope_writer(provenance_stage_root, envelope)
-        staged_envelope_directory = staged_envelope_files[0].parent
-        final_envelope_directory = provenance_root / staged_envelope_directory.name
-
-        def envelope_validator(directory: Path) -> bool:
-            return _valid_envelope_directory(
-                directory,
-                envelope_id=envelope.envelope_id,
+        try:
+            envelope = build_decision_evidence_envelope(
+                staged_decision_directory,
+                decision_snapshot_id=snapshot.snapshot_id,
+                market_snapshot_id=snapshot.market_snapshot_id,
+                consistency=consistency,
+                published_decision_directory=final_decision_directory,
+                now=now,
             )
+            staged_envelope_files = envelope_writer(provenance_stage_root, envelope)
+            staged_envelope_directory = staged_envelope_files[0].parent
+            final_envelope_directory = provenance_root / staged_envelope_directory.name
 
-        if final_envelope_directory.exists() and not envelope_validator(
-            final_envelope_directory
-        ):
-            raise ValueError("Existing decision evidence envelope conflicts")
+            def envelope_validator(directory: Path) -> bool:
+                return _valid_envelope_directory(
+                    directory,
+                    envelope_id=envelope.envelope_id,
+                )
 
-        _publish_directory(
-            staged_envelope_directory,
-            final_envelope_directory,
-            validator=envelope_validator,
-            label="decision evidence envelope",
-        )
+            if final_envelope_directory.exists() and not envelope_validator(
+                final_envelope_directory
+            ):
+                raise ValueError("Existing decision evidence envelope conflicts")
+            _publish_directory(
+                staged_envelope_directory,
+                final_envelope_directory,
+                validator=envelope_validator,
+                label="decision evidence envelope",
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            raise DecisionProvenancePublicationError(
+                f"Decision evidence envelope publication failed: {exc}"
+            ) from exc
+
         _publish_directory(
             staged_decision_directory,
             final_decision_directory,
@@ -197,6 +206,7 @@ def publish_decision_with_evidence(
 
 
 __all__ = [
+    "DecisionProvenancePublicationError",
     "PublishedDecisionEvidence",
     "publish_decision_with_evidence",
 ]
