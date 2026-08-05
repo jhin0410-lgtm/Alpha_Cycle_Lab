@@ -45,6 +45,55 @@ def _checked_at(value: datetime | None) -> datetime:
     return result.astimezone(UTC)
 
 
+def _write_failed_scope_pointer(
+    *,
+    output_root: Path,
+    failure: BaseException,
+    checked_at: datetime,
+    raw_result: core.ConsistencyResult | None = None,
+    raw_result_path: Path | None = None,
+) -> None:
+    """Replace any prior passing scope pointer with current failed state."""
+
+    payload: dict[str, object] = {
+        "status": "failed_assessment",
+        "classification": "assessment_error",
+        "assessment_id": None,
+        "assessment_path": None,
+        "raw_result_id": None if raw_result is None else raw_result.result_id,
+        "raw_result_path": (
+            None if raw_result_path is None else str(raw_result_path)
+        ),
+        "checked_at_utc": checked_at.astimezone(UTC).isoformat(),
+        "failure": str(failure),
+        "decision_integration_eligible": False,
+        "automatic_provider_substitution_enabled": False,
+        "account_api_enabled": False,
+        "order_api_enabled": False,
+    }
+    try:
+        raw_integrity._atomic_json(
+            output_root / "latest_market_scope_assessment.json",
+            payload,
+        )
+    except OSError:
+        return
+
+
+def _write_raw_and_scope_failure(
+    *,
+    output_root: Path,
+    failure: BaseException,
+    checked_at: datetime,
+) -> None:
+    raw_integrity._write_failed_pointer(output_root, failure, checked_at)
+    _write_failed_scope_pointer(
+        output_root=output_root,
+        failure=failure,
+        checked_at=checked_at,
+    )
+
+
 def _explicit_evidence(
     *,
     output_root: Path,
@@ -134,17 +183,36 @@ def run_pipeline_market_consistency_gate(
             )
     except csv.Error as exc:
         failure = core.ConsistencyError(f"malformed pipeline market evidence: {exc}")
-        raw_integrity._write_failed_pointer(root, failure, checked_at)
+        _write_raw_and_scope_failure(
+            output_root=root,
+            failure=failure,
+            checked_at=checked_at,
+        )
         raise failure from exc
     except (core.ConsistencyError, OSError, TypeError, ValueError) as exc:
-        raw_integrity._write_failed_pointer(root, exc, checked_at)
+        _write_raw_and_scope_failure(
+            output_root=root,
+            failure=exc,
+            checked_at=checked_at,
+        )
         raise
 
-    assessment, assessment_path = assess_consistency_result(
-        raw_result,
-        raw_result_path,
-        output_root=root,
-    )
+    try:
+        assessment, assessment_path = assess_consistency_result(
+            raw_result,
+            raw_result_path,
+            output_root=root,
+        )
+    except (csv.Error, core.ConsistencyError, OSError, TypeError, ValueError) as exc:
+        _write_failed_scope_pointer(
+            output_root=root,
+            failure=exc,
+            checked_at=checked_at,
+            raw_result=raw_result,
+            raw_result_path=raw_result_path,
+        )
+        raise
+
     try:
         provenance = load_market_consistency_provenance(
             root,
