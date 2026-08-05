@@ -40,15 +40,8 @@ class PipelineDecisionProvenanceRuntime:
         self.envelope = None
         self.envelope_files = None
 
-    def build(
-        self,
-        original: DecisionBuilder,
-        research_snapshot: str | Path,
-        market_snapshot: str | Path,
-        *args: Any,
-        **kwargs: Any,
-    ) -> InvestmentDecisionSnapshot:
-        """Run the exact market gate before constructing a decision snapshot."""
+    def prepare(self, market_snapshot: str | Path) -> None:
+        """Run only the exact-snapshot market gate."""
 
         market_directory = Path(market_snapshot).resolve(strict=True)
         if len(market_directory.parents) < 2:
@@ -61,6 +54,18 @@ class PipelineDecisionProvenanceRuntime:
             market_directory=market_directory,
             decision_symbols=self.decision_symbols,
         )
+
+    def build(
+        self,
+        original: DecisionBuilder,
+        research_snapshot: str | Path,
+        market_snapshot: str | Path,
+        *args: Any,
+        **kwargs: Any,
+    ) -> InvestmentDecisionSnapshot:
+        """Prepare market provenance and then call an unwrapped decision builder."""
+
+        self.prepare(market_snapshot)
         return original(
             research_snapshot,
             market_snapshot,
