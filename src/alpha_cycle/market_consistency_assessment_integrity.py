@@ -9,7 +9,7 @@ from pathlib import Path
 
 from alpha_cycle import market_consistency_integrity as raw_integrity
 from alpha_cycle import market_consistency_runner_cli as runner
-from alpha_cycle.market_consistency_cli import ConsistencyResult
+from alpha_cycle.market_consistency_cli import ConsistencyError, ConsistencyResult
 
 _REQUIRED_QUOTE_FIELDS = (
     "ticker",
@@ -329,7 +329,7 @@ def assess_consistency_result(
         return assessment, assessment_path
     except (
         csv.Error,
-        runner.ConsistencyError,
+        ConsistencyError,
         runner.ScopeAssessmentError,
         OSError,
         TypeError,
