@@ -129,11 +129,14 @@ def publish_decision_with_evidence(
         staged_decision_directory = staged_decision_files[0].parent
         decision_names = tuple(path.name for path in staged_decision_files)
         final_decision_directory = decision_root / staged_decision_directory.name
-        decision_validator = lambda directory: _valid_decision_directory(
-            directory,
-            snapshot_id=snapshot.snapshot_id,
-            names=decision_names,
-        )
+
+        def decision_validator(directory: Path) -> bool:
+            return _valid_decision_directory(
+                directory,
+                snapshot_id=snapshot.snapshot_id,
+                names=decision_names,
+            )
+
         if final_decision_directory.exists() and not decision_validator(
             final_decision_directory
         ):
@@ -150,10 +153,13 @@ def publish_decision_with_evidence(
         staged_envelope_files = envelope_writer(provenance_stage_root, envelope)
         staged_envelope_directory = staged_envelope_files[0].parent
         final_envelope_directory = provenance_root / staged_envelope_directory.name
-        envelope_validator = lambda directory: _valid_envelope_directory(
-            directory,
-            envelope_id=envelope.envelope_id,
-        )
+
+        def envelope_validator(directory: Path) -> bool:
+            return _valid_envelope_directory(
+                directory,
+                envelope_id=envelope.envelope_id,
+            )
+
         if final_envelope_directory.exists() and not envelope_validator(
             final_envelope_directory
         ):
