@@ -36,7 +36,8 @@ def test_runner_loads_user_credentials_and_never_reads_missing_report_path() -> 
         assert name in script
     assert 'GetEnvironmentVariable($name, "User")' in script
     assert '& $SetupScript' in script
-    assert "$ProjectPython -m alpha_cycle.live_pipeline_cli" in script
+    assert "$ProjectPython -m alpha_cycle.live_pipeline_provenance_cli" in script
+    assert "$ProjectPython -m alpha_cycle.live_pipeline_cli" not in script
     assert "GetEnvironmentVariable(" in script
     assert '"ALPHA_CYCLE_PYTHON"' in script
     assert '$status.status -eq "completed" -and $status.report_path' in script
