@@ -164,6 +164,10 @@ def build_decision_evidence_envelope(
     warnings: list[str] = []
     if consistency is None:
         warnings.append("market_consistency_not_connected")
+    elif consistency.mode == "primary_source_only":
+        warnings.append(
+            "market_consistency_primary_source_only_cross_provider_scope_not_comparable"
+        )
     elif consistency.live_price_certified:
         warnings.append("market_consistency_live_price_certified")
     else:
@@ -183,6 +187,12 @@ def build_decision_evidence_envelope(
 
 
 def _report(envelope: DecisionEvidenceEnvelope) -> str:
+    historical_label = "미검증"
+    if envelope.consistency and envelope.consistency.historical_verified:
+        historical_label = "검증됨"
+    elif envelope.market_provenance_status == "primary_source_only":
+        historical_label = "시장 범위 비동등으로 전체 미인증"
+
     lines = [
         "# Alpha Cycle 결정 증거 Envelope",
         "",
@@ -190,12 +200,7 @@ def _report(envelope: DecisionEvidenceEnvelope) -> str:
         f"- Decision snapshot ID: `{envelope.decision_snapshot_id}`",
         f"- Market snapshot ID: `{envelope.market_snapshot_id}`",
         f"- 시장 provenance 상태: `{envelope.market_provenance_status}`",
-        "- 과거 OHLC 교차검증: "
-        + (
-            "검증됨"
-            if envelope.consistency and envelope.consistency.historical_verified
-            else "미검증"
-        ),
+        f"- 과거 OHLC 교차검증: {historical_label}",
         "- 현재 기준가격 교차검증: "
         + (
             "인증됨"
