@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ DecisionWriter = Callable[
     [str | Path, InvestmentDecisionSnapshot],
     tuple[Path, ...],
 ]
+PIPELINE_PATCH_LOCK = threading.Lock()
 
 
 @dataclass
@@ -127,4 +129,4 @@ class PipelineDecisionProvenanceRuntime:
         }
 
 
-__all__ = ["PipelineDecisionProvenanceRuntime"]
+__all__ = ["PIPELINE_PATCH_LOCK", "PipelineDecisionProvenanceRuntime"]
