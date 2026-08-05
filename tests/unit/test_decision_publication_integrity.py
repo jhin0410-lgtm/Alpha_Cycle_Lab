@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -96,14 +97,14 @@ def test_success_publishes_envelope_before_decision(
         source: Path,
         destination: Path,
         *,
-        validator: object,
+        validator: Callable[[Path], bool],
         label: str,
     ) -> None:
         order.append(label)
         original_publish(
             source,
             destination,
-            validator=cast(object, validator),
+            validator=validator,
             label=label,
         )
 
