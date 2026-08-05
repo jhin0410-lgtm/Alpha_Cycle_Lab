@@ -4,6 +4,11 @@ from alpha_cycle.intelligence.decision import (
     InvestmentDecisionSnapshot,
     write_investment_decision_snapshot,
 )
+from alpha_cycle.intelligence.decision_provenance import (
+    DecisionEvidenceEnvelope,
+    build_decision_evidence_envelope,
+    write_decision_evidence_envelope,
+)
 from alpha_cycle.intelligence.decision_resilient import (
     build_investment_decision_snapshot,
 )
@@ -22,6 +27,10 @@ from alpha_cycle.intelligence.market import (
     MarketIntelligenceSnapshot,
     write_market_intelligence_snapshot,
 )
+from alpha_cycle.intelligence.market_consistency_provenance import (
+    MarketConsistencyProvenance,
+    load_market_consistency_provenance,
+)
 from alpha_cycle.intelligence.outcomes import label_decision_outcomes, write_outcome_labels
 from alpha_cycle.intelligence.technical import TechnicalFeatures, calculate_technical_features
 from alpha_cycle.intelligence.valuation import (
@@ -38,21 +47,26 @@ from alpha_cycle.intelligence.valuation_resilient import (
 __all__ = [
     "CompanyExposure",
     "CompanySecurityMapping",
+    "DecisionEvidenceEnvelope",
     "DecisionPolicy",
     "FundamentalMacroCollector",
     "FundamentalMacroSnapshot",
     "InvestmentDecisionSnapshot",
+    "MarketConsistencyProvenance",
     "MarketIntelligenceCollector",
     "MarketIntelligenceSnapshot",
     "TechnicalFeatures",
     "ValuationEvidenceSnapshot",
+    "build_decision_evidence_envelope",
     "build_financial_history",
     "build_investment_decision_snapshot",
     "build_valuation_evidence_snapshot",
     "calculate_technical_features",
     "label_decision_outcomes",
     "load_company_exposures",
+    "load_market_consistency_provenance",
     "load_security_mappings",
+    "write_decision_evidence_envelope",
     "write_fundamental_macro_snapshot",
     "write_investment_decision_snapshot",
     "write_market_intelligence_snapshot",

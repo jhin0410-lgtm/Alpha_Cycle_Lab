@@ -8,6 +8,10 @@ import sys
 from pathlib import Path
 
 from alpha_cycle.intelligence.decision import write_investment_decision_snapshot
+from alpha_cycle.intelligence.decision_provenance import (
+    build_decision_evidence_envelope,
+    write_decision_evidence_envelope,
+)
 from alpha_cycle.intelligence.decision_resilient import (
     build_investment_decision_snapshot,
 )
@@ -15,15 +19,22 @@ from alpha_cycle.intelligence.decision_scoring import (
     DecisionPolicy,
     load_company_exposures,
 )
+from alpha_cycle.intelligence.market_consistency_provenance import (
+    load_market_consistency_provenance,
+)
 from alpha_cycle.intelligence.outcomes import write_outcome_labels
 from alpha_cycle.providers.opendart import normalize_listed_stock_code
 
 
 def _horizons(value: str) -> tuple[int, ...]:
     try:
-        result = tuple(sorted(set(int(item.strip()) for item in value.split(",") if item.strip())))
+        result = tuple(
+            sorted(set(int(item.strip()) for item in value.split(",") if item.strip()))
+        )
     except ValueError as exc:
-        raise argparse.ArgumentTypeError("horizons must be comma-separated integers") from exc
+        raise argparse.ArgumentTypeError(
+            "horizons must be comma-separated integers"
+        ) from exc
     if not result or any(item <= 0 for item in result):
         raise argparse.ArgumentTypeError("horizons must contain positive integers")
     return result
@@ -41,6 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument("--market-snapshot", type=Path, required=True)
     build.add_argument("--valuation-snapshot", type=Path)
     build.add_argument("--output", type=Path, required=True)
+    build.add_argument("--market-consistency-root", type=Path)
+    build.add_argument("--provenance-output", type=Path)
     build.add_argument("--benchmark")
     build.add_argument("--company-config", type=Path)
     build.add_argument("--recent-disclosure-days", type=int, default=365)
@@ -62,6 +75,14 @@ def _build(args: argparse.Namespace) -> int:
         raise ValueError(f"Company config does not exist: {args.company_config}")
     if args.valuation_snapshot is not None and not args.valuation_snapshot.is_dir():
         raise ValueError(f"Valuation snapshot does not exist: {args.valuation_snapshot}")
+    if (
+        args.market_consistency_root is not None
+        and not args.market_consistency_root.is_dir()
+    ):
+        raise ValueError(
+            "Market consistency root does not exist: "
+            f"{args.market_consistency_root}"
+        )
     benchmark = normalize_listed_stock_code(args.benchmark) if args.benchmark else None
     policy = DecisionPolicy(
         recent_disclosure_days=args.recent_disclosure_days,
@@ -78,6 +99,32 @@ def _build(args: argparse.Namespace) -> int:
         policy=policy,
     )
     written = write_investment_decision_snapshot(args.output, snapshot)
+    decision_directory = written[0].parent
+    decision_symbols = tuple(snapshot.scorecards["ticker"].astype(str).tolist())
+    consistency = (
+        None
+        if args.market_consistency_root is None
+        else load_market_consistency_provenance(
+            args.market_consistency_root,
+            market_snapshot_id=snapshot.market_snapshot_id,
+            decision_symbols=decision_symbols,
+        )
+    )
+    envelope = build_decision_evidence_envelope(
+        decision_directory,
+        decision_snapshot_id=snapshot.snapshot_id,
+        market_snapshot_id=snapshot.market_snapshot_id,
+        consistency=consistency,
+    )
+    provenance_output = (
+        args.provenance_output
+        if args.provenance_output is not None
+        else args.output.parent / "decision-provenance"
+    )
+    envelope_files = write_decision_evidence_envelope(
+        provenance_output,
+        envelope,
+    )
     states = {
         str(key): int(value)
         for key, value in snapshot.scorecards["decision_state"].value_counts().items()
@@ -91,16 +138,29 @@ def _build(args: argparse.Namespace) -> int:
                 "research_snapshot_id": snapshot.research_snapshot_id,
                 "market_snapshot_id": snapshot.market_snapshot_id,
                 "valuation_snapshot_id": snapshot.valuation_snapshot_id,
-                "symbols": snapshot.scorecards["ticker"].astype(str).tolist(),
+                "symbols": decision_symbols,
                 "decision_states": states,
                 "warnings": list(snapshot.warnings),
-                "output_directory": str(written[0].parent.resolve()),
+                "output_directory": str(decision_directory.resolve()),
                 "output_files": len(written),
                 "valuation_available": snapshot.valuation_snapshot_id is not None,
                 "valuation_scored_count": int(
                     snapshot.scorecards["valuation_score"].notna().sum()
                 ),
                 "consensus_available": False,
+                "decision_evidence_envelope_id": envelope.envelope_id,
+                "decision_evidence_envelope": str(
+                    envelope_files[0].parent.resolve()
+                ),
+                "market_provenance_status": envelope.market_provenance_status,
+                "historical_market_evidence_verified": bool(
+                    consistency and consistency.historical_verified
+                ),
+                "reference_price_cross_provider_certified": (
+                    envelope.reference_price_cross_provider_certified
+                ),
+                "automatic_provider_substitution_enabled": False,
+                "account_api_enabled": False,
                 "order_api_enabled": False,
             },
             ensure_ascii=False,
