@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import csv
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -59,6 +62,20 @@ def _result(*, checked_at: datetime) -> core.ConsistencyResult:
         quote_comparisons_file="live_quote_comparisons.csv",
         result_id="a" * 64,
     )
+
+
+def _staged_result(
+    root: Path,
+    result: core.ConsistencyResult,
+) -> Path:
+    root.mkdir(parents=True)
+    for name in (
+        result.daily_comparisons_file,
+        result.quote_comparisons_file,
+        "consistency.json",
+    ):
+        (root / name).write_text(name, encoding="utf-8")
+    return root / "consistency.json"
 
 
 def test_non_finite_tolerance_invalidates_latest_pointer(tmp_path: Path) -> None:
@@ -169,34 +186,16 @@ def test_publish_reserves_unique_directory_without_rewinding_clock(
 ) -> None:
     checked_at = datetime(2026, 8, 4, 8, 0, 30, 123456, tzinfo=UTC)
     result = _result(checked_at=checked_at)
-    staging = tmp_path / "staging" / "raw"
-    staging.mkdir(parents=True)
-    for name in (
-        result.daily_comparisons_file,
-        result.quote_comparisons_file,
-        "consistency.json",
-    ):
-        (staging / name).write_text(name, encoding="utf-8")
-
     first = integrity._publish_result(
         output_root=tmp_path,
         result=result,
-        staging_result_path=staging / "consistency.json",
+        staging_result_path=_staged_result(tmp_path / "staging" / "raw", result),
         checked_at=checked_at,
     )
-
-    second_staging = tmp_path / "staging-2" / "raw"
-    second_staging.mkdir(parents=True)
-    for name in (
-        result.daily_comparisons_file,
-        result.quote_comparisons_file,
-        "consistency.json",
-    ):
-        (second_staging / name).write_text(name, encoding="utf-8")
     second = integrity._publish_result(
         output_root=tmp_path,
         result=result,
-        staging_result_path=second_staging / "consistency.json",
+        staging_result_path=_staged_result(tmp_path / "staging-2" / "raw", result),
         checked_at=checked_at,
     )
 
@@ -211,6 +210,64 @@ def test_publish_reserves_unique_directory_without_rewinding_clock(
     )
     assert pointer["checked_at_utc"] == checked_at.isoformat()
     assert pointer["result_path"] == str(second)
+    assert pointer["assessment_status"] == "pending"
+    assert pointer["decision_integration_eligible"] is False
+
+
+def test_raw_pointer_remains_pending_when_core_claims_eligibility(
+    tmp_path: Path,
+) -> None:
+    checked_at = datetime(2026, 8, 4, 8, 0, 30, tzinfo=UTC)
+    result = replace(
+        _result(checked_at=checked_at),
+        status="passed",
+        live_quote_status="passed",
+        live_quote_comparable_count=3,
+        decision_integration_eligible=True,
+    )
+
+    integrity._publish_result(
+        output_root=tmp_path,
+        result=result,
+        staging_result_path=_staged_result(tmp_path / "staging" / "raw", result),
+        checked_at=checked_at,
+    )
+
+    pointer = json.loads(
+        (tmp_path / "latest_market_consistency.json").read_text(encoding="utf-8")
+    )
+    assert pointer["raw_decision_integration_eligible"] is True
+    assert pointer["decision_integration_eligible"] is False
+    assert pointer["assessment_status"] == "pending"
+    assert pointer["assessment_id"] is None
+
+
+def test_concurrent_pointer_updates_use_distinct_temp_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pointer = tmp_path / "latest_market_consistency.json"
+    barrier = threading.Barrier(2)
+    original_replace = Path.replace
+
+    def synchronized_replace(self: Path, target: str | Path) -> Path:
+        if Path(target) == pointer:
+            barrier.wait(timeout=5)
+        return original_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", synchronized_replace)
+
+    def write(value: int) -> None:
+        integrity._atomic_json(pointer, {"writer": value})
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [executor.submit(write, value) for value in (1, 2)]
+        for future in futures:
+            future.result(timeout=10)
+
+    payload = json.loads(pointer.read_text(encoding="utf-8"))
+    assert payload["writer"] in {1, 2}
+    assert not list(tmp_path.glob(".latest_market_consistency.json.*.tmp"))
 
 
 def test_csv_parser_failure_invalidates_latest_pointer(

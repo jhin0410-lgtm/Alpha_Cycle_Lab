@@ -51,7 +51,25 @@ def _row(ticker: str, *, exact_difference: bool = False) -> dict[str, object]:
     }
 
 
-def _case(tmp_path: Path) -> tuple[ConsistencyResult, Path]:
+def _quote_row(ticker: str) -> dict[str, object]:
+    return {
+        "ticker": ticker,
+        "toss_price": 100,
+        "kiwoom_price": 100,
+        "absolute_difference_won": 0,
+        "difference_bps": "0.0000",
+        "capture_gap_seconds": "0.0",
+        "comparable": True,
+        "within_tolerance": True,
+        "reason": "capture times and snapshot ages are comparable",
+    }
+
+
+def _case(
+    tmp_path: Path,
+    *,
+    exact_difference: bool = True,
+) -> tuple[ConsistencyResult, Path]:
     toss_directory = tmp_path / "toss"
     kiwoom_directory = tmp_path / "kiwoom"
     _write_json(
@@ -72,26 +90,13 @@ def _case(tmp_path: Path) -> tuple[ConsistencyResult, Path]:
         result_directory / "daily_price_comparisons.csv",
         [
             _row("000660"),
-            _row("005930", exact_difference=True),
+            _row("005930", exact_difference=exact_difference),
             _row("005935"),
         ],
     )
     _write_csv(
         result_directory / "live_quote_comparisons.csv",
-        [
-            {
-                "ticker": ticker,
-                "toss_price": 1,
-                "kiwoom_price": 1,
-                "absolute_difference_won": 0,
-                "difference_bps": 0,
-                "capture_gap_seconds": 1,
-                "comparable": True,
-                "within_tolerance": True,
-                "reason": "comparable",
-            }
-            for ticker in SYMBOLS
-        ],
+        [_quote_row(ticker) for ticker in SYMBOLS],
     )
     result = ConsistencyResult(
         schema_version="1.0",
@@ -149,12 +154,40 @@ def test_exact_difference_within_tolerance_cannot_be_integration_eligible(
     assert assessment.raw_price_difference_count == 1
     assert assessment.tolerance_conflict_count == 0
     assert assessment.decision_integration_eligible is False
-    pointer = json.loads(
+    assessment_pointer = json.loads(
         (tmp_path / "latest_market_scope_assessment.json").read_text(
             encoding="utf-8"
         )
     )
-    assert pointer["decision_integration_eligible"] is False
+    assert assessment_pointer["decision_integration_eligible"] is False
+    raw_pointer = json.loads(
+        (tmp_path / "latest_market_consistency.json").read_text(encoding="utf-8")
+    )
+    assert raw_pointer["assessment_status"] == "completed"
+    assert raw_pointer["classification"] == "true_or_unresolved_price_conflict"
+    assert raw_pointer["decision_integration_eligible"] is False
+
+
+def test_equivalent_scope_enables_raw_pointer_only_after_assessment(
+    tmp_path: Path,
+) -> None:
+    result, result_path = _case(tmp_path, exact_difference=False)
+
+    assessment, assessment_path = integrity.assess_consistency_result(
+        result,
+        result_path,
+        output_root=tmp_path,
+    )
+
+    assert assessment.classification == "equivalent_scope_observed"
+    assert assessment.decision_integration_eligible is True
+    raw_pointer = json.loads(
+        (tmp_path / "latest_market_consistency.json").read_text(encoding="utf-8")
+    )
+    assert raw_pointer["assessment_status"] == "completed"
+    assert raw_pointer["assessment_id"] == assessment.assessment_id
+    assert raw_pointer["assessment_path"] == str(assessment_path)
+    assert raw_pointer["decision_integration_eligible"] is True
 
 
 def test_live_quote_rows_require_exact_unique_symbol_membership(
@@ -169,6 +202,47 @@ def test_live_quote_rows_require_exact_unique_symbol_membership(
     with pytest.raises(
         runner.ScopeAssessmentError,
         match="duplicate tickers: 005930",
+    ):
+        integrity.assess_consistency_result(
+            result,
+            result_path,
+            output_root=tmp_path,
+        )
+
+
+def test_live_quote_rows_require_all_evidence_fields(tmp_path: Path) -> None:
+    result, result_path = _case(tmp_path)
+    quote_path = result_path.parent / result.quote_comparisons_file
+    _write_csv(quote_path, [{"ticker": ticker} for ticker in SYMBOLS])
+
+    with pytest.raises(
+        runner.ScopeAssessmentError,
+        match="missing fields",
+    ):
+        integrity.assess_consistency_result(
+            result,
+            result_path,
+            output_root=tmp_path,
+        )
+
+    raw_pointer = json.loads(
+        (tmp_path / "latest_market_consistency.json").read_text(encoding="utf-8")
+    )
+    assert raw_pointer["assessment_status"] == "failed"
+    assert raw_pointer["decision_integration_eligible"] is False
+
+
+def test_live_quote_aggregates_must_match_linked_rows(tmp_path: Path) -> None:
+    result, result_path = _case(tmp_path)
+    quote_path = result_path.parent / result.quote_comparisons_file
+    rows = list(csv.DictReader(quote_path.open(encoding="utf-8", newline="")))
+    rows[0]["comparable"] = "False"
+    rows[0]["within_tolerance"] = ""
+    _write_csv(quote_path, rows)
+
+    with pytest.raises(
+        runner.ScopeAssessmentError,
+        match="mixes comparable and non-comparable rows",
     ):
         integrity.assess_consistency_result(
             result,
