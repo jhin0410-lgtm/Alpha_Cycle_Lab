@@ -9,13 +9,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
-from alpha_cycle.market_consistency_cli import _result_id
+from alpha_cycle.market_consistency_cli import EXPECTED_SYMBOLS, _result_id
 from alpha_cycle.market_consistency_runner_cli import _assessment_id
 
 _HEX = frozenset("0123456789abcdef")
 _ALLOWED_RAW_STATUSES = frozenset({"passed", "passed_historical_only"})
 _REQUIRED_CLASSIFICATION = "equivalent_scope_observed"
 _REQUIRED_SCOPE_STATUS = "comparable"
+_CONTROL_SYMBOLS = tuple(sorted(EXPECTED_SYMBOLS))
 
 
 @dataclass(frozen=True)
@@ -204,6 +205,8 @@ def load_market_consistency_provenance(
     )
     if not required_symbols:
         raise ValueError("decision_symbols cannot be empty")
+    if any(len(item) != 6 or not item.isdigit() for item in required_symbols):
+        raise ValueError("decision_symbols contains an invalid ticker")
 
     raw_pointer_path = consistency_root / "latest_market_consistency.json"
     assessment_pointer_path = consistency_root / "latest_market_scope_assessment.json"
@@ -276,10 +279,33 @@ def load_market_consistency_provenance(
         raise ValueError("Consistency evidence is linked to a different market snapshot")
     kiwoom_id = _sha256(raw.get("kiwoom_snapshot_id"), "kiwoom_snapshot_id")
     expected_symbols = _symbols(raw.get("expected_symbols"), "expected_symbols")
+    if expected_symbols != _CONTROL_SYMBOLS:
+        raise ValueError(
+            "Consistency evidence does not cover the fixed control universe: "
+            f"expected {_CONTROL_SYMBOLS}, got {expected_symbols}"
+        )
     if not set(required_symbols).issubset(expected_symbols):
         raise ValueError(
             "Consistency evidence is missing decision symbols: "
             + ",".join(sorted(set(required_symbols) - set(expected_symbols)))
+        )
+    historical_symbols = _symbols(
+        raw.get("historical_symbols_passed"),
+        "historical_symbols_passed",
+    )
+    if historical_symbols != expected_symbols:
+        raise ValueError(
+            "Historical verification does not cover the full control universe"
+        )
+    required_days = _integer(raw, "historical_days_required_per_symbol")
+    if required_days <= 0:
+        raise ValueError("historical_days_required_per_symbol must be positive")
+    compared_rows = _integer(raw, "historical_rows_compared")
+    expected_rows = required_days * len(expected_symbols)
+    if compared_rows != expected_rows:
+        raise ValueError(
+            "Historical row coverage is incomplete: "
+            f"expected {expected_rows}, got {compared_rows}"
         )
     if _assessment_symbols(assessment.get("symbols")) != expected_symbols:
         raise ValueError("Assessment symbol evidence differs from the raw result")
