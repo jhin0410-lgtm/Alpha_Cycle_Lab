@@ -9,10 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
-from alpha_cycle.intelligence.decision_provenance import (
-    DecisionEvidenceEnvelope,
-    build_decision_evidence_envelope,
-    write_decision_evidence_envelope,
+from alpha_cycle.intelligence.decision_provenance import DecisionEvidenceEnvelope
+from alpha_cycle.intelligence.decision_publication import (
+    publish_decision_with_evidence,
 )
 from alpha_cycle.pipeline_market_consistency import (
     PipelineMarketConsistencyGate,
@@ -75,26 +74,20 @@ class PipelineDecisionProvenanceRuntime:
         output_root: str | Path,
         snapshot: InvestmentDecisionSnapshot,
     ) -> tuple[Path, ...]:
-        """Write the decision and its separately content-addressed evidence envelope."""
+        """Stage the envelope and expose the decision directory only after success."""
 
         if self.gate is None:
             raise ValueError("Market consistency gate did not run before decision write")
-        written = original(output_root, snapshot)
-        if not written:
-            raise ValueError("Decision writer returned no files")
-        decision_directory = written[0].parent.resolve(strict=True)
-        self.envelope = build_decision_evidence_envelope(
-            decision_directory,
-            decision_snapshot_id=snapshot.snapshot_id,
-            market_snapshot_id=snapshot.market_snapshot_id,
+        publication = publish_decision_with_evidence(
+            decision_output_root=output_root,
+            provenance_output_root=Path(output_root).parent / "decision-provenance",
+            snapshot=snapshot,
             consistency=self.gate.provenance,
+            decision_writer=original,
         )
-        provenance_root = Path(output_root).parent / "decision-provenance"
-        self.envelope_files = write_decision_evidence_envelope(
-            provenance_root,
-            self.envelope,
-        )
-        return written
+        self.envelope = publication.envelope
+        self.envelope_files = publication.envelope_files
+        return publication.decision_files
 
     def status_payload(self) -> dict[str, object]:
         """Return fields added to the existing live/resume status payload."""
