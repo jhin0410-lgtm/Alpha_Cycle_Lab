@@ -13,7 +13,7 @@ from alpha_cycle.intelligence.decision_provenance import DecisionEvidenceEnvelop
 from alpha_cycle.intelligence.decision_publication import (
     publish_decision_with_evidence,
 )
-from alpha_cycle.pipeline_market_consistency import (
+from alpha_cycle.pipeline_market_consistency_degraded import (
     PipelineMarketConsistencyGate,
     run_pipeline_market_consistency_gate,
 )
