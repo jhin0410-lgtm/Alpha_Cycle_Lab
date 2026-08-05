@@ -265,7 +265,8 @@ def test_resume_parser_defaults_to_weekend_safe_age_window() -> None:
 def test_windows_runner_attempts_resume_only_after_ip_block() -> None:
     script = Path("scripts/run_live_pipeline.ps1").read_text(encoding="utf-8")
     assert '$status.reason -eq "tossinvest_ip_allowlist"' in script
-    assert "$ProjectPython -m alpha_cycle.resume_pipeline_cli" in script
+    assert "$ProjectPython -m alpha_cycle.resume_pipeline_provenance_cli" in script
+    assert "$ProjectPython -m alpha_cycle.resume_pipeline_cli" not in script
     assert "fresh linked market/research snapshot" in script
     assert '$status.execution_mode -eq "resumed_linked_snapshots"' in script
     assert "No completed report is available for this run." in script
