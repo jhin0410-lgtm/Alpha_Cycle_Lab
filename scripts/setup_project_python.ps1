@@ -60,6 +60,60 @@ function Test-X64ProjectPython {
     )
 }
 
+function Test-PathInsideDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$CandidatePath,
+        [Parameter(Mandatory = $true)][string]$DirectoryPath
+    )
+
+    $candidate = [System.IO.Path]::GetFullPath($CandidatePath)
+    $directory = [System.IO.Path]::GetFullPath($DirectoryPath).TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    )
+    $boundary = $directory + [System.IO.Path]::DirectorySeparatorChar
+    return $candidate.StartsWith(
+        $boundary,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
+}
+
+function Resolve-ConfiguredExternalPython {
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    foreach ($scope in @("Process", "User")) {
+        $configured = [Environment]::GetEnvironmentVariable(
+            "ALPHA_CYCLE_PYTHON",
+            $scope
+        )
+        if (-not [string]::IsNullOrWhiteSpace($configured)) {
+            $candidates.Add($configured)
+        }
+    }
+    $pathPython = Get-Command "python.exe" -ErrorAction SilentlyContinue
+    if ($null -ne $pathPython) {
+        $candidates.Add($pathPython.Source)
+    }
+
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($candidate in $candidates) {
+        $fullPath = [System.IO.Path]::GetFullPath($candidate)
+        if (-not $seen.Add($fullPath)) {
+            continue
+        }
+        if (
+            -not (Test-PathInsideDirectory `
+                -CandidatePath $fullPath `
+                -DirectoryPath $VirtualEnvironmentRoot) -and
+            (Test-X64ProjectPython -PythonPath $fullPath)
+        ) {
+            return $fullPath
+        }
+    }
+    return $null
+}
+
 function Resolve-X64ProjectPython {
     param([switch]$ExcludeProjectVenv)
 
@@ -88,6 +142,18 @@ function Resolve-X64ProjectPython {
     return $null
 }
 
+function Resolve-SetupBasePython {
+    param([switch]$ForcedRebuild)
+
+    if ($ForcedRebuild) {
+        $configuredExternal = Resolve-ConfiguredExternalPython
+        if (-not [string]::IsNullOrWhiteSpace($configuredExternal)) {
+            return $configuredExternal
+        }
+    }
+    return Resolve-X64ProjectPython -ExcludeProjectVenv:$ForcedRebuild
+}
+
 function Wait-X64ProjectPython {
     param(
         [ValidateRange(1, 60)][int]$Attempts = 20,
@@ -96,7 +162,7 @@ function Wait-X64ProjectPython {
     )
 
     for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
-        $resolved = Resolve-X64ProjectPython -ExcludeProjectVenv:$ExcludeProjectVenv
+        $resolved = Resolve-SetupBasePython -ForcedRebuild:$ExcludeProjectVenv
         if (-not [string]::IsNullOrWhiteSpace($resolved)) {
             return $resolved
         }
@@ -127,10 +193,11 @@ function Install-X64Python {
 }
 
 Set-Location $RepositoryRoot
-# During a forced rebuild, the base interpreter must be outside .venv because
-# .venv is removed before creation. This prevents selecting and deleting the
-# interpreter that is about to execute `-m venv`.
-$BasePython = Resolve-X64ProjectPython -ExcludeProjectVenv:$Force
+# During a forced rebuild, prefer configured/PATH interpreters that are outside
+# the exact .venv directory boundary. Sibling paths such as .venv-tools and
+# .venv-backup are valid external interpreters and must not be rejected merely
+# because their names share the '.venv' prefix.
+$BasePython = Resolve-SetupBasePython -ForcedRebuild:$Force
 if (-not $BasePython -and $InstallPython) {
     Install-X64Python
     Write-Host "Waiting for the new x64 Python registration to become visible..."
