@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_pipeline_loads_isolated_exact_artifacts() -> None:
+def test_pipeline_binds_canonical_artifacts_without_copying_them() -> None:
     source = Path("src/alpha_cycle/pipeline_market_consistency.py").read_text(
         encoding="utf-8"
     )
@@ -13,11 +13,12 @@ def test_pipeline_loads_isolated_exact_artifacts() -> None:
     assert "def _load_exact_provenance(" in source
     assert 'raw_pointer.get("result_id") != raw_result.result_id' in source
     assert 'scope_pointer.get("assessment_id") != assessment.assessment_id' in source
-    assert 'TemporaryDirectory(prefix="pipeline-provenance-")' in source
-    assert "shutil.copy2(raw_result_path, isolated_result)" in source
-    assert "load_market_consistency_provenance(\n            isolated," in source
-    assert "result_path=str(raw_result_path)" in source
-    assert "assessment_path=str(assessment_path)" in source
+    assert "load_market_consistency_provenance(" in source
+    assert "raw_pointer_after != raw_pointer_before" in source
+    assert "scope_pointer_after != scope_pointer_before" in source
+    assert "def _validate_loaded_provenance(" in source
+    assert 'TemporaryDirectory(prefix="pipeline-provenance-")' not in source
+    assert "shutil.copy2(raw_result_path, isolated_result)" not in source
 
 
 def test_decision_failure_removes_only_new_envelope() -> None:

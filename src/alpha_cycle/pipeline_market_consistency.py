@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import csv
 import json
-import shutil
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -129,6 +128,65 @@ def _explicit_evidence(
     )
 
 
+def _validate_pointer_binding(
+    *,
+    raw_pointer: dict[str, object],
+    scope_pointer: dict[str, object],
+    raw_result: core.ConsistencyResult,
+    raw_result_path: Path,
+    assessment: MarketScopeAssessment,
+    assessment_path: Path,
+) -> None:
+    if raw_pointer.get("result_id") != raw_result.result_id:
+        raise core.ConsistencyError("latest raw result changed before provenance binding")
+    if raw_pointer.get("assessment_id") != assessment.assessment_id:
+        raise core.ConsistencyError("latest assessment changed before provenance binding")
+    if scope_pointer.get("assessment_id") != assessment.assessment_id:
+        raise core.ConsistencyError(
+            "scope assessment pointer changed before provenance binding"
+        )
+    _same_path(raw_pointer.get("result_path"), raw_result_path, "result_path")
+    _same_path(
+        raw_pointer.get("assessment_path"),
+        assessment_path,
+        "assessment_path",
+    )
+    _same_path(
+        scope_pointer.get("raw_result_path"),
+        raw_result_path,
+        "raw_result_path",
+    )
+    _same_path(
+        scope_pointer.get("assessment_path"),
+        assessment_path,
+        "scope assessment_path",
+    )
+
+
+def _validate_loaded_provenance(
+    *,
+    provenance: MarketConsistencyProvenance,
+    raw_result: core.ConsistencyResult,
+    raw_result_path: Path,
+    assessment: MarketScopeAssessment,
+    assessment_path: Path,
+) -> None:
+    if provenance.result_id != raw_result.result_id:
+        raise core.ConsistencyError(
+            "loaded provenance is linked to a different raw result"
+        )
+    if provenance.assessment_id != assessment.assessment_id:
+        raise core.ConsistencyError(
+            "loaded provenance is linked to a different assessment"
+        )
+    _same_path(provenance.result_path, raw_result_path, "provenance result_path")
+    _same_path(
+        provenance.assessment_path,
+        assessment_path,
+        "provenance assessment_path",
+    )
+
+
 def _load_exact_provenance(
     *,
     root: Path,
@@ -138,49 +196,43 @@ def _load_exact_provenance(
     assessment_path: Path,
     decision_symbols: tuple[str, ...],
 ) -> MarketConsistencyProvenance:
-    raw_pointer = _json_object(root / "latest_market_consistency.json")
-    scope_pointer = _json_object(root / "latest_market_scope_assessment.json")
-    if raw_pointer.get("result_id") != raw_result.result_id:
-        raise core.ConsistencyError("latest raw result changed before provenance binding")
-    if raw_pointer.get("assessment_id") != assessment.assessment_id:
-        raise core.ConsistencyError("latest assessment changed before provenance binding")
-    if scope_pointer.get("assessment_id") != assessment.assessment_id:
-        raise core.ConsistencyError("scope assessment pointer changed before provenance binding")
-    _same_path(raw_pointer.get("result_path"), raw_result_path, "result_path")
-    _same_path(raw_pointer.get("assessment_path"), assessment_path, "assessment_path")
-    _same_path(scope_pointer.get("raw_result_path"), raw_result_path, "raw_result_path")
-    _same_path(
-        scope_pointer.get("assessment_path"), assessment_path, "scope assessment_path"
+    raw_pointer_before = _json_object(root / "latest_market_consistency.json")
+    scope_pointer_before = _json_object(
+        root / "latest_market_scope_assessment.json"
+    )
+    _validate_pointer_binding(
+        raw_pointer=raw_pointer_before,
+        scope_pointer=scope_pointer_before,
+        raw_result=raw_result,
+        raw_result_path=raw_result_path,
+        assessment=assessment,
+        assessment_path=assessment_path,
     )
 
-    with tempfile.TemporaryDirectory(prefix="pipeline-provenance-") as isolated_text:
-        isolated = Path(isolated_text)
-        isolated_result = isolated / "consistency.json"
-        isolated_assessment = isolated / "market_scope_assessment.json"
-        shutil.copy2(raw_result_path, isolated_result)
-        shutil.copy2(assessment_path, isolated_assessment)
-        raw_pointer["result_path"] = str(isolated_result)
-        raw_pointer["assessment_path"] = str(isolated_assessment)
-        scope_pointer["raw_result_path"] = str(isolated_result)
-        scope_pointer["assessment_path"] = str(isolated_assessment)
-        (isolated / "latest_market_consistency.json").write_text(
-            json.dumps(raw_pointer, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        (isolated / "latest_market_scope_assessment.json").write_text(
-            json.dumps(scope_pointer, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
-        provenance = load_market_consistency_provenance(
-            isolated,
-            market_snapshot_id=raw_result.toss_snapshot_id,
-            decision_symbols=decision_symbols,
-        )
-    return replace(
-        provenance,
-        result_path=str(raw_result_path),
-        assessment_path=str(assessment_path),
+    provenance = load_market_consistency_provenance(
+        root,
+        market_snapshot_id=raw_result.toss_snapshot_id,
+        decision_symbols=decision_symbols,
     )
+
+    raw_pointer_after = _json_object(root / "latest_market_consistency.json")
+    scope_pointer_after = _json_object(root / "latest_market_scope_assessment.json")
+    if raw_pointer_after != raw_pointer_before:
+        raise core.ConsistencyError(
+            "latest raw pointer changed while provenance was loading"
+        )
+    if scope_pointer_after != scope_pointer_before:
+        raise core.ConsistencyError(
+            "latest scope pointer changed while provenance was loading"
+        )
+    _validate_loaded_provenance(
+        provenance=provenance,
+        raw_result=raw_result,
+        raw_result_path=raw_result_path,
+        assessment=assessment,
+        assessment_path=assessment_path,
+    )
+    return provenance
 
 
 def run_pipeline_market_consistency_gate(
