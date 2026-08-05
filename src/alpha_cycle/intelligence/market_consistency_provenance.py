@@ -175,6 +175,13 @@ def _zero(payload: Mapping[str, object], field: str) -> None:
         raise ValueError(f"{field} must be zero")
 
 
+def _integer(payload: Mapping[str, object], field: str) -> int:
+    value = payload.get(field)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field} must be an integer")
+    return value
+
+
 def load_market_consistency_provenance(
     root: str | Path,
     *,
@@ -316,7 +323,7 @@ def load_market_consistency_provenance(
             raise ValueError("A passed result must have passed live quotes")
         if not raw_eligible or not assessment_eligible:
             raise ValueError("Passed live evidence is not marked integration-eligible")
-        if int(raw.get("live_quote_comparable_count", -1)) != len(expected_symbols):
+        if _integer(raw, "live_quote_comparable_count") != len(expected_symbols):
             raise ValueError("Live comparable count does not cover all expected symbols")
         _zero(raw, "live_quote_conflict_count")
     else:
