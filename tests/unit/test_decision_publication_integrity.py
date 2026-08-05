@@ -17,6 +17,7 @@ from alpha_cycle.intelligence.decision_provenance import (
     write_decision_evidence_envelope,
 )
 from alpha_cycle.intelligence.decision_publication import (
+    DecisionProvenancePublicationError,
     publish_decision_with_evidence,
 )
 
@@ -66,7 +67,10 @@ def test_envelope_failure_does_not_publish_decision_snapshot(tmp_path: Path) -> 
     ) -> tuple[Path, Path]:
         raise OSError("simulated envelope write failure")
 
-    with pytest.raises(OSError, match="simulated envelope"):
+    with pytest.raises(
+        DecisionProvenancePublicationError,
+        match="simulated envelope",
+    ):
         publish_decision_with_evidence(
             decision_output_root=decision_root,
             provenance_output_root=provenance_root,
@@ -80,6 +84,23 @@ def test_envelope_failure_does_not_publish_decision_snapshot(tmp_path: Path) -> 
     assert not (decision_root / DIRECTORY_NAME).exists()
     assert not list(decision_root.glob(".decision-publication-*"))
     assert not list(provenance_root.glob(".decision-provenance-*"))
+
+
+def test_decision_writer_failure_remains_a_write_error(tmp_path: Path) -> None:
+    def failing_decision_writer(
+        _root: str | Path,
+        _snapshot_value: InvestmentDecisionSnapshot,
+    ) -> tuple[Path, ...]:
+        raise OSError("simulated decision writer failure")
+
+    with pytest.raises(OSError, match="simulated decision writer failure"):
+        publish_decision_with_evidence(
+            decision_output_root=tmp_path / "decisions",
+            provenance_output_root=tmp_path / "provenance",
+            snapshot=_snapshot(),
+            consistency=None,
+            decision_writer=failing_decision_writer,
+        )
 
 
 def test_success_publishes_envelope_before_decision(
