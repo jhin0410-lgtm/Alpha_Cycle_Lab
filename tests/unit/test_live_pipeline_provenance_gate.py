@@ -211,4 +211,5 @@ def test_gate_defaults_remain_strict_and_non_substituting() -> None:
     assert "DEFAULT_LIVE_TOLERANCE_BPS = Decimal(50)" in source
     assert 'toss_resolution_source="explicit_pipeline_market_directory"' in source
     assert "load_market_consistency_provenance" in source
-    assert "automatic_provider_substitution" not in source
+    assert '"automatic_provider_substitution_enabled": False' in source
+    assert '"automatic_provider_substitution_enabled": True' not in source
