@@ -31,8 +31,11 @@ def test_resume_preserves_all_shared_live_options() -> None:
     ):
         assert f'"{option}"' in SCRIPT
     assert "$ResumeArguments = New-ResumeArguments -Arguments $PipelineArguments" in SCRIPT
-    assert "$ProjectPython -m alpha_cycle.resume_pipeline_cli @ResumeArguments" in SCRIPT
-    assert "$ProjectPython -m alpha_cycle.resume_pipeline_cli\n" not in SCRIPT
+    assert (
+        "$ProjectPython -m alpha_cycle.resume_pipeline_provenance_cli "
+        "@ResumeArguments"
+    ) in SCRIPT
+    assert "$ProjectPython -m alpha_cycle.resume_pipeline_cli" not in SCRIPT
 
 
 def test_both_option_syntaxes_are_supported() -> None:
