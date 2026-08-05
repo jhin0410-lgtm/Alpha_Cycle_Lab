@@ -7,10 +7,8 @@ import json
 import sys
 from pathlib import Path
 
-from alpha_cycle.intelligence.decision import write_investment_decision_snapshot
-from alpha_cycle.intelligence.decision_provenance import (
-    build_decision_evidence_envelope,
-    write_decision_evidence_envelope,
+from alpha_cycle.intelligence.decision_publication import (
+    publish_decision_with_evidence,
 )
 from alpha_cycle.intelligence.decision_resilient import (
     build_investment_decision_snapshot,
@@ -98,8 +96,6 @@ def _build(args: argparse.Namespace) -> int:
         exposures=load_company_exposures(args.company_config),
         policy=policy,
     )
-    written = write_investment_decision_snapshot(args.output, snapshot)
-    decision_directory = written[0].parent
     decision_symbols = tuple(snapshot.scorecards["ticker"].astype(str).tolist())
     consistency = (
         None
@@ -110,21 +106,21 @@ def _build(args: argparse.Namespace) -> int:
             decision_symbols=decision_symbols,
         )
     )
-    envelope = build_decision_evidence_envelope(
-        decision_directory,
-        decision_snapshot_id=snapshot.snapshot_id,
-        market_snapshot_id=snapshot.market_snapshot_id,
-        consistency=consistency,
-    )
     provenance_output = (
         args.provenance_output
         if args.provenance_output is not None
         else args.output.parent / "decision-provenance"
     )
-    envelope_files = write_decision_evidence_envelope(
-        provenance_output,
-        envelope,
+    publication = publish_decision_with_evidence(
+        decision_output_root=args.output,
+        provenance_output_root=provenance_output,
+        snapshot=snapshot,
+        consistency=consistency,
     )
+    written = publication.decision_files
+    envelope_files = publication.envelope_files
+    envelope = publication.envelope
+    decision_directory = written[0].parent
     states = {
         str(key): int(value)
         for key, value in snapshot.scorecards["decision_state"].value_counts().items()
