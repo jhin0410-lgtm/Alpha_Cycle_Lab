@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from alpha_cycle import pipeline_market_consistency as strict_gate
 from alpha_cycle.intelligence.market_consistency_provenance import (
@@ -43,10 +43,13 @@ def run_pipeline_market_consistency_gate(
             decision_symbols: tuple[str, ...],
         ) -> MarketConsistencyProvenance:
             try:
-                return original_loader(
-                    root,
-                    market_snapshot_id=market_snapshot_id,
-                    decision_symbols=decision_symbols,
+                return cast(
+                    MarketConsistencyProvenance,
+                    original_loader(
+                        root,
+                        market_snapshot_id=market_snapshot_id,
+                        decision_symbols=decision_symbols,
+                    ),
                 )
             except (OSError, TypeError, ValueError) as strict_failure:
                 try:
