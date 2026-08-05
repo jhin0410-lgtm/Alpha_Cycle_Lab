@@ -13,24 +13,24 @@ $VirtualEnvironmentRoot = Join-Path $RepositoryRoot ".venv"
 $VirtualEnvironmentPython = Join-Path $VirtualEnvironmentRoot "Scripts\python.exe"
 $DiagnosticPath = Join-Path $RepositoryRoot "data\private\diagnostics\project_python_resolution.json"
 
-function Test-X64ProjectPython {
+function Resolve-ProbedX64ProjectPython {
     param([Parameter(Mandatory = $true)][string]$PythonPath)
 
     if (
         -not [System.IO.File]::Exists($PythonPath) -or
         -not [System.IO.File]::Exists($ProbeScript)
     ) {
-        return $false
+        return $null
     }
     try {
         $raw = & $PythonPath $ProbeScript 2>&1
         $exitCode = $LASTEXITCODE
     }
     catch {
-        return $false
+        return $null
     }
     if ($exitCode -ne 0 -or $null -eq $raw) {
-        return $false
+        return $null
     }
     $jsonLine = @(
         $raw |
@@ -39,24 +39,34 @@ function Test-X64ProjectPython {
             Select-Object -Last 1
     )
     if ($jsonLine.Count -eq 0) {
-        return $false
+        return $null
     }
     try {
         $payload = $jsonLine[-1] | ConvertFrom-Json
+        $bitness = [int]$payload.bitness
+        $major = [int]$payload.major
+        $minor = [int]$payload.minor
+        $resolved = [System.IO.Path]::GetFullPath([string]$payload.executable)
     }
     catch {
-        return $false
+        return $null
     }
-    $bitness = [int]$payload.bitness
-    $major = [int]$payload.major
-    $minor = [int]$payload.minor
-    $resolved = [string]$payload.executable
-    return (
-        $bitness -eq 64 -and
-        ($major -gt 3 -or ($major -eq 3 -and $minor -ge 12)) -and
-        -not [string]::IsNullOrWhiteSpace($resolved) -and
-        [System.IO.File]::Exists($resolved) -and
-        $resolved -notlike "*.venv-kiwoom-x86*"
+    if (
+        $bitness -ne 64 -or
+        ($major -lt 3 -or ($major -eq 3 -and $minor -lt 12)) -or
+        -not [System.IO.File]::Exists($resolved) -or
+        $resolved -like "*.venv-kiwoom-x86*"
+    ) {
+        return $null
+    }
+    return $resolved
+}
+
+function Test-X64ProjectPython {
+    param([Parameter(Mandatory = $true)][string]$PythonPath)
+
+    return -not [string]::IsNullOrWhiteSpace(
+        (Resolve-ProbedX64ProjectPython -PythonPath $PythonPath)
     )
 }
 
@@ -66,11 +76,16 @@ function Test-PathInsideDirectory {
         [Parameter(Mandatory = $true)][string]$DirectoryPath
     )
 
-    $candidate = [System.IO.Path]::GetFullPath($CandidatePath)
-    $directory = [System.IO.Path]::GetFullPath($DirectoryPath).TrimEnd(
-        [System.IO.Path]::DirectorySeparatorChar,
-        [System.IO.Path]::AltDirectorySeparatorChar
-    )
+    try {
+        $candidate = [System.IO.Path]::GetFullPath($CandidatePath)
+        $directory = [System.IO.Path]::GetFullPath($DirectoryPath).TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        )
+    }
+    catch {
+        return $false
+    }
     $boundary = $directory + [System.IO.Path]::DirectorySeparatorChar
     return $candidate.StartsWith(
         $boundary,
@@ -98,17 +113,25 @@ function Resolve-ConfiguredExternalPython {
         [System.StringComparer]::OrdinalIgnoreCase
     )
     foreach ($candidate in $candidates) {
-        $fullPath = [System.IO.Path]::GetFullPath($candidate)
-        if (-not $seen.Add($fullPath)) {
+        try {
+            $candidatePath = [System.IO.Path]::GetFullPath($candidate.Trim('"'))
+        }
+        catch {
+            continue
+        }
+        if (-not $seen.Add($candidatePath)) {
+            continue
+        }
+        $resolved = Resolve-ProbedX64ProjectPython -PythonPath $candidatePath
+        if ([string]::IsNullOrWhiteSpace($resolved)) {
             continue
         }
         if (
             -not (Test-PathInsideDirectory `
-                -CandidatePath $fullPath `
-                -DirectoryPath $VirtualEnvironmentRoot) -and
-            (Test-X64ProjectPython -PythonPath $fullPath)
+                -CandidatePath $resolved `
+                -DirectoryPath $VirtualEnvironmentRoot)
         ) {
-            return $fullPath
+            return $resolved
         }
     }
     return $null
@@ -136,10 +159,7 @@ function Resolve-X64ProjectPython {
         return $null
     }
     $path = @($resolved)[-1].ToString().Trim()
-    if (Test-X64ProjectPython -PythonPath $path) {
-        return [System.IO.Path]::GetFullPath($path)
-    }
-    return $null
+    return Resolve-ProbedX64ProjectPython -PythonPath $path
 }
 
 function Resolve-SetupBasePython {
@@ -193,10 +213,9 @@ function Install-X64Python {
 }
 
 Set-Location $RepositoryRoot
-# During a forced rebuild, prefer configured/PATH interpreters that are outside
-# the exact .venv directory boundary. Sibling paths such as .venv-tools and
-# .venv-backup are valid external interpreters and must not be rejected merely
-# because their names share the '.venv' prefix.
+# During a forced rebuild, resolve the interpreter's probed sys.executable and
+# reject it only when that real executable is inside the exact project .venv.
+# Invalid configured paths are skipped so PATH and the general resolver remain usable.
 $BasePython = Resolve-SetupBasePython -ForcedRebuild:$Force
 if (-not $BasePython -and $InstallPython) {
     Install-X64Python

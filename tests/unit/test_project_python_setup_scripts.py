@@ -112,8 +112,8 @@ def test_setup_waits_for_post_install_python_registration() -> None:
 def test_setup_rejects_kiwoom_x86_runtime_for_main_analysis() -> None:
     script = _read("scripts/setup_project_python.ps1")
 
-    assert "$bitness -eq 64" in script
-    assert '$resolved -notlike "*.venv-kiwoom-x86*"' in script
+    assert "$bitness -ne 64" in script
+    assert '$resolved -like "*.venv-kiwoom-x86*"' in script
     assert "Kiwoom bridge Python remains isolated in .venv-kiwoom-x86" in script
 
 
