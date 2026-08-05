@@ -9,6 +9,9 @@ from typing import Any, cast
 from alpha_cycle import live_pipeline_cli as live
 from alpha_cycle import resume_pipeline_cli as resume
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
+from alpha_cycle.intelligence.decision_publication import (
+    DecisionProvenancePublicationError,
+)
 from alpha_cycle.pipeline_decision_provenance import (
     PIPELINE_PATCH_LOCK,
     PipelineDecisionProvenanceRuntime,
@@ -35,15 +38,18 @@ def main(argv: list[str] | None = None) -> int:
             **kwargs: Any,
         ) -> InvestmentDecisionSnapshot:
             try:
-                return runtime.build(
-                    original_build,
+                runtime.prepare(market_snapshot)
+            except (OSError, TypeError, ValueError) as exc:
+                raise live.PipelineStageError("market_consistency", exc) from exc
+            return cast(
+                InvestmentDecisionSnapshot,
+                original_build(
                     research_snapshot,
                     market_snapshot,
                     *args,
                     **kwargs,
-                )
-            except (OSError, TypeError, ValueError) as exc:
-                raise live.PipelineStageError("market_consistency", exc) from exc
+                ),
+            )
 
         def gated_write(
             output_root: str | Path,
@@ -51,7 +57,7 @@ def main(argv: list[str] | None = None) -> int:
         ) -> tuple[Path, ...]:
             try:
                 return runtime.write(original_write, output_root, snapshot)
-            except (OSError, TypeError, ValueError) as exc:
+            except DecisionProvenancePublicationError as exc:
                 raise live.PipelineStageError("decision_provenance", exc) from exc
 
         def gated_execute(args: argparse.Namespace) -> dict[str, object]:
