@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from alpha_cycle import live_pipeline_cli as live
 from alpha_cycle import resume_pipeline_cli as resume
@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
                 **kwargs,
             )
         except (OSError, TypeError, ValueError) as exc:
-            raise resume.PipelineStageError("market_consistency", exc) from exc
+            raise live.PipelineStageError("market_consistency", exc) from exc
 
     def gated_write(
         output_root: str | Path,
@@ -50,15 +50,15 @@ def main(argv: list[str] | None = None) -> int:
         try:
             return runtime.write(original_write, output_root, snapshot)
         except (OSError, TypeError, ValueError) as exc:
-            raise resume.PipelineStageError("decision_provenance", exc) from exc
+            raise live.PipelineStageError("decision_provenance", exc) from exc
 
     def gated_execute(args: argparse.Namespace) -> dict[str, object]:
         runtime.reset()
-        payload = original_execute(args)
+        payload = cast(dict[str, object], original_execute(args))
         try:
             payload.update(runtime.status_payload())
         except (OSError, TypeError, ValueError) as exc:
-            raise resume.PipelineStageError("decision_provenance", exc) from exc
+            raise live.PipelineStageError("decision_provenance", exc) from exc
         return payload
 
     setattr(resume, _BUILD_ATTRIBUTE, gated_build)
