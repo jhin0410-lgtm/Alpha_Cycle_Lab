@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -38,12 +39,36 @@ class DecisionEvidenceEnvelope:
     def reference_price_cross_provider_certified(self) -> bool:
         return bool(self.consistency and self.consistency.live_price_certified)
 
-    def payload_without_id(self) -> dict[str, object]:
+    def _consistency_identity(self) -> dict[str, object] | None:
+        if self.consistency is None:
+            return None
+        return {
+            "assessment_id": self.consistency.assessment_id,
+            "result_id": self.consistency.result_id,
+            "checked_at_utc": self.consistency.checked_at_utc,
+            "raw_status": self.consistency.raw_status,
+            "classification": self.consistency.classification,
+            "historical_scope_status": self.consistency.historical_scope_status,
+            "market_snapshot_id": self.consistency.market_snapshot_id,
+            "kiwoom_snapshot_id": self.consistency.kiwoom_snapshot_id,
+            "expected_symbols": list(self.consistency.expected_symbols),
+            "live_quote_status": self.consistency.live_quote_status,
+            "historical_verified": self.consistency.historical_verified,
+            "live_price_certified": self.consistency.live_price_certified,
+            "decision_integration_eligible": (
+                self.consistency.decision_integration_eligible
+            ),
+            "mode": self.consistency.mode,
+            "warnings": list(self.consistency.warnings),
+        }
+
+    def identity_payload(self) -> dict[str, object]:
+        """Return portable semantic evidence used for the envelope digest."""
+
         return {
             "schema_version": ENVELOPE_SCHEMA_VERSION,
             "captured_at": self.captured_at.isoformat(),
             "decision_snapshot_id": self.decision_snapshot_id,
-            "decision_directory": self.decision_directory,
             "market_snapshot_id": self.market_snapshot_id,
             "market_provenance_status": self.market_provenance_status,
             "historical_market_evidence_verified": bool(
@@ -55,19 +80,33 @@ class DecisionEvidenceEnvelope:
             "decision_integration_eligible": bool(
                 self.consistency and self.consistency.decision_integration_eligible
             ),
-            "consistency": (
-                None if self.consistency is None else self.consistency.payload()
-            ),
+            "consistency": self._consistency_identity(),
             "warnings": list(self.warnings),
             "automatic_provider_substitution_enabled": False,
             "account_api_enabled": False,
             "order_api_enabled": False,
         }
 
+    def payload_without_id(self) -> dict[str, object]:
+        """Return the semantic identity plus local navigation metadata."""
+
+        return {
+            **self.identity_payload(),
+            "decision_directory": self.decision_directory,
+            "consistency_artifact_paths": (
+                None
+                if self.consistency is None
+                else {
+                    "assessment_path": self.consistency.assessment_path,
+                    "result_path": self.consistency.result_path,
+                }
+            ),
+        }
+
     @property
     def envelope_id(self) -> str:
         canonical = json.dumps(
-            self.payload_without_id(),
+            self.identity_payload(),
             allow_nan=False,
             ensure_ascii=False,
             separators=(",", ":"),
@@ -104,6 +143,11 @@ def build_decision_evidence_envelope(
     if consistency is not None and consistency.market_snapshot_id != market_snapshot_id:
         raise ValueError("Market consistency evidence belongs to a different snapshot")
 
+    captured_at = now or datetime.now(UTC)
+    if captured_at.tzinfo is None or captured_at.utcoffset() is None:
+        raise ValueError("Decision evidence envelope clock must be timezone-aware")
+    captured_at = captured_at.astimezone(UTC)
+
     warnings: list[str] = []
     if consistency is None:
         warnings.append("market_consistency_not_connected")
@@ -116,7 +160,7 @@ def build_decision_evidence_envelope(
     if consistency is not None:
         warnings.extend(consistency.warnings)
     return DecisionEvidenceEnvelope(
-        captured_at=now or datetime.now(UTC),
+        captured_at=captured_at,
         decision_snapshot_id=decision_snapshot_id,
         decision_directory=str(directory),
         market_snapshot_id=market_snapshot_id,
@@ -168,6 +212,17 @@ def _report(envelope: DecisionEvidenceEnvelope) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _same_existing_envelope(directory: Path, envelope_id: str) -> bool:
+    try:
+        existing = _manifest(directory)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    return (
+        existing.get("envelope_id") == envelope_id
+        and (directory / "report.md").is_file()
+    )
+
+
 def write_decision_evidence_envelope(
     output_root: str | Path,
     envelope: DecisionEvidenceEnvelope,
@@ -181,15 +236,17 @@ def write_decision_evidence_envelope(
     manifest_path = directory / "manifest.json"
     report_path = directory / "report.md"
     if directory.exists():
-        existing = _manifest(directory)
-        if existing.get("envelope_id") != envelope.envelope_id:
+        if not _same_existing_envelope(directory, envelope.envelope_id):
             raise ValueError("Existing decision evidence envelope conflicts")
         return manifest_path, report_path
 
-    temporary = root / f".{directory.name}.tmp"
-    if temporary.exists():
-        shutil.rmtree(temporary)
-    temporary.mkdir()
+    temporary = Path(
+        tempfile.mkdtemp(
+            prefix=f".{directory.name}.",
+            suffix=".tmp",
+            dir=root,
+        )
+    )
     try:
         manifest = {
             **envelope.payload_without_id(),
@@ -201,11 +258,14 @@ def write_decision_evidence_envelope(
             encoding="utf-8",
         )
         (temporary / "report.md").write_text(_report(envelope), encoding="utf-8")
-        temporary.rename(directory)
-    except Exception:
+        try:
+            temporary.rename(directory)
+        except FileExistsError:
+            if not _same_existing_envelope(directory, envelope.envelope_id):
+                raise ValueError("Concurrent decision evidence envelope conflicts") from None
+    finally:
         if temporary.exists():
             shutil.rmtree(temporary)
-        raise
     return manifest_path, report_path
 
 
