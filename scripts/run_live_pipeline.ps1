@@ -186,7 +186,7 @@ if ([string]::IsNullOrWhiteSpace($ProjectPython)) {
 }
 
 $statusTicksBefore = Get-StatusWriteTicks -Path $StatusPath
-& $ProjectPython -m alpha_cycle.live_pipeline_cli @PipelineArguments
+& $ProjectPython -m alpha_cycle.live_pipeline_provenance_cli @PipelineArguments
 $pipelineExitCode = $LASTEXITCODE
 $statusIsCurrent = Test-CurrentStatusFile `
     -Path $StatusPath `
@@ -201,7 +201,7 @@ if ($statusIsCurrent) {
         Write-Host "TossInvest blocked the current public IP: $($status.public_ip)"
         Write-Host "Attempting fail-closed resume from a fresh linked market/research snapshot."
         $resumeTicksBefore = Get-StatusWriteTicks -Path $StatusPath
-        & $ProjectPython -m alpha_cycle.resume_pipeline_cli @ResumeArguments
+        & $ProjectPython -m alpha_cycle.resume_pipeline_provenance_cli @ResumeArguments
         $pipelineExitCode = $LASTEXITCODE
         if (
             Test-CurrentStatusFile `
@@ -231,6 +231,9 @@ if ($statusIsCurrent) {
                 Write-Host "Market capture date: $($status.market_capture_date)"
             }
         }
+        Write-Host "Market provenance: $($status.market_provenance_status)"
+        Write-Host "Reference price cross-provider certified: $($status.reference_price_cross_provider_certified)"
+        Write-Host "Decision evidence envelope: $($status.decision_evidence_envelope_path)"
         Write-Host "Report: $($status.report_path)"
         if (-not $NoReport) {
             Get-Content $status.report_path -Encoding utf8

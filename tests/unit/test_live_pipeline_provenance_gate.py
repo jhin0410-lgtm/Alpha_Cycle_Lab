@@ -1,0 +1,215 @@
+"""Tests for exact-snapshot live and resume decision provenance gating."""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
+
+import pytest
+
+from alpha_cycle import market_consistency_cli as core
+from alpha_cycle import pipeline_decision_provenance as runtime_module
+from alpha_cycle import pipeline_market_consistency as gate_module
+from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
+from alpha_cycle.pipeline_decision_provenance import (
+    PipelineDecisionProvenanceRuntime,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def _read(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def test_explicit_gate_evidence_pins_the_supplied_toss_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_root = tmp_path / "live-research"
+    market_directory = output_root / "market-intelligence" / "exact-snapshot"
+    kiwoom_directory = output_root / "kiwoom-openapi-plus-market" / "snapshot"
+    market_directory.mkdir(parents=True)
+    kiwoom_directory.mkdir(parents=True)
+    (market_directory / "prices.csv").write_text("symbol\n005930\n", encoding="utf-8")
+    (kiwoom_directory / "quotes.csv").write_text("ticker\n005930\n", encoding="utf-8")
+    validated: list[tuple[Path, str, str]] = []
+
+    monkeypatch.setattr(
+        core,
+        "_resolve_kiwoom_directory",
+        lambda root: kiwoom_directory if root == output_root else Path("wrong"),
+    )
+    monkeypatch.setattr(
+        gate_module.raw_integrity,
+        "_validate_unique_rows",
+        lambda path, *, symbol_field, provider: validated.append(
+            (path, symbol_field, provider)
+        ),
+    )
+
+    evidence = gate_module._explicit_evidence(
+        output_root=output_root,
+        market_directory=market_directory,
+    )
+
+    assert evidence.toss_directory == market_directory.resolve()
+    assert evidence.toss_resolution_source == "explicit_pipeline_market_directory"
+    assert evidence.kiwoom_directory == kiwoom_directory.resolve()
+    assert validated == [
+        (market_directory / "prices.csv", "symbol", "TossInvest"),
+        (kiwoom_directory / "quotes.csv", "ticker", "Kiwoom"),
+    ]
+
+
+def test_runtime_runs_gate_before_original_decision_builder(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_root = tmp_path / "live-research"
+    market_directory = output_root / "market-intelligence" / "exact-snapshot"
+    research_directory = output_root / "research-intelligence" / "snapshot"
+    market_directory.mkdir(parents=True)
+    research_directory.mkdir(parents=True)
+    calls: list[str] = []
+    fake_gate = SimpleNamespace(provenance=SimpleNamespace())
+
+    def fake_run_gate(**kwargs: object) -> object:
+        calls.append("gate")
+        assert kwargs["output_root"] == output_root.resolve()
+        assert kwargs["market_directory"] == market_directory.resolve()
+        assert kwargs["decision_symbols"] == ("005930", "000660")
+        return fake_gate
+
+    sentinel = object()
+
+    def fake_builder(*_args: object, **_kwargs: object) -> object:
+        calls.append("builder")
+        return sentinel
+
+    monkeypatch.setattr(
+        runtime_module,
+        "run_pipeline_market_consistency_gate",
+        fake_run_gate,
+    )
+    runtime = PipelineDecisionProvenanceRuntime(("005930", "000660"))
+
+    result = runtime.build(
+        cast(Any, fake_builder),
+        research_directory,
+        market_directory,
+    )
+
+    assert result is sentinel
+    assert runtime.gate is fake_gate
+    assert calls == ["gate", "builder"]
+
+
+def test_runtime_refuses_decision_write_without_completed_gate(tmp_path: Path) -> None:
+    runtime = PipelineDecisionProvenanceRuntime(("005930", "000660"))
+    snapshot = cast(InvestmentDecisionSnapshot, object())
+
+    with pytest.raises(ValueError, match="gate did not run"):
+        runtime.write(cast(Any, lambda *_args: (tmp_path / "manifest.json",)), tmp_path, snapshot)
+
+
+def test_raw_failure_invalidates_both_latest_pointers(tmp_path: Path) -> None:
+    for name in (
+        "latest_market_consistency.json",
+        "latest_market_scope_assessment.json",
+    ):
+        (tmp_path / name).write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "decision_integration_eligible": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    gate_module._write_raw_and_scope_failure(
+        output_root=tmp_path,
+        failure=ValueError("current gate failure"),
+        checked_at=datetime(2026, 8, 5, 6, tzinfo=UTC),
+    )
+
+    raw_pointer = json.loads(
+        (tmp_path / "latest_market_consistency.json").read_text(encoding="utf-8")
+    )
+    scope_pointer = json.loads(
+        (tmp_path / "latest_market_scope_assessment.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert raw_pointer["status"] == "failed_validation"
+    assert raw_pointer["decision_integration_eligible"] is False
+    assert scope_pointer["status"] == "failed_assessment"
+    assert scope_pointer["classification"] == "assessment_error"
+    assert scope_pointer["decision_integration_eligible"] is False
+    assert scope_pointer["failure"] == "current gate failure"
+
+
+def test_installed_and_windows_entrypoints_use_provenance_wrappers() -> None:
+    pyproject = _read("pyproject.toml")
+    powershell = _read("scripts/run_live_pipeline.ps1")
+
+    assert (
+        'alpha-cycle-live = "alpha_cycle.live_pipeline_provenance_cli:main"'
+        in pyproject
+    )
+    assert (
+        'alpha-cycle-resume = "alpha_cycle.resume_pipeline_provenance_cli:main"'
+        in pyproject
+    )
+    assert "-m alpha_cycle.live_pipeline_provenance_cli" in powershell
+    assert "-m alpha_cycle.resume_pipeline_provenance_cli" in powershell
+    assert "-m alpha_cycle.live_pipeline_cli @PipelineArguments" not in powershell
+    assert "-m alpha_cycle.resume_pipeline_cli @ResumeArguments" not in powershell
+
+
+def test_live_and_resume_wrappers_preserve_stage_and_restore_contracts() -> None:
+    live_wrapper = _read("src/alpha_cycle/live_pipeline_provenance_cli.py")
+    resume_wrapper = _read("src/alpha_cycle/resume_pipeline_provenance_cli.py")
+
+    for wrapper in (live_wrapper, resume_wrapper):
+        assert 'PipelineStageError("market_consistency", exc)' in wrapper
+        assert 'PipelineStageError("decision_provenance", exc)' in wrapper
+        assert "runtime.prepare(market_snapshot)" in wrapper
+        assert "return runtime.build(" not in wrapper
+        gated_write = wrapper[
+            wrapper.index("def gated_write(") : wrapper.index("def gated_execute(")
+        ]
+        assert "except DecisionProvenancePublicationError as exc:" in gated_write
+        assert "except (OSError, TypeError, ValueError)" not in gated_write
+        assert "runtime.status_payload()" in wrapper
+        assert "PIPELINE_PATCH_LOCK" in wrapper
+        assert "finally:" in wrapper
+        assert "setattr" in wrapper
+
+
+def test_failed_live_status_points_back_to_gated_entrypoint() -> None:
+    live_wrapper = _read("src/alpha_cycle/live_pipeline_provenance_cli.py")
+
+    assert (
+        '_GATED_RERUN_COMMAND = "python -m '
+        'alpha_cycle.live_pipeline_provenance_cli"'
+    ) in live_wrapper
+    assert 'payload["rerun_command"] = _GATED_RERUN_COMMAND' in live_wrapper
+    assert 'payload["provenance_gate_enabled"] = True' in live_wrapper
+    assert "_STATUS_ATTRIBUTE" in live_wrapper
+
+
+def test_gate_defaults_remain_strict_and_non_substituting() -> None:
+    source = _read("src/alpha_cycle/pipeline_market_consistency.py")
+
+    assert "DEFAULT_REQUIRED_DAYS = 20" in source
+    assert "DEFAULT_PRICE_TOLERANCE_WON = Decimal(0)" in source
+    assert "DEFAULT_LIVE_TOLERANCE_BPS = Decimal(50)" in source
+    assert 'toss_resolution_source="explicit_pipeline_market_directory"' in source
+    assert "load_market_consistency_provenance" in source
+    assert '"automatic_provider_substitution_enabled": False' in source
+    assert '"automatic_provider_substitution_enabled": True' not in source
