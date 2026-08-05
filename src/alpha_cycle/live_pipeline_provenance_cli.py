@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from alpha_cycle import live_pipeline_cli as live
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def gated_execute(args: argparse.Namespace) -> dict[str, object]:
         runtime.reset()
-        payload = original_execute(args)
+        payload = cast(dict[str, object], original_execute(args))
         try:
             payload.update(runtime.status_payload())
         except (OSError, TypeError, ValueError) as exc:
