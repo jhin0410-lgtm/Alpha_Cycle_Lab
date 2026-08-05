@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import shutil
 import tempfile
 import threading
@@ -29,13 +30,114 @@ class PinnedEvidence:
 
 
 def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
+    """Atomically replace a JSON pointer through a writer-unique temp file."""
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(
-        json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
     )
-    temporary.replace(path)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            json.dump(
+                dict(payload),
+                handle,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _raw_pointer_payload(
+    *,
+    result: core.ConsistencyResult,
+    result_path: Path,
+    assessment_status: str,
+    decision_integration_eligible: bool,
+    assessment_id: str | None = None,
+    assessment_path: Path | None = None,
+    classification: str | None = None,
+    assessment_failure: str | None = None,
+) -> dict[str, object]:
+    return {
+        "status": result.status,
+        "result_id": result.result_id,
+        "checked_at_utc": result.checked_at_utc,
+        "result_path": str(result_path),
+        "raw_decision_integration_eligible": result.decision_integration_eligible,
+        "decision_integration_eligible": decision_integration_eligible,
+        "assessment_status": assessment_status,
+        "assessment_id": assessment_id,
+        "assessment_path": None if assessment_path is None else str(assessment_path),
+        "classification": classification,
+        "assessment_failure": assessment_failure,
+        "historical_price_conflict_count": result.historical_price_conflict_count,
+        "live_quote_status": result.live_quote_status,
+        "automatic_provider_substitution_enabled": False,
+        "account_api_enabled": False,
+        "order_api_enabled": False,
+    }
+
+
+def publish_assessed_consistency_pointer(
+    *,
+    output_root: Path,
+    result: core.ConsistencyResult,
+    result_path: Path,
+    assessment_id: str,
+    assessment_path: Path,
+    classification: str,
+    decision_integration_eligible: bool,
+) -> None:
+    """Publish the final raw pointer only after the linked assessment exists."""
+
+    _atomic_json(
+        output_root / "latest_market_consistency.json",
+        _raw_pointer_payload(
+            result=result,
+            result_path=result_path,
+            assessment_status="completed",
+            assessment_id=assessment_id,
+            assessment_path=assessment_path,
+            classification=classification,
+            decision_integration_eligible=decision_integration_eligible,
+        ),
+    )
+
+
+def mark_consistency_assessment_failed(
+    *,
+    output_root: Path,
+    result: core.ConsistencyResult,
+    result_path: Path,
+    failure: BaseException,
+) -> None:
+    """Keep the raw pointer fail-closed when scope assessment cannot complete."""
+
+    try:
+        _atomic_json(
+            output_root / "latest_market_consistency.json",
+            _raw_pointer_payload(
+                result=result,
+                result_path=result_path,
+                assessment_status="failed",
+                decision_integration_eligible=False,
+                assessment_failure=str(failure),
+            ),
+        )
+    except OSError:
+        return
 
 
 def _write_failed_pointer(
@@ -48,7 +150,12 @@ def _write_failed_pointer(
         "result_id": None,
         "checked_at_utc": checked_at.astimezone(UTC).isoformat(),
         "result_path": None,
+        "raw_decision_integration_eligible": False,
         "decision_integration_eligible": False,
+        "assessment_status": "not_started",
+        "assessment_id": None,
+        "assessment_path": None,
+        "classification": None,
         "historical_price_conflict_count": None,
         "live_quote_status": "not_evaluated",
         "failure": str(failure),
@@ -180,20 +287,12 @@ def _publish_result(
     result_path = destination / staging_result_path.name
     _atomic_json(
         output_root / "latest_market_consistency.json",
-        {
-            "status": result.status,
-            "result_id": result.result_id,
-            "checked_at_utc": result.checked_at_utc,
-            "result_path": str(result_path),
-            "decision_integration_eligible": result.decision_integration_eligible,
-            "historical_price_conflict_count": (
-                result.historical_price_conflict_count
-            ),
-            "live_quote_status": result.live_quote_status,
-            "automatic_provider_substitution_enabled": False,
-            "account_api_enabled": False,
-            "order_api_enabled": False,
-        },
+        _raw_pointer_payload(
+            result=result,
+            result_path=result_path,
+            assessment_status="pending",
+            decision_integration_eligible=False,
+        ),
     )
     return result_path
 
