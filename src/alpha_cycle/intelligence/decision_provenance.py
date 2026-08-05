@@ -128,20 +128,33 @@ def build_decision_evidence_envelope(
     decision_snapshot_id: str,
     market_snapshot_id: str,
     consistency: MarketConsistencyProvenance | None,
+    published_decision_directory: str | Path | None = None,
     now: datetime | None = None,
 ) -> DecisionEvidenceEnvelope:
-    """Create a fail-closed envelope without mutating the decision snapshot."""
+    """Validate a decision artifact and bind it to its published navigation path."""
 
-    directory = Path(decision_directory).resolve(strict=True)
-    if not directory.is_dir():
-        raise ValueError(f"Decision directory does not exist: {directory}")
-    manifest = _manifest(directory)
+    validation_directory = Path(decision_directory).resolve(strict=True)
+    if not validation_directory.is_dir():
+        raise ValueError(
+            f"Decision directory does not exist: {validation_directory}"
+        )
+    manifest = _manifest(validation_directory)
     if str(manifest.get("snapshot_id", "")) != decision_snapshot_id:
         raise ValueError("Decision manifest snapshot_id does not match")
     if str(manifest.get("market_snapshot_id", "")) != market_snapshot_id:
         raise ValueError("Decision manifest market_snapshot_id does not match")
     if consistency is not None and consistency.market_snapshot_id != market_snapshot_id:
         raise ValueError("Market consistency evidence belongs to a different snapshot")
+
+    published_directory = (
+        validation_directory
+        if published_decision_directory is None
+        else Path(published_decision_directory).resolve(strict=False)
+    )
+    if published_directory.name != validation_directory.name:
+        raise ValueError(
+            "Published decision directory name must match the validated snapshot"
+        )
 
     captured_at = now or datetime.now(UTC)
     if captured_at.tzinfo is None or captured_at.utcoffset() is None:
@@ -162,7 +175,7 @@ def build_decision_evidence_envelope(
     return DecisionEvidenceEnvelope(
         captured_at=captured_at,
         decision_snapshot_id=decision_snapshot_id,
-        decision_directory=str(directory),
+        decision_directory=str(published_directory),
         market_snapshot_id=market_snapshot_id,
         consistency=consistency,
         warnings=tuple(dict.fromkeys(warnings)),
