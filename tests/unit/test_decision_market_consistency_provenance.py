@@ -39,16 +39,26 @@ def _consistency_case(
     classification: str = "equivalent_scope_observed",
     market_id: str = MARKET_ID,
     assessment_status: str = "completed",
+    symbols: tuple[str, ...] = SYMBOLS,
+    historical_symbols: tuple[str, ...] | None = None,
+    historical_days: int = 20,
+    historical_rows: int | None = None,
 ) -> tuple[Path, Path]:
     result_path = root / "market-source-consistency" / "case" / "consistency.json"
     assessment_path = result_path.parent / "market_scope_assessment.json"
     live_passed = status == "passed"
+    passed_symbols = symbols if historical_symbols is None else historical_symbols
+    compared_rows = (
+        historical_days * len(symbols)
+        if historical_rows is None
+        else historical_rows
+    )
     raw_payload: dict[str, object] = {
         "schema_version": "1.0",
         "status": status,
         "checked_at_utc": "2026-08-05T04:00:00+00:00",
         "checked_at_kst": "2026-08-05T13:00:00+09:00",
-        "expected_symbols": list(SYMBOLS),
+        "expected_symbols": list(symbols),
         "toss_snapshot_id": market_id,
         "toss_captured_at": "2026-08-05T04:00:00+00:00",
         "toss_snapshot_age_seconds": 0.0,
@@ -59,13 +69,13 @@ def _consistency_case(
         "kiwoom_snapshot_age_seconds": 0.0,
         "kiwoom_directory": "kiwoom",
         "historical_cutoff_date_exclusive": "2026-08-05",
-        "historical_days_required_per_symbol": 20,
-        "historical_rows_compared": 60,
-        "historical_symbols_passed": list(SYMBOLS),
+        "historical_days_required_per_symbol": historical_days,
+        "historical_rows_compared": compared_rows,
+        "historical_symbols_passed": list(passed_symbols),
         "historical_price_conflict_count": 0,
         "historical_volume_mismatch_count": 0,
         "live_quote_status": "passed" if live_passed else "not_comparable",
-        "live_quote_comparable_count": 3 if live_passed else 0,
+        "live_quote_comparable_count": len(symbols) if live_passed else 0,
         "live_quote_conflict_count": 0,
         "live_capture_gap_seconds": 0.0,
         "decision_integration_eligible": live_passed,
@@ -98,7 +108,9 @@ def _consistency_case(
         "toss_historical_market_scope": "unadjusted_unspecified_venue",
         "kiwoom_historical_market_scope": "kiwoom_opt10081_unadjusted",
         "scope_incompatible_symbols": [],
-        "control_symbols_verified": ["005935"],
+        "control_symbols_verified": [
+            ticker for ticker in ("005935",) if ticker in symbols
+        ],
         "live_quote_status": raw_payload["live_quote_status"],
         "live_quote_conflict_count": 0,
         "raw_failures": [],
@@ -107,7 +119,7 @@ def _consistency_case(
         "account_api_enabled": False,
         "order_api_enabled": False,
         "rationale": ["Completed-session historical OHLC values match exactly."],
-        "symbols": [{"ticker": ticker} for ticker in SYMBOLS],
+        "symbols": [{"ticker": ticker} for ticker in symbols],
     }
     assessment_id = _assessment_id(assessment_payload)
     assessment_payload["assessment_id"] = assessment_id
@@ -224,6 +236,48 @@ def test_tampered_raw_result_id_is_rejected(tmp_path: Path) -> None:
     _write(result_path, payload)
 
     with pytest.raises(ValueError, match="result_id does not match"):
+        load_market_consistency_provenance(
+            tmp_path,
+            market_snapshot_id=MARKET_ID,
+            decision_symbols=("005930",),
+        )
+
+
+def test_self_consistent_subset_control_universe_is_rejected(tmp_path: Path) -> None:
+    _consistency_case(
+        tmp_path,
+        symbols=("005930",),
+        historical_rows=20,
+    )
+
+    with pytest.raises(ValueError, match="fixed control universe"):
+        load_market_consistency_provenance(
+            tmp_path,
+            market_snapshot_id=MARKET_ID,
+            decision_symbols=("005930",),
+        )
+
+
+def test_self_consistent_incomplete_historical_rows_are_rejected(
+    tmp_path: Path,
+) -> None:
+    _consistency_case(tmp_path, historical_rows=59)
+
+    with pytest.raises(ValueError, match="Historical row coverage is incomplete"):
+        load_market_consistency_provenance(
+            tmp_path,
+            market_snapshot_id=MARKET_ID,
+            decision_symbols=("005930",),
+        )
+
+
+def test_partial_historical_symbol_pass_is_rejected(tmp_path: Path) -> None:
+    _consistency_case(
+        tmp_path,
+        historical_symbols=("005930", "005935"),
+    )
+
+    with pytest.raises(ValueError, match="full control universe"):
         load_market_consistency_provenance(
             tmp_path,
             market_snapshot_id=MARKET_ID,
