@@ -103,6 +103,52 @@ def test_decision_writer_failure_remains_a_write_error(tmp_path: Path) -> None:
         )
 
 
+def test_decision_publish_failure_rolls_back_new_envelope(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from alpha_cycle.intelligence import decision_publication as publication_module
+
+    decision_root = tmp_path / "decisions"
+    provenance_root = tmp_path / "provenance"
+    original_publish = publication_module._publish_directory
+
+    def fail_decision_publish(
+        source: Path,
+        destination: Path,
+        *,
+        validator: Callable[[Path], bool],
+        label: str,
+    ) -> bool:
+        if label == "decision snapshot":
+            raise OSError("simulated decision rename failure")
+        return original_publish(
+            source,
+            destination,
+            validator=validator,
+            label=label,
+        )
+
+    monkeypatch.setattr(
+        publication_module,
+        "_publish_directory",
+        fail_decision_publish,
+    )
+    with pytest.raises(OSError, match="simulated decision rename failure"):
+        publish_decision_with_evidence(
+            decision_output_root=decision_root,
+            provenance_output_root=provenance_root,
+            snapshot=_snapshot(),
+            consistency=None,
+            now=datetime(2026, 8, 5, 5, tzinfo=UTC),
+            decision_writer=_decision_writer,
+            envelope_writer=write_decision_evidence_envelope,
+        )
+
+    assert not list(provenance_root.glob("*__*"))
+    assert not (decision_root / DIRECTORY_NAME).exists()
+
+
 def test_success_publishes_envelope_before_decision(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -120,9 +166,9 @@ def test_success_publishes_envelope_before_decision(
         *,
         validator: Callable[[Path], bool],
         label: str,
-    ) -> None:
+    ) -> bool:
         order.append(label)
-        original_publish(
+        return original_publish(
             source,
             destination,
             validator=validator,
