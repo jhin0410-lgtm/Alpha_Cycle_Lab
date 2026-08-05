@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -114,6 +116,43 @@ def test_runtime_refuses_decision_write_without_completed_gate(tmp_path: Path) -
         runtime.write(cast(Any, lambda *_args: (tmp_path / "manifest.json",)), tmp_path, snapshot)
 
 
+def test_raw_failure_invalidates_both_latest_pointers(tmp_path: Path) -> None:
+    for name in (
+        "latest_market_consistency.json",
+        "latest_market_scope_assessment.json",
+    ):
+        (tmp_path / name).write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "decision_integration_eligible": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    gate_module._write_raw_and_scope_failure(
+        output_root=tmp_path,
+        failure=ValueError("current gate failure"),
+        checked_at=datetime(2026, 8, 5, 6, tzinfo=UTC),
+    )
+
+    raw_pointer = json.loads(
+        (tmp_path / "latest_market_consistency.json").read_text(encoding="utf-8")
+    )
+    scope_pointer = json.loads(
+        (tmp_path / "latest_market_scope_assessment.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert raw_pointer["status"] == "failed_validation"
+    assert raw_pointer["decision_integration_eligible"] is False
+    assert scope_pointer["status"] == "failed_assessment"
+    assert scope_pointer["classification"] == "assessment_error"
+    assert scope_pointer["decision_integration_eligible"] is False
+    assert scope_pointer["failure"] == "current gate failure"
+
+
 def test_installed_and_windows_entrypoints_use_provenance_wrappers() -> None:
     pyproject = _read("pyproject.toml")
     powershell = _read("scripts/run_live_pipeline.ps1")
@@ -139,9 +178,29 @@ def test_live_and_resume_wrappers_preserve_stage_and_restore_contracts() -> None
     for wrapper in (live_wrapper, resume_wrapper):
         assert 'PipelineStageError("market_consistency", exc)' in wrapper
         assert 'PipelineStageError("decision_provenance", exc)' in wrapper
+        assert "runtime.prepare(market_snapshot)" in wrapper
+        assert "return runtime.build(" not in wrapper
+        gated_write = wrapper[
+            wrapper.index("def gated_write(") : wrapper.index("def gated_execute(")
+        ]
+        assert "except DecisionProvenancePublicationError as exc:" in gated_write
+        assert "except (OSError, TypeError, ValueError)" not in gated_write
         assert "runtime.status_payload()" in wrapper
+        assert "PIPELINE_PATCH_LOCK" in wrapper
         assert "finally:" in wrapper
         assert "setattr" in wrapper
+
+
+def test_failed_live_status_points_back_to_gated_entrypoint() -> None:
+    live_wrapper = _read("src/alpha_cycle/live_pipeline_provenance_cli.py")
+
+    assert (
+        '_GATED_RERUN_COMMAND = "python -m '
+        'alpha_cycle.live_pipeline_provenance_cli"'
+    ) in live_wrapper
+    assert 'payload["rerun_command"] = _GATED_RERUN_COMMAND' in live_wrapper
+    assert 'payload["provenance_gate_enabled"] = True' in live_wrapper
+    assert "_STATUS_ATTRIBUTE" in live_wrapper
 
 
 def test_gate_defaults_remain_strict_and_non_substituting() -> None:
