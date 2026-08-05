@@ -55,8 +55,8 @@ def run_pipeline_market_consistency_gate(
                         market_snapshot_id=market_snapshot_id,
                         decision_symbols=decision_symbols,
                     )
-                except (OSError, TypeError, ValueError):
-                    raise strict_failure
+                except (OSError, TypeError, ValueError) as degraded_failure:
+                    raise strict_failure from degraded_failure
 
         setattr(strict_gate, _LOADER_ATTRIBUTE, composed_loader)
         try:
