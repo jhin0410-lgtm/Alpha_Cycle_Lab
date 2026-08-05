@@ -87,16 +87,20 @@ def _publish_directory(
     *,
     validator: Callable[[Path], bool],
     label: str,
-) -> None:
+) -> bool:
+    """Publish one directory and report whether this call created it."""
+
     if destination.exists():
         if not validator(destination):
             raise ValueError(f"Existing {label} conflicts with staged publication")
-        return
+        return False
     try:
         source.rename(destination)
+        return True
     except OSError:
         if not validator(destination):
             raise
+        return False
 
 
 def publish_decision_with_evidence(
@@ -126,6 +130,8 @@ def publish_decision_with_evidence(
     provenance_stage_root = Path(
         tempfile.mkdtemp(prefix=".decision-provenance-", dir=provenance_root)
     )
+    published_envelope_directory: Path | None = None
+    envelope_created_by_run = False
     try:
         staged_decision_files = decision_writer(decision_stage_root, snapshot)
         if not staged_decision_files:
@@ -169,23 +175,35 @@ def publish_decision_with_evidence(
                 final_envelope_directory
             ):
                 raise ValueError("Existing decision evidence envelope conflicts")
-            _publish_directory(
+            envelope_created_by_run = _publish_directory(
                 staged_envelope_directory,
                 final_envelope_directory,
                 validator=envelope_validator,
                 label="decision evidence envelope",
             )
+            if envelope_created_by_run:
+                published_envelope_directory = final_envelope_directory
         except (OSError, TypeError, ValueError) as exc:
             raise DecisionProvenancePublicationError(
                 f"Decision evidence envelope publication failed: {exc}"
             ) from exc
 
-        _publish_directory(
-            staged_decision_directory,
-            final_decision_directory,
-            validator=decision_validator,
-            label="decision snapshot",
-        )
+        try:
+            _publish_directory(
+                staged_decision_directory,
+                final_decision_directory,
+                validator=decision_validator,
+                label="decision snapshot",
+            )
+        except (OSError, ValueError):
+            if (
+                envelope_created_by_run
+                and published_envelope_directory is not None
+                and published_envelope_directory.exists()
+            ):
+                shutil.rmtree(published_envelope_directory)
+            raise
+
         final_decision_files = tuple(
             final_decision_directory / name for name in decision_names
         )
