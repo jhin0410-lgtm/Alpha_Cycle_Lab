@@ -323,6 +323,7 @@ function Find-AcceptedCandidate {
         [AllowEmptyCollection()]
         [System.Collections.Generic.List[object]]$Results,
         [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
         [System.Collections.Generic.HashSet[string]]$Seen
     )
     foreach ($candidate in $Candidates) {
