@@ -53,10 +53,12 @@ def test_module_launcher_uses_resolved_interpreter_and_source_tree() -> None:
 def test_live_pipeline_bootstrap_prepends_resolved_python_to_path() -> None:
     command = _script("scripts/run_live_pipeline.cmd")
     bootstrap = _script("scripts/run_live_pipeline_bootstrap.ps1")
+    orchestrator = _script("scripts/run_live_pipeline_orchestrator.ps1")
 
     assert "run_live_pipeline_bootstrap.ps1" in command
     assert "resolve_project_python.ps1" in bootstrap
     assert "$env:path" in bootstrap
     assert "$projectpythondirectory" in bootstrap
     assert "alpha_cycle_python" in bootstrap
-    assert "run_live_pipeline.ps1" in bootstrap
+    assert "run_live_pipeline_orchestrator.ps1" in bootstrap
+    assert "run_live_pipeline.ps1" in orchestrator
