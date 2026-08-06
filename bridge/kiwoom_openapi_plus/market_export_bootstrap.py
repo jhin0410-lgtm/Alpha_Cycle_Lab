@@ -13,14 +13,16 @@ supported Python 3.10 x86 bridge.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import runpy
 import sys
 import zoneinfo
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import timedelta, timezone, tzinfo
 from pathlib import Path
-from types import FrameType, ModuleType
+from types import ModuleType
 from typing import Any, NoReturn, TextIO
 
 ZoneFactory = Callable[[str], tzinfo]
@@ -93,62 +95,96 @@ def _flush_and_hard_exit(
     exit_process(code)
 
 
-def _run_entrypoint_before_teardown(
+def _print_export_success(
+    manifest: Any,
+    export_directory: Any,
+    *,
+    json_output: bool,
+    stdout: TextIO,
+) -> None:
+    """Render the exporter's success contract before native objects can unwind."""
+
+    if json_output:
+        print(
+            json.dumps(
+                asdict(manifest),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
+            file=stdout,
+        )
+        return
+    print("KIWOOM OPENAPI+ MARKET EXPORT: PASS", file=stdout)
+    print(f"snapshot: {manifest.snapshot_id}", file=stdout)
+    print(f"symbols: {', '.join(manifest.symbols)}", file=stdout)
+    print(f"quotes: {manifest.quote_count}", file=stdout)
+    print(f"daily bars: {manifest.daily_bar_count}", file=stdout)
+    print(f"adjusted prices: {manifest.adjusted_prices}", file=stdout)
+    print(f"requests: {manifest.request_count}", file=stdout)
+    print("account API: disabled", file=stdout)
+    print("order API: disabled", file=stdout)
+    print(f"export directory: {export_directory}", file=stdout)
+
+
+def _install_success_exit(
+    runtime_globals: dict[str, Any],
+    *,
+    exit_process: ExitProcess = os._exit,
+    stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
+) -> None:
+    """Exit from inside ``write_export`` while the caller still owns QAxWidget.
+
+    The exporter ``main`` frame holds the live ``KiwoomMarketExporter`` instance.
+    Waiting for that frame to return can release its final ActiveX reference before
+    bootstrap code regains control. Wrapping ``write_export`` moves the hard-exit
+    boundary to the first point where all immutable files are complete while the
+    caller frame and its native-object references are still unquestionably alive.
+    """
+
+    original = runtime_globals.get("write_export")
+    if not callable(original):
+        raise RuntimeError("Kiwoom exporter has no callable write_export")
+    output = stdout if stdout is not None else sys.stdout
+    error = stderr if stderr is not None else sys.stderr
+    json_output = "--json" in sys.argv[1:]
+
+    def write_export_and_exit(*args: Any, **kwargs: Any) -> NoReturn:
+        manifest, export_directory = original(*args, **kwargs)
+        _print_export_success(
+            manifest,
+            export_directory,
+            json_output=json_output,
+            stdout=output,
+        )
+        _flush_and_hard_exit(
+            0,
+            exit_process=exit_process,
+            stdout=output,
+            stderr=error,
+        )
+
+    runtime_globals["write_export"] = write_export_and_exit
+
+
+def _run_entrypoint_with_success_exit(
     entrypoint: Callable[[], Any],
+    runtime_globals: dict[str, Any],
     *,
     exit_process: ExitProcess = os._exit,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> NoReturn:
-    """Terminate on the exporter's return event before its locals are released.
+    """Run the exporter and terminate before success-path ActiveX destruction."""
 
-    A successful export leaves the live QAxWidget in the exporter ``main`` frame.
-    Returning normally first decrements that frame's local references, which can
-    invoke unstable native ActiveX destruction before the bootstrap regains
-    control. A Python return trace fires while the frame and its locals are still
-    alive, allowing the isolated bridge to flush output and terminate before any
-    Qt/ActiveX object teardown begins.
-
-    If an unexpected exception is propagating out of the entry point, the trace
-    does not convert it into a successful exit. Expected exporter failures are
-    caught by the exporter itself and returned as its normal nonzero status.
-    """
-
-    target_code = getattr(entrypoint, "__code__", None)
-    if target_code is None:
-        raise TypeError("Kiwoom exporter entrypoint must be a Python function")
-    exception_in_flight = False
-
-    def trace(frame: FrameType, event: str, argument: Any) -> Any:
-        nonlocal exception_in_flight
-        if frame.f_code is not target_code:
-            return trace
-        if event == "exception":
-            exception_in_flight = True
-        elif event == "line":
-            exception_in_flight = False
-        elif event == "return":
-            if exception_in_flight and argument is None:
-                sys.settrace(None)
-                return None
-            sys.settrace(None)
-            status = 0 if argument is None else int(argument)
-            _flush_and_hard_exit(
-                status,
-                exit_process=exit_process,
-                stdout=stdout,
-                stderr=stderr,
-            )
-        return trace
-
-    sys.settrace(trace)
-    try:
-        result = entrypoint()
-    finally:
-        sys.settrace(None)
-
-    # Defensive fallback for runtimes where return tracing is unavailable. The
-    # supported CPython bridge is expected to terminate from the trace callback.
+    _install_success_exit(
+        runtime_globals,
+        exit_process=exit_process,
+        stdout=stdout,
+        stderr=stderr,
+    )
+    result = entrypoint()
     _flush_and_hard_exit(
         0 if result is None else int(result),
         exit_process=exit_process,
@@ -157,7 +193,13 @@ def _run_entrypoint_before_teardown(
     )
 
 
-def main(*, exit_before_teardown: bool = False) -> Any:
+def main(
+    *,
+    exit_before_teardown: bool = False,
+    exit_process: ExitProcess = os._exit,
+    stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
+) -> Any:
     ensure_export_timezones()
     directory = Path(__file__).resolve().parent
     exporter = directory / "market_export.py"
@@ -179,7 +221,13 @@ def main(*, exit_before_teardown: bool = False) -> Any:
     hardening.apply_hardening(runtime_globals)
     sys.argv[0] = str(exporter)
     if exit_before_teardown:
-        return _run_entrypoint_before_teardown(entrypoint)
+        return _run_entrypoint_with_success_exit(
+            entrypoint,
+            runtime_globals,
+            exit_process=exit_process,
+            stdout=stdout,
+            stderr=stderr,
+        )
     return entrypoint()
 
 
