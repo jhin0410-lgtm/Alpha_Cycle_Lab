@@ -17,9 +17,4 @@ jobs:
       - run: python -m pip install -e ".[dev]"
       - run: ruff check .
       - run: mypy
-      - run: pytest --junitxml=pytest-results.xml
-      - if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-results
-          path: pytest-results.xml
+      - run: pytest
