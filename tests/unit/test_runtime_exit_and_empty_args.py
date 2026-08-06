@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import io
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -23,7 +25,7 @@ def _load_kiwoom_bootstrap() -> ModuleType:
     return module
 
 
-def test_kiwoom_bootstrap_exits_from_write_export_not_return_trace() -> None:
+def test_kiwoom_bootstrap_exits_from_write_export_with_terminate_process() -> None:
     bootstrap = Path(
         "bridge/kiwoom_openapi_plus/market_export_bootstrap.py"
     ).read_text(encoding="utf-8")
@@ -33,9 +35,76 @@ def test_kiwoom_bootstrap_exits_from_write_export_not_return_trace() -> None:
     assert "_install_success_exit" in bootstrap
     assert "write_export_and_exit" in bootstrap
     assert "_run_entrypoint_with_success_exit" in bootstrap
-    assert "exit_process(code)" in bootstrap
+    assert "_terminate_current_process" in bootstrap
+    assert "TerminateProcess" in bootstrap
+    assert "GetCurrentProcess" in bootstrap
+    assert "os._exit" not in bootstrap
     assert "sys.settrace" not in bootstrap
     assert "raise SystemExit(main())" not in bootstrap
+
+
+def test_kiwoom_bootstrap_calls_terminate_process_without_dll_teardown() -> None:
+    bootstrap = _load_kiwoom_bootstrap()
+    calls: list[tuple[int, int]] = []
+
+    class BridgeTerminated(BaseException):
+        pass
+
+    class FakeFunction:
+        def __init__(self, callback: Callable[..., Any]) -> None:
+            self.callback = callback
+            self.argtypes: object = None
+            self.restype: object = None
+
+        def __call__(self, *args: object) -> object:
+            return self.callback(*args)
+
+    def terminate_process(handle: int, code: int) -> None:
+        calls.append((handle, code))
+        raise BridgeTerminated
+
+    kernel32 = SimpleNamespace(
+        GetCurrentProcess=FakeFunction(lambda: 1234),
+        TerminateProcess=FakeFunction(terminate_process),
+    )
+
+    with pytest.raises(BridgeTerminated):
+        bootstrap._terminate_with_kernel32(
+            0,
+            kernel32=kernel32,
+            get_last_error=lambda: 0,
+        )
+
+    assert calls == [(1234, 0)]
+    assert kernel32.GetCurrentProcess.argtypes == []
+    assert kernel32.TerminateProcess.argtypes is not None
+
+
+def test_kiwoom_bootstrap_reports_terminate_process_failure() -> None:
+    bootstrap = _load_kiwoom_bootstrap()
+
+    class FakeFunction:
+        def __init__(self, callback: Callable[..., Any]) -> None:
+            self.callback = callback
+            self.argtypes: object = None
+            self.restype: object = None
+
+        def __call__(self, *args: object) -> object:
+            return self.callback(*args)
+
+    kernel32 = SimpleNamespace(
+        GetCurrentProcess=FakeFunction(lambda: 1234),
+        TerminateProcess=FakeFunction(lambda _handle, _code: 0),
+    )
+
+    with pytest.raises(OSError, match="TerminateProcess failed") as exc_info:
+        bootstrap._terminate_with_kernel32(
+            0,
+            kernel32=kernel32,
+            get_last_error=lambda: 5,
+        )
+
+    assert exc_info.value.errno == 5
 
 
 def test_kiwoom_bootstrap_exits_while_exporter_frame_locals_are_alive() -> None:

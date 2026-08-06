@@ -1,13 +1,9 @@
 """Bootstrap the hardened Kiwoom exporter on minimal Windows Python installs.
 
-Windows does not ship the IANA time-zone database used by ``zoneinfo``. The
-isolated x86 bridge intentionally has very few dependencies, so this entry point
-supplies fixed UTC and Korea Standard Time offsets only when those zones are
-unavailable. KST has no daylight-saving transitions and is permanently UTC+09:00.
-
-The bootstrap also applies the stdlib-only rolling request gate and immutable
-artifact writer before invoking the exporter. It remains compatible with the
-supported Python 3.10 x86 bridge.
+The isolated x86 bridge exports public quote and daily-bar evidence only. It
+supplies fixed time-zone fallbacks, applies the stdlib-only hardening layer, and
+terminates the successful Windows process without running unstable ActiveX DLL
+process-detach handlers.
 """
 
 from __future__ import annotations
@@ -37,15 +33,8 @@ def _fixed_supported_zone(key: str) -> tzinfo:
     raise zoneinfo.ZoneInfoNotFoundError(f"No fixed fallback for time zone {key}")
 
 
-def ensure_export_timezones(
-    module: ModuleType = zoneinfo,
-) -> bool:
-    """Install a narrow fixed-offset fallback when Windows has no tzdata.
-
-    Returns ``True`` only when the module's ``ZoneInfo`` attribute was replaced.
-    Unknown zones continue through the original factory and retain its failure
-    semantics.
-    """
+def ensure_export_timezones(module: ModuleType = zoneinfo) -> bool:
+    """Install a narrow fixed-offset fallback when Windows has no tzdata."""
 
     original: ZoneFactory = module.ZoneInfo
     missing_error: type[BaseException] = module.ZoneInfoNotFoundError
@@ -77,14 +66,62 @@ def _load_hardening(path: Path) -> ModuleType:
     return module
 
 
+def _terminate_with_kernel32(
+    code: int,
+    *,
+    kernel32: Any,
+    get_last_error: Callable[[], int],
+) -> NoReturn:
+    """Terminate the current process without DLL_PROCESS_DETACH callbacks."""
+
+    if not 0 <= code <= 255:
+        raise ValueError("bridge exit code must be between 0 and 255")
+
+    import ctypes
+
+    get_current_process = kernel32.GetCurrentProcess
+    terminate_process = kernel32.TerminateProcess
+    get_current_process.argtypes = []
+    get_current_process.restype = ctypes.c_void_p
+    terminate_process.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    terminate_process.restype = ctypes.c_int
+
+    process_handle = get_current_process()
+    result = terminate_process(process_handle, code)
+    if not result:
+        error_code = int(get_last_error())
+        raise OSError(error_code, "TerminateProcess failed")
+    raise RuntimeError("TerminateProcess unexpectedly returned for current process")
+
+
+def _terminate_current_process(code: int) -> NoReturn:
+    """Invoke Kernel32 TerminateProcess for the current Windows bridge process."""
+
+    if os.name != "nt":
+        raise RuntimeError("Kiwoom bridge termination requires Windows")
+
+    import ctypes
+
+    loader = getattr(ctypes, "WinDLL", None)
+    get_last_error = getattr(ctypes, "get_last_error", None)
+    if loader is None or not callable(get_last_error):
+        raise RuntimeError("Windows process-termination APIs are unavailable")
+    kernel32 = loader("kernel32", use_last_error=True)
+    _terminate_with_kernel32(
+        code,
+        kernel32=kernel32,
+        get_last_error=get_last_error,
+    )
+
+
 def _flush_and_hard_exit(
     code: int,
     *,
-    exit_process: ExitProcess = os._exit,
+    exit_process: ExitProcess = _terminate_current_process,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> NoReturn:
-    """Flush diagnostics and bypass unstable Qt/ActiveX interpreter teardown."""
+    """Flush diagnostics, then bypass Python and ActiveX DLL teardown."""
 
     if not 0 <= code <= 255:
         raise ValueError("bridge exit code must be between 0 and 255")
@@ -130,18 +167,11 @@ def _print_export_success(
 def _install_success_exit(
     runtime_globals: dict[str, Any],
     *,
-    exit_process: ExitProcess = os._exit,
+    exit_process: ExitProcess = _terminate_current_process,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> None:
-    """Exit from inside ``write_export`` while the caller still owns QAxWidget.
-
-    The exporter ``main`` frame holds the live ``KiwoomMarketExporter`` instance.
-    Waiting for that frame to return can release its final ActiveX reference before
-    bootstrap code regains control. Wrapping ``write_export`` moves the hard-exit
-    boundary to the first point where all immutable files are complete while the
-    caller frame and its native-object references are still unquestionably alive.
-    """
+    """Exit from inside ``write_export`` while the caller still owns QAxWidget."""
 
     original = runtime_globals.get("write_export")
     if not callable(original):
@@ -172,7 +202,7 @@ def _run_entrypoint_with_success_exit(
     entrypoint: Callable[[], Any],
     runtime_globals: dict[str, Any],
     *,
-    exit_process: ExitProcess = os._exit,
+    exit_process: ExitProcess = _terminate_current_process,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> NoReturn:
@@ -196,7 +226,7 @@ def _run_entrypoint_with_success_exit(
 def main(
     *,
     exit_before_teardown: bool = False,
-    exit_process: ExitProcess = os._exit,
+    exit_process: ExitProcess = _terminate_current_process,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> Any:
