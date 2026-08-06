@@ -123,8 +123,9 @@ def test_market_snapshot_links_explicit_single_provider_provenance(tmp_path: Pat
     assert provenance.live_price_certified is False
     assert provenance.decision_integration_eligible is False
     assert provenance.classification == "kiwoom_primary_tossinvest_ip_blocked"
-    assert provenance.account_api_enabled if False else True
+    assert "account_api_disabled" in provenance.warnings
     assert "order_api_disabled" in provenance.warnings
+    assert "automatic_provider_substitution_disabled" in provenance.warnings
 
 
 def test_windows_bootstrap_routes_through_provider_orchestrator() -> None:
