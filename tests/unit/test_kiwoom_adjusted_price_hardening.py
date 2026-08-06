@@ -110,6 +110,36 @@ def test_adjusted_daily_bars_reject_empty_valid_row_set() -> None:
         )
 
 
+def test_corporate_action_count_ignores_zero_and_unknown_metadata() -> None:
+    hardening = _load_hardening()
+
+    for ratio in ("", "0", "0.0", "0.00", "+0.0000", "-0.00"):
+        assert not hardening._has_corporate_action(
+            {
+                "response_adjustment_event_raw": "0",
+                "response_adjustment_ratio_raw": ratio,
+            }
+        )
+    assert not hardening._has_corporate_action(
+        {
+            "response_adjustment_event_raw": "",
+            "response_adjustment_ratio_raw": "not-provided",
+        }
+    )
+    assert hardening._has_corporate_action(
+        {
+            "response_adjustment_event_raw": "액면분할",
+            "response_adjustment_ratio_raw": "0.00",
+        }
+    )
+    assert hardening._has_corporate_action(
+        {
+            "response_adjustment_event_raw": "",
+            "response_adjustment_ratio_raw": "10.00%",
+        }
+    )
+
+
 def test_hardening_contains_no_account_or_order_api_surface() -> None:
     combined = "\n".join(
         path.read_text(encoding="utf-8")
