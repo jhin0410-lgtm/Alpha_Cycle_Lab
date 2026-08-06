@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import io
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
