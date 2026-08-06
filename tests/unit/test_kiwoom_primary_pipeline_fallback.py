@@ -142,3 +142,34 @@ def test_windows_bootstrap_routes_through_provider_orchestrator() -> None:
     assert "alpha_cycle.kiwoom_primary_pipeline_cli" in orchestrator
     assert 'status.reason -eq "tossinvest_ip_allowlist"' in orchestrator
     assert 'status.reason -eq "resume_unavailable"' in orchestrator
+
+
+def test_windows_orchestrator_validates_post_write_export_before_recovery() -> None:
+    root = Path(__file__).resolve().parents[2]
+    exporter = (
+        root / "scripts" / "export_kiwoom_openapi_plus_market.ps1"
+    ).read_text(encoding="utf-8")
+    orchestrator = (
+        root / "scripts" / "run_live_pipeline_orchestrator.ps1"
+    ).read_text(encoding="utf-8")
+
+    assert '[string]$OutputRoot = ""' in exporter
+    assert '"--output-root"' in exporter
+    assert "$exportExitCode = $LASTEXITCODE" in exporter
+
+    assert "function Test-NewKiwoomExport" in orchestrator
+    assert "$pointerBefore = Read-JsonFile" in orchestrator
+    assert "$pointerAfter = Read-JsonFile" in orchestrator
+    assert "-OutputRoot $KiwoomOutputRoot" in orchestrator
+    assert "if (-not $freshKiwoomExport)" in orchestrator
+    assert "after publishing a new valid evidence bundle" in orchestrator
+    assert "Continuing through downstream provenance validation." in orchestrator
+    assert (
+        'if ($null -ne $Before -and [string]$Before.snapshot_id -eq $snapshotId)'
+        in orchestrator
+    )
+    assert (
+        '-not (Test-FalseBooleanProperty -Value $manifest '
+        '-Name "account_api_enabled")'
+        in orchestrator
+    )
