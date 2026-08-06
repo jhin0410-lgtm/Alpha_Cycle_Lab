@@ -4,7 +4,8 @@ param(
     [ValidateRange(1, 600)]
     [int]$DailyCount = 120,
     [ValidateRange(30, 900)]
-    [int]$TimeoutSeconds = 600
+    [int]$TimeoutSeconds = 600,
+    [string]$OutputRoot = "data/private/live-research/kiwoom-openapi-plus-market"
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +38,13 @@ if (-not [System.IO.File]::Exists($Exporter)) {
     throw "Kiwoom read-only market exporter bootstrap is missing."
 }
 
+$ResolvedOutputRoot = if ([System.IO.Path]::IsPathRooted($OutputRoot)) {
+    [System.IO.Path]::GetFullPath($OutputRoot)
+}
+else {
+    [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $OutputRoot))
+}
+
 . $QtInitializer -BridgePython $BridgePython
 Write-Host "The official Kiwoom login window will open."
 Write-Host "This command exports public quote and unadjusted daily-bar evidence only."
@@ -48,7 +56,9 @@ $arguments += @(
     "--daily-count",
     $DailyCount.ToString(),
     "--timeout-seconds",
-    $TimeoutSeconds.ToString()
+    $TimeoutSeconds.ToString(),
+    "--output-root",
+    $ResolvedOutputRoot
 )
 
 & $BridgePython $Exporter @arguments

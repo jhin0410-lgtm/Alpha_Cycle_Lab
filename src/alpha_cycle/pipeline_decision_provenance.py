@@ -2,19 +2,26 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol, cast
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_provenance import DecisionEvidenceEnvelope
 from alpha_cycle.intelligence.decision_publication import (
     publish_decision_with_evidence,
 )
+from alpha_cycle.intelligence.kiwoom_primary_market import PRIMARY_PROVIDER
+from alpha_cycle.intelligence.kiwoom_primary_provenance import (
+    run_kiwoom_primary_market_gate,
+)
+from alpha_cycle.intelligence.market_consistency_provenance import (
+    MarketConsistencyProvenance,
+)
 from alpha_cycle.pipeline_market_consistency_degraded import (
-    PipelineMarketConsistencyGate,
     run_pipeline_market_consistency_gate,
 )
 
@@ -26,12 +33,31 @@ DecisionWriter = Callable[
 PIPELINE_PATCH_LOCK = threading.Lock()
 
 
+class PipelineMarketEvidenceGate(Protocol):
+    raw_result_path: Path
+    assessment_path: Path
+    provenance: MarketConsistencyProvenance
+
+
+def _market_provider(directory: Path) -> str | None:
+    manifest_path = directory / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        payload: object = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return str(cast(dict[str, object], payload).get("provider", "")).strip() or None
+
+
 @dataclass
 class PipelineDecisionProvenanceRuntime:
     """Hold exact gate and envelope evidence during one CLI execution."""
 
     decision_symbols: tuple[str, ...]
-    gate: PipelineMarketConsistencyGate | None = None
+    gate: PipelineMarketEvidenceGate | None = None
     envelope: DecisionEvidenceEnvelope | None = None
     envelope_files: tuple[Path, Path] | None = None
 
@@ -41,7 +67,7 @@ class PipelineDecisionProvenanceRuntime:
         self.envelope_files = None
 
     def prepare(self, market_snapshot: str | Path) -> None:
-        """Run only the exact-snapshot market gate."""
+        """Run the provider-specific exact-snapshot provenance gate."""
 
         market_directory = Path(market_snapshot).resolve(strict=True)
         if len(market_directory.parents) < 2:
@@ -49,11 +75,18 @@ class PipelineDecisionProvenanceRuntime:
                 f"Cannot derive pipeline output root from market snapshot: {market_directory}"
             )
         output_root = market_directory.parents[1]
-        self.gate = run_pipeline_market_consistency_gate(
-            output_root=output_root,
-            market_directory=market_directory,
-            decision_symbols=self.decision_symbols,
-        )
+        if _market_provider(market_directory) == PRIMARY_PROVIDER:
+            self.gate = run_kiwoom_primary_market_gate(
+                output_root=output_root,
+                market_directory=market_directory,
+                decision_symbols=self.decision_symbols,
+            )
+        else:
+            self.gate = run_pipeline_market_consistency_gate(
+                output_root=output_root,
+                market_directory=market_directory,
+                decision_symbols=self.decision_symbols,
+            )
 
     def build(
         self,
@@ -127,4 +160,8 @@ class PipelineDecisionProvenanceRuntime:
         }
 
 
-__all__ = ["PIPELINE_PATCH_LOCK", "PipelineDecisionProvenanceRuntime"]
+__all__ = [
+    "PIPELINE_PATCH_LOCK",
+    "PipelineDecisionProvenanceRuntime",
+    "PipelineMarketEvidenceGate",
+]
