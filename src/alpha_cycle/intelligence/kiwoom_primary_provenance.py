@@ -60,7 +60,9 @@ def load_kiwoom_primary_provenance(
     source_snapshot_id = str(raw_prices.get("source_snapshot_id", "")).strip()
     if len(source_snapshot_id) != 64:
         raise ValueError("Kiwoom source snapshot_id is invalid")
-    source_manifest_path = Path(str(raw_prices.get("source_manifest_path", "")).strip())
+    source_manifest_path = Path(
+        str(raw_prices.get("source_manifest_path", "")).strip()
+    )
     if not source_manifest_path.is_absolute():
         source_manifest_path = Path.cwd() / source_manifest_path
     source_manifest_path = source_manifest_path.resolve(strict=True)
@@ -76,12 +78,19 @@ def load_kiwoom_primary_provenance(
     if bool(source_manifest.get("order_api_enabled")):
         raise ValueError("Kiwoom source enabled order API")
 
+    source_values = cast(list[object], source_manifest.get("symbols", []))
     source_symbols = tuple(
-        sorted(str(item).strip().zfill(6) for item in cast(list[object], source_manifest.get("symbols", [])))
+        sorted(str(item).strip().zfill(6) for item in source_values)
     )
-    normalized_decisions = tuple(sorted(set(item.strip().zfill(6) for item in decision_symbols)))
-    if not normalized_decisions or not set(normalized_decisions).issubset(source_symbols):
-        raise ValueError("decision symbols are not covered by Kiwoom source evidence")
+    normalized_decisions = tuple(
+        sorted(set(item.strip().zfill(6) for item in decision_symbols))
+    )
+    if not normalized_decisions or not set(normalized_decisions).issubset(
+        source_symbols
+    ):
+        raise ValueError(
+            "decision symbols are not covered by Kiwoom source evidence"
+        )
 
     checked_at = str(source_manifest.get("captured_at_utc", "")).strip()
     base_payload: dict[str, object] = {
@@ -97,7 +106,9 @@ def load_kiwoom_primary_provenance(
         "order_api_enabled": False,
     }
     result_id = _digest({**base_payload, "kind": "single_provider_result"})
-    assessment_id = _digest({**base_payload, "kind": "single_provider_assessment"})
+    assessment_id = _digest(
+        {**base_payload, "kind": "single_provider_assessment"}
+    )
     warnings = (
         "kiwoom_primary_only_tossinvest_unavailable",
         "historical_ohlc_not_cross_provider_certified",
