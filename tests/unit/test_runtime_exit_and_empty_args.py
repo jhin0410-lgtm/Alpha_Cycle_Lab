@@ -9,7 +9,10 @@ def test_kiwoom_bootstrap_propagates_exporter_exit_status() -> None:
     ).read_text(encoding="utf-8")
 
     assert 'if __name__ == "__main__":' in bootstrap
-    assert "raise SystemExit(main())" in bootstrap
+    assert "result = main()" in bootstrap
+    assert "_flush_and_hard_exit(0 if result is None else int(result))" in bootstrap
+    assert "exit_process(code)" in bootstrap
+    assert "raise SystemExit(main())" not in bootstrap
     assert "\n    main()\n" not in bootstrap
 
 
