@@ -56,6 +56,9 @@ def test_playbook_requires_body_level_direction_verification() -> None:
         [
             {
                 "ticker": "000660",
+                "decision_state": "positive_setup",
+                "action_bias": "fundamental_positive_wait_for_timing",
+                "technical_evidence_status": "execution_gated",
                 "catalyst_evidence_status": "unresolved_title_only",
                 "entry_conditions": json.dumps(["실적 성장 유지"], ensure_ascii=False),
                 "add_conditions": json.dumps(["마진 개선 확인"], ensure_ascii=False),
@@ -64,6 +67,9 @@ def test_playbook_requires_body_level_direction_verification() -> None:
             },
             {
                 "ticker": "005930",
+                "decision_state": "negative_setup",
+                "action_bias": "avoid_or_reduce_candidate",
+                "technical_evidence_status": "execution_gated",
                 "catalyst_evidence_status": "negative_title_evidence",
                 "entry_conditions": json.dumps([], ensure_ascii=False),
                 "add_conditions": json.dumps([], ensure_ascii=False),
@@ -79,6 +85,10 @@ def test_playbook_requires_body_level_direction_verification() -> None:
     hynix_add = _decode(result.loc["000660", "add_conditions"])
     hynix_gaps = _decode(result.loc["000660", "evidence_gaps"])
     samsung_reduce = _decode(result.loc["005930", "reduce_conditions"])
+    assert result.loc["000660", "action_bias"] == (
+        "fundamental_positive_wait_for_adjusted_timing"
+    )
+    assert result.loc["005930", "action_bias"] == "avoid_or_reduce_candidate"
     assert any("본문" in item and "투자 방향" in item for item in hynix_entry)
     assert any("매출·이익·현금흐름" in item for item in hynix_add)
     assert any("시장 기대" in item for item in hynix_gaps)
