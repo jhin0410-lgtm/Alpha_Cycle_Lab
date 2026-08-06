@@ -105,6 +105,17 @@ def _recompute(row: dict[str, object], policy: DecisionPolicy) -> None:
     )
 
 
+def _restore_technical_action(row: pd.Series[object]) -> str | None:
+    if str(row.get("technical_evidence_status", "")) != "execution_gated":
+        return None
+    state = str(row.get("decision_state", ""))
+    if state == "positive_setup":
+        return "fundamental_positive_wait_for_adjusted_timing"
+    if state == "mixed_setup":
+        return "selective_or_wait_for_adjusted_timing"
+    return None
+
+
 def apply_catalyst_evidence_policy(
     snapshot: InvestmentDecisionSnapshot,
     *,
@@ -165,6 +176,9 @@ def apply_catalyst_evidence_policy(
 def gate_catalyst_playbook(scorecards: pd.DataFrame) -> pd.DataFrame:
     result = scorecards.copy()
     for index, raw in result.iterrows():
+        restored_action = _restore_technical_action(raw)
+        if restored_action is not None:
+            result.at[index, "action_bias"] = restored_action
         status = str(raw.get("catalyst_evidence_status", ""))
         if status not in {
             "unresolved_title_only",
