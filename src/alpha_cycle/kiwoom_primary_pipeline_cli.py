@@ -19,6 +19,10 @@ from alpha_cycle.intelligence.kiwoom_primary_provenance import (
 from alpha_cycle.intelligence.market import MarketIntelligenceSnapshot
 from alpha_cycle.pipeline_market_consistency import PipelineMarketConsistencyGate
 
+_CLIENT_ATTRIBUTE = "TossInvestReadOnlyClient"
+_COLLECTOR_ATTRIBUTE = "MarketIntelligenceCollector"
+_GATE_ATTRIBUTE = "run_pipeline_market_consistency_gate"
+
 
 @dataclass(frozen=True)
 class _KiwoomPrimaryGate:
@@ -51,7 +55,9 @@ class _KiwoomCollector:
         adjusted: bool,
     ) -> MarketIntelligenceSnapshot:
         if interval != "1d" or adjusted:
-            raise ValueError("Kiwoom primary fallback supports unadjusted daily data only")
+            raise ValueError(
+                "Kiwoom primary fallback supports unadjusted daily data only"
+            )
         expected = tuple(sorted(set(symbols)))
         if expected != tuple(sorted(live.DEFAULT_MARKET_SYMBOLS)):
             raise ValueError("Kiwoom primary fallback symbol set changed")
@@ -85,18 +91,18 @@ def main(argv: list[str] | None = None) -> int:
     live._validate_args(parsed)
     _KiwoomCollector.output_root = Path(parsed.output)
 
-    original_client: Any = live.TossInvestReadOnlyClient
-    original_collector: Any = live.MarketIntelligenceCollector
-    original_gate: Any = decision_runtime.run_pipeline_market_consistency_gate
-    live.TossInvestReadOnlyClient = cast(Any, _NoTossClient)
-    live.MarketIntelligenceCollector = cast(Any, _KiwoomCollector)
-    decision_runtime.run_pipeline_market_consistency_gate = cast(Any, _primary_gate)
+    original_client: Any = getattr(live, _CLIENT_ATTRIBUTE)
+    original_collector: Any = getattr(live, _COLLECTOR_ATTRIBUTE)
+    original_gate: Any = getattr(decision_runtime, _GATE_ATTRIBUTE)
+    setattr(live, _CLIENT_ATTRIBUTE, _NoTossClient)
+    setattr(live, _COLLECTOR_ATTRIBUTE, _KiwoomCollector)
+    setattr(decision_runtime, _GATE_ATTRIBUTE, _primary_gate)
     try:
         return provenance_cli.main(argv)
     finally:
-        live.TossInvestReadOnlyClient = original_client
-        live.MarketIntelligenceCollector = original_collector
-        decision_runtime.run_pipeline_market_consistency_gate = original_gate
+        setattr(live, _CLIENT_ATTRIBUTE, original_client)
+        setattr(live, _COLLECTOR_ATTRIBUTE, original_collector)
+        setattr(decision_runtime, _GATE_ATTRIBUTE, original_gate)
 
 
 if __name__ == "__main__":
