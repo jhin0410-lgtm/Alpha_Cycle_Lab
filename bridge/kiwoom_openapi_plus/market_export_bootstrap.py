@@ -13,6 +13,7 @@ supported Python 3.10 x86 bridge.
 from __future__ import annotations
 
 import importlib.util
+import os
 import runpy
 import sys
 import zoneinfo
@@ -20,9 +21,10 @@ from collections.abc import Callable
 from datetime import timedelta, timezone, tzinfo
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, NoReturn, TextIO
 
 ZoneFactory = Callable[[str], tzinfo]
+ExitProcess = Callable[[int], NoReturn]
 
 
 def _fixed_supported_zone(key: str) -> tzinfo:
@@ -73,6 +75,31 @@ def _load_hardening(path: Path) -> ModuleType:
     return module
 
 
+def _flush_and_hard_exit(
+    code: int,
+    *,
+    exit_process: ExitProcess = os._exit,
+    stdout: TextIO | None = None,
+    stderr: TextIO | None = None,
+) -> NoReturn:
+    """Flush diagnostics and bypass unstable Qt/ActiveX interpreter teardown.
+
+    The exporter has already written and atomically published its evidence before
+    returning a status code. The isolated bridge owns no account or order state,
+    so process termination is the narrowest deterministic boundary after export.
+    ``os._exit`` avoids late ActiveX callbacks raised while Python and Qt destroy
+    their runtimes. Callers still receive the exporter's exact status code.
+    """
+
+    if not 0 <= code <= 255:
+        raise ValueError("bridge exit code must be between 0 and 255")
+    output = stdout if stdout is not None else sys.stdout
+    error = stderr if stderr is not None else sys.stderr
+    output.flush()
+    error.flush()
+    exit_process(code)
+
+
 def main() -> Any:
     ensure_export_timezones()
     directory = Path(__file__).resolve().parent
@@ -98,4 +125,5 @@ def main() -> Any:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    result = main()
+    _flush_and_hard_exit(0 if result is None else int(result))
