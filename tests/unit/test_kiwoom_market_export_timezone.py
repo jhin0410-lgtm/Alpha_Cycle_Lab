@@ -7,6 +7,7 @@ import sys
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
+from typing import NoReturn
 
 import pytest
 
@@ -109,7 +110,7 @@ def test_hard_exit_flushes_output_and_preserves_exporter_status() -> None:
         def flush(self) -> None:
             events.append((self.name, None))
 
-    def exit_process(code: int) -> None:
+    def exit_process(code: int) -> NoReturn:
         events.append(("exit", code))
         raise SystemExit(code)
 
