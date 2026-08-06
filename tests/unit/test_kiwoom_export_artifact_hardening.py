@@ -6,10 +6,12 @@ import importlib.util
 import json
 import runpy
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -20,6 +22,7 @@ EXPORTER_PATH = Path("bridge/kiwoom_openapi_plus/market_export.py")
 BOOTSTRAP_PATH = Path(
     "bridge/kiwoom_openapi_plus/market_export_bootstrap.py"
 )
+Writer = Callable[..., tuple[Any, Path]]
 
 
 def _load_hardening() -> ModuleType:
@@ -71,7 +74,7 @@ def _exporter() -> SimpleNamespace:
     )
 
 
-def _writer(tmp_path: Path) -> tuple[object, object]:
+def _writer() -> Writer:
     hardening = _load_hardening()
     namespace = runpy.run_path(
         str(EXPORTER_PATH),
@@ -80,7 +83,9 @@ def _writer(tmp_path: Path) -> tuple[object, object]:
     fixed = datetime(2026, 8, 4, 8, 0, 0, 123456, tzinfo=UTC)
     namespace["_capture_now"] = lambda zone: fixed.astimezone(zone)
     hardening.apply_hardening(namespace)
-    return namespace["write_export"], hardening
+    writer = namespace["write_export"]
+    assert callable(writer)
+    return writer
 
 
 def test_hardening_replaces_gate_manifest_methods_and_writer() -> None:
@@ -102,7 +107,7 @@ def test_hardening_replaces_gate_manifest_methods_and_writer() -> None:
 
 
 def test_writer_publishes_adjusted_basis_and_response_evidence(tmp_path: Path) -> None:
-    writer, _ = _writer(tmp_path)
+    writer = _writer()
 
     manifest, directory = writer(
         output_root=tmp_path,
@@ -129,23 +134,29 @@ def test_writer_publishes_adjusted_basis_and_response_evidence(tmp_path: Path) -
 
 
 def test_writer_rejects_reuse_of_existing_snapshot_directory(tmp_path: Path) -> None:
-    writer, _ = _writer(tmp_path)
-    arguments = {
-        "output_root": tmp_path,
-        "symbols": ("005930",),
-        "daily_count": 1,
-        "quotes": [StubRecord("005930", 1)],
-        "bars": [StubBar("005930", "20260804", 2)],
-        "exporter": _exporter(),
-    }
+    writer = _writer()
 
-    manifest, directory = writer(**arguments)
+    manifest, directory = writer(
+        output_root=tmp_path,
+        symbols=("005930",),
+        daily_count=1,
+        quotes=[StubRecord("005930", 1)],
+        bars=[StubBar("005930", "20260804", 2)],
+        exporter=_exporter(),
+    )
     latest_before = (tmp_path / "latest_market_export.json").read_text(
         encoding="utf-8"
     )
 
     with pytest.raises(FileExistsError):
-        writer(**arguments)
+        writer(
+            output_root=tmp_path,
+            symbols=("005930",),
+            daily_count=1,
+            quotes=[StubRecord("005930", 1)],
+            bars=[StubBar("005930", "20260804", 2)],
+            exporter=_exporter(),
+        )
 
     assert directory.name.startswith("20260804T170000123456+0900__")
     assert directory.name.endswith(manifest.snapshot_id[:12])
@@ -159,7 +170,7 @@ def test_writer_rejects_reuse_of_existing_snapshot_directory(tmp_path: Path) -> 
 
 
 def test_writer_rejects_unadjusted_or_unbound_bars(tmp_path: Path) -> None:
-    writer, _ = _writer(tmp_path)
+    writer = _writer()
 
     with pytest.raises(ValueError, match="adjusted daily bars only"):
         writer(
