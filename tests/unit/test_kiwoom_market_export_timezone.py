@@ -7,6 +7,7 @@ import sys
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import ModuleType
+from typing import NoReturn
 
 import pytest
 
@@ -96,3 +97,37 @@ def test_windows_launcher_uses_timezone_bootstrap() -> None:
     assert "Asia/Seoul" in bootstrap
     assert "timedelta(hours=9)" in bootstrap
     assert "tzdata" not in script
+
+
+def test_hard_exit_flushes_output_and_preserves_exporter_status() -> None:
+    bootstrap = _load_bootstrap()
+    events: list[tuple[str, int | None]] = []
+
+    class Stream:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def flush(self) -> None:
+            events.append((self.name, None))
+
+    def exit_process(code: int) -> NoReturn:
+        events.append(("exit", code))
+        raise SystemExit(code)
+
+    with pytest.raises(SystemExit) as captured:
+        bootstrap._flush_and_hard_exit(
+            2,
+            exit_process=exit_process,
+            stdout=Stream("stdout"),
+            stderr=Stream("stderr"),
+        )
+
+    assert captured.value.code == 2
+    assert events == [("stdout", None), ("stderr", None), ("exit", 2)]
+
+
+def test_hard_exit_rejects_invalid_process_status() -> None:
+    bootstrap = _load_bootstrap()
+
+    with pytest.raises(ValueError, match="between 0 and 255"):
+        bootstrap._flush_and_hard_exit(256)
