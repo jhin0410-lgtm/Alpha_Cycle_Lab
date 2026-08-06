@@ -174,4 +174,4 @@ def test_resilient_builder_applies_market_policy_before_playbook() -> None:
 
     assert "apply_market_evidence_policy(" in source
     assert "gate_execution_playbook(" in source
-    assert source.count("apply_market_report_policy(") == 2
+    assert source.count("report = apply_market_report_policy(") == 2
