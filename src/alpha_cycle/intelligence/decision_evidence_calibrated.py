@@ -38,6 +38,9 @@ from alpha_cycle.intelligence.evidence_coverage_policy import (
     apply_evidence_coverage_policy,
     apply_evidence_report_policy,
 )
+from alpha_cycle.intelligence.report_financial_formatting import (
+    apply_financial_report_formatting,
+)
 from alpha_cycle.intelligence.technical_evidence_policy import (
     apply_market_report_policy,
     gate_execution_playbook,
@@ -105,12 +108,13 @@ def _rebuild_report(
     report = append_execution_playbook_report(report, scorecards)
     report = apply_catalyst_report_policy(report)
     report = append_review_priority_audit(report, scorecards)
-    return apply_evidence_report_policy(
+    report = apply_evidence_report_policy(
         report,
         scorecards,
         snapshot.financial_kpis,
         snapshot.financial_history,
     )
+    return apply_financial_report_formatting(report, snapshot.financial_kpis)
 
 
 def build_investment_decision_snapshot(
