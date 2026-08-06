@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import replace
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -105,7 +106,7 @@ def _recompute(row: dict[str, object], policy: DecisionPolicy) -> None:
     )
 
 
-def _restore_technical_action(row: pd.Series[object]) -> str | None:
+def _restore_technical_action(row: pd.Series[Any]) -> str | None:
     if str(row.get("technical_evidence_status", "")) != "execution_gated":
         return None
     state = str(row.get("decision_state", ""))
