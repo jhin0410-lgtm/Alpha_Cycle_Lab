@@ -37,6 +37,11 @@ from alpha_cycle.intelligence.decision_scoring import (
 from alpha_cycle.intelligence.disclosure_provenance import (
     normalize_disclosure_tables,
 )
+from alpha_cycle.intelligence.technical_evidence_policy import (
+    apply_market_evidence_policy,
+    apply_market_report_policy,
+    gate_execution_playbook,
+)
 from alpha_cycle.intelligence.valuation import (
     append_valuation_report,
     apply_valuation_to_scorecards,
@@ -180,11 +185,12 @@ def _calibrated_playbook_scorecards(
         snapshot.market_context,
         evaluation_date=snapshot.evaluation_date,
     )
-    return calibrate_decision_scorecards(
+    calibrated = calibrate_decision_scorecards(
         enriched,
         snapshot.catalysts,
         evaluation_date=snapshot.evaluation_date,
     )
+    return gate_execution_playbook(calibrated, snapshot.market_context)
 
 
 def _decision_records_with_audit(
@@ -233,6 +239,7 @@ def _attach_execution_playbook(
             snapshot.financial_history,
         )
         report = clarify_valuation_report(report, snapshot.valuation_metrics)
+    report = apply_market_report_policy(report, snapshot.market_context)
     report = append_execution_playbook_report(report, scorecards)
     report = append_review_priority_audit(report, scorecards)
     return replace(
@@ -263,6 +270,12 @@ def build_investment_decision_snapshot(
         exposures=exposures,
         policy=policy,
         now=now,
+    )
+    base = apply_market_evidence_policy(
+        base,
+        market_snapshot=market_snapshot,
+        exposures=dict(exposures or {}),
+        policy=policy or base.policy,
     )
     base = _normalize_disclosure_provenance(base)
     if valuation_snapshot is None:
@@ -322,6 +335,7 @@ def build_investment_decision_snapshot(
     report = clarify_report_coverage(report)
     report = append_valuation_report(report, valuation_metrics, financial_history)
     report = clarify_valuation_report(report, valuation_metrics)
+    report = apply_market_report_policy(report, base.market_context)
     report = append_execution_playbook_report(report, scorecards)
     report = append_review_priority_audit(report, scorecards)
 
