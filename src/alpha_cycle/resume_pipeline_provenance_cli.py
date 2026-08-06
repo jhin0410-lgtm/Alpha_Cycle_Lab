@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,34 @@ from alpha_cycle.pipeline_decision_provenance import (
 _BUILD_ATTRIBUTE = "build_investment_decision_snapshot"
 _WRITE_ATTRIBUTE = "write_investment_decision_snapshot"
 _EXECUTE_ATTRIBUTE = "_execute"
+_FIND_MARKET_ATTRIBUTE = "_find_market_directory"
+_TOSS_PROVIDER = "tossinvest-readonly"
+MarketFinder = Callable[
+    [Path, str],
+    tuple[Path, Mapping[str, object]] | None,
+]
+
+
+def _find_toss_resume_market(
+    original: MarketFinder,
+    root: Path,
+    snapshot_id: str,
+) -> tuple[Path, Mapping[str, object]] | None:
+    """Keep the generic resume path bound to Toss-origin market snapshots.
+
+    Kiwoom-primary snapshots are intentionally resumed only through their dedicated
+    fresh-export pipeline, which installs a different provenance gate. Returning
+    ``None`` here lets the normal resume search continue to older linked research
+    snapshots rather than sending Kiwoom evidence into the Toss consistency gate.
+    """
+
+    found = original(root, snapshot_id)
+    if found is None:
+        return None
+    market_directory, manifest = found
+    if str(manifest.get("provider", "")) != _TOSS_PROVIDER:
+        return None
+    return market_directory, manifest
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -30,6 +59,17 @@ def main(argv: list[str] | None = None) -> int:
         original_build: Any = getattr(resume, _BUILD_ATTRIBUTE)
         original_write: Any = getattr(resume, _WRITE_ATTRIBUTE)
         original_execute: Any = getattr(resume, _EXECUTE_ATTRIBUTE)
+        original_find_market: Any = getattr(resume, _FIND_MARKET_ATTRIBUTE)
+
+        def provider_bound_find_market(
+            root: Path,
+            snapshot_id: str,
+        ) -> tuple[Path, Mapping[str, object]] | None:
+            return _find_toss_resume_market(
+                cast(MarketFinder, original_find_market),
+                root,
+                snapshot_id,
+            )
 
         def gated_build(
             research_snapshot: str | Path,
@@ -69,12 +109,14 @@ def main(argv: list[str] | None = None) -> int:
                 raise live.PipelineStageError("decision_provenance", exc) from exc
             return payload
 
+        setattr(resume, _FIND_MARKET_ATTRIBUTE, provider_bound_find_market)
         setattr(resume, _BUILD_ATTRIBUTE, gated_build)
         setattr(resume, _WRITE_ATTRIBUTE, gated_write)
         setattr(resume, _EXECUTE_ATTRIBUTE, gated_execute)
         try:
             return resume.main(argv)
         finally:
+            setattr(resume, _FIND_MARKET_ATTRIBUTE, original_find_market)
             setattr(resume, _BUILD_ATTRIBUTE, original_build)
             setattr(resume, _WRITE_ATTRIBUTE, original_write)
             setattr(resume, _EXECUTE_ATTRIBUTE, original_execute)
