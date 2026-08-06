@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
+    [AllowEmptyCollection()]
     [string[]]$PipelineArguments = @()
 )
 
@@ -8,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryRoot = Split-Path -Parent $ScriptDirectory
 $Resolver = Join-Path $ScriptDirectory "resolve_project_python.ps1"
-$Pipeline = Join-Path $ScriptDirectory "run_live_pipeline.ps1"
+$Pipeline = Join-Path $ScriptDirectory "run_live_pipeline_orchestrator.ps1"
 $SourceRoot = Join-Path $RepositoryRoot "src"
 
 $ProjectPython = & $Resolver
