@@ -107,11 +107,15 @@ def test_report_distinguishes_annual_and_single_quarter_yoy() -> None:
             },
         ]
     )
+    coverage_notice = (
+        "- 점수 항목 커버리지는 전체 투자정보 완성도가 아니라 "
+        "현재 연결된 점수 입력의 가용 비중"
+    )
     report = "\n".join(
         [
             "# Alpha Cycle 투자 의사결정 리포트",
             "",
-            "- 점수 항목 커버리지는 전체 투자정보 완성도가 아니라 현재 연결된 점수 입력의 가용 비중",
+            coverage_notice,
             "",
             "## 000660",
             "",
