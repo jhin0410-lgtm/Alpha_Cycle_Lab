@@ -41,22 +41,37 @@ class StubRecord:
     value: int
 
 
-def test_hardening_replaces_only_gate_and_writer() -> None:
-    hardening = _load_hardening()
-    namespace = runpy.run_path(
-        str(EXPORTER_PATH),
-        run_name="kiwoom_export_hardening_namespace",
+@dataclass(frozen=True)
+class StubBar:
+    ticker: str
+    date: str
+    value: int
+    adjusted: bool = True
+
+
+def _exporter() -> SimpleNamespace:
+    return SimpleNamespace(
+        login_event_code=0,
+        connected=True,
+        request_count=2,
+        request_gate=SimpleNamespace(interval_seconds=0.25),
+        provider_messages=(),
+        adjustment_evidence=[
+            {
+                "ticker": "005930",
+                "date": "20260804",
+                "requested_price_basis": "adjusted",
+                "adjustment_request_value": "1",
+                "response_adjustment_code_raw": "",
+                "response_adjustment_ratio_raw": "",
+                "response_adjustment_event_raw": "",
+                "previous_close_raw": "75000",
+            }
+        ],
     )
-    original_collector = namespace["collect_market_data"]
-
-    hardening.apply_hardening(namespace)
-
-    assert namespace["RequestGate"] is hardening.RollingRequestGate
-    assert callable(namespace["write_export"])
-    assert namespace["collect_market_data"] is original_collector
 
 
-def test_writer_rejects_reuse_of_existing_snapshot_directory(tmp_path: Path) -> None:
+def _writer(tmp_path: Path) -> tuple[object, object]:
     hardening = _load_hardening()
     namespace = runpy.run_path(
         str(EXPORTER_PATH),
@@ -64,47 +79,109 @@ def test_writer_rejects_reuse_of_existing_snapshot_directory(tmp_path: Path) -> 
     )
     fixed = datetime(2026, 8, 4, 8, 0, 0, 123456, tzinfo=UTC)
     namespace["_capture_now"] = lambda zone: fixed.astimezone(zone)
-    writer = hardening.build_immutable_writer(namespace)
-    exporter = SimpleNamespace(
-        login_event_code=0,
-        connected=True,
-        request_count=2,
-        request_gate=SimpleNamespace(interval_seconds=0.25),
-        provider_messages=(),
+    hardening.apply_hardening(namespace)
+    return namespace["write_export"], hardening
+
+
+def test_hardening_replaces_gate_manifest_methods_and_writer() -> None:
+    hardening = _load_hardening()
+    namespace = runpy.run_path(
+        str(EXPORTER_PATH),
+        run_name="kiwoom_export_hardening_namespace",
     )
+    original_collector = namespace["collect_market_data"]
+    original_daily_bars = namespace["KiwoomMarketExporter"].daily_bars
+
+    hardening.apply_hardening(namespace)
+
+    assert namespace["RequestGate"] is hardening.RollingRequestGate
+    assert namespace["ExportManifest"] is hardening.AdjustedExportManifest
+    assert callable(namespace["write_export"])
+    assert namespace["collect_market_data"] is original_collector
+    assert namespace["KiwoomMarketExporter"].daily_bars is not original_daily_bars
+
+
+def test_writer_publishes_adjusted_basis_and_response_evidence(tmp_path: Path) -> None:
+    writer, _ = _writer(tmp_path)
 
     manifest, directory = writer(
         output_root=tmp_path,
         symbols=("005930",),
         daily_count=1,
         quotes=[StubRecord("005930", 1)],
-        bars=[StubRecord("005930", 2)],
-        exporter=exporter,
+        bars=[StubBar("005930", "20260804", 2)],
+        exporter=_exporter(),
     )
+
+    assert manifest.adjusted_prices is True
+    assert manifest.price_basis == "adjusted"
+    assert manifest.adjustment_request_value == "1"
+    assert manifest.corporate_action_row_count == 0
+    assert (directory / "adjustment_evidence.csv").is_file()
+    payload = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    latest = json.loads(
+        (tmp_path / "latest_market_export.json").read_text(encoding="utf-8")
+    )
+    assert payload["adjusted_prices"] is True
+    assert payload["adjustment_evidence_file"] == "adjustment_evidence.csv"
+    assert latest["adjusted_prices"] is True
+    assert latest["price_basis"] == "adjusted"
+
+
+def test_writer_rejects_reuse_of_existing_snapshot_directory(tmp_path: Path) -> None:
+    writer, _ = _writer(tmp_path)
+    arguments = {
+        "output_root": tmp_path,
+        "symbols": ("005930",),
+        "daily_count": 1,
+        "quotes": [StubRecord("005930", 1)],
+        "bars": [StubBar("005930", "20260804", 2)],
+        "exporter": _exporter(),
+    }
+
+    manifest, directory = writer(**arguments)
     latest_before = (tmp_path / "latest_market_export.json").read_text(
         encoding="utf-8"
     )
 
     with pytest.raises(FileExistsError):
-        writer(
-            output_root=tmp_path,
-            symbols=("005930",),
-            daily_count=1,
-            quotes=[StubRecord("005930", 1)],
-            bars=[StubRecord("005930", 2)],
-            exporter=exporter,
-        )
+        writer(**arguments)
 
     assert directory.name.startswith("20260804T170000123456+0900__")
     assert directory.name.endswith(manifest.snapshot_id[:12])
     assert (directory / "manifest.json").is_file()
     assert (directory / "quotes.csv").is_file()
     assert (directory / "daily_bars.csv").is_file()
+    assert (directory / "adjustment_evidence.csv").is_file()
     assert (
         tmp_path / "latest_market_export.json"
     ).read_text(encoding="utf-8") == latest_before
-    latest = json.loads(latest_before)
-    assert latest["snapshot_id"] == manifest.snapshot_id
+
+
+def test_writer_rejects_unadjusted_or_unbound_bars(tmp_path: Path) -> None:
+    writer, _ = _writer(tmp_path)
+
+    with pytest.raises(ValueError, match="adjusted daily bars only"):
+        writer(
+            output_root=tmp_path,
+            symbols=("005930",),
+            daily_count=1,
+            quotes=[StubRecord("005930", 1)],
+            bars=[StubBar("005930", "20260804", 2, adjusted=False)],
+            exporter=_exporter(),
+        )
+
+    exporter = _exporter()
+    exporter.adjustment_evidence = []
+    with pytest.raises(ValueError, match="cover every exported daily bar"):
+        writer(
+            output_root=tmp_path,
+            symbols=("005930",),
+            daily_count=1,
+            quotes=[StubRecord("005930", 1)],
+            bars=[StubBar("005930", "20260804", 2)],
+            exporter=exporter,
+        )
 
 
 def test_bootstrap_is_python_310_compatible_and_applies_hardening() -> None:
