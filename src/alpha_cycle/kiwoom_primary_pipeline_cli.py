@@ -54,14 +54,20 @@ class _KiwoomCollector:
         count: int,
         adjusted: bool,
     ) -> MarketIntelligenceSnapshot:
-        if interval != "1d" or adjusted:
-            raise ValueError(
-                "Kiwoom primary fallback supports unadjusted daily data only"
-            )
+        if interval != "1d":
+            raise ValueError("Kiwoom primary fallback supports daily data only")
         expected = tuple(sorted(set(symbols)))
         if expected != tuple(sorted(live.DEFAULT_MARKET_SYMBOLS)):
             raise ValueError("Kiwoom primary fallback symbol set changed")
-        return build_kiwoom_primary_snapshot(self.output_root, count=count)
+
+        # The legacy live-pipeline call currently passes its requested basis as a
+        # parameter. The immutable Kiwoom manifest is the authoritative basis:
+        # the adapter below fails closed unless opt10081 수정주가구분=1 and every
+        # exported row is bound to adjustment evidence.
+        snapshot = build_kiwoom_primary_snapshot(self.output_root, count=count)
+        if not snapshot.adjusted:
+            raise ValueError("Kiwoom primary fallback must publish adjusted candles")
+        return snapshot
 
 
 def _primary_gate(

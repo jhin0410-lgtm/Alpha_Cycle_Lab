@@ -85,6 +85,30 @@ def _aware(value: object, field: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def _true(value: object, field: str) -> bool:
+    if value is True:
+        return True
+    if isinstance(value, str) and value.strip().casefold() in {"true", "1", "yes"}:
+        return True
+    raise KiwoomPrimaryEvidenceError(f"Kiwoom evidence must be true: {field}")
+
+
+def _evidence_path(directory: Path, raw_name: object, field: str) -> Path:
+    name = str(raw_name).strip()
+    if not name or Path(name).name != name:
+        raise KiwoomPrimaryEvidenceError(f"invalid Kiwoom evidence filename: {field}")
+    path = (directory / name).resolve()
+    try:
+        path.relative_to(directory.resolve())
+    except ValueError as exc:
+        raise KiwoomPrimaryEvidenceError(
+            f"Kiwoom evidence path escapes export directory: {field}"
+        ) from exc
+    if not path.is_file():
+        raise KiwoomPrimaryEvidenceError(f"Kiwoom evidence file is missing: {field}")
+    return path
+
+
 def _source_directory(output_root: Path) -> tuple[Path, dict[str, object], Path]:
     root = output_root / "kiwoom-openapi-plus-market"
     pointer_path = root / "latest_market_export.json"
@@ -124,6 +148,16 @@ def _source_directory(output_root: Path) -> tuple[Path, dict[str, object], Path]
         raise KiwoomPrimaryEvidenceError(
             "Kiwoom primary evidence cannot enable account or order APIs"
         )
+    _true(manifest.get("adjusted_prices"), "manifest.adjusted_prices")
+    _true(pointer.get("adjusted_prices"), "pointer.adjusted_prices")
+    if manifest.get("price_basis") != "adjusted":
+        raise KiwoomPrimaryEvidenceError("Kiwoom manifest price basis is not adjusted")
+    if pointer.get("price_basis") != "adjusted":
+        raise KiwoomPrimaryEvidenceError("Kiwoom pointer price basis is not adjusted")
+    if str(manifest.get("adjustment_request_value", "")) != "1":
+        raise KiwoomPrimaryEvidenceError(
+            "Kiwoom manifest did not record 수정주가구분=1"
+        )
     symbol_values = cast(list[object], manifest.get("symbols", []))
     symbols = tuple(sorted(str(item).zfill(6) for item in symbol_values))
     if symbols != EXPECTED_SYMBOLS:
@@ -133,6 +167,29 @@ def _source_directory(output_root: Path) -> tuple[Path, dict[str, object], Path]
     return directory, manifest, manifest_path
 
 
+def _indexed_adjustment_evidence(
+    rows: list[dict[str, str]],
+) -> dict[tuple[str, str], dict[str, str]]:
+    indexed: dict[tuple[str, str], dict[str, str]] = {}
+    for row in rows:
+        symbol = row.get("ticker", "").strip().zfill(6)
+        day = row.get("date", "").strip()
+        key = (symbol, day)
+        if key in indexed:
+            raise KiwoomPrimaryEvidenceError(
+                f"duplicate Kiwoom adjustment evidence: {key}"
+            )
+        if (
+            row.get("requested_price_basis", "").strip() != "adjusted"
+            or row.get("adjustment_request_value", "").strip() != "1"
+        ):
+            raise KiwoomPrimaryEvidenceError(
+                f"unexpected Kiwoom adjustment request evidence: {key}"
+            )
+        indexed[key] = row
+    return indexed
+
+
 def build_kiwoom_primary_snapshot(
     output_root: str | Path,
     *,
@@ -140,7 +197,7 @@ def build_kiwoom_primary_snapshot(
     max_age_minutes: int = 30,
     now: datetime | None = None,
 ) -> MarketIntelligenceSnapshot:
-    """Convert the latest immutable Kiwoom export into the standard market snapshot."""
+    """Convert verified adjusted Kiwoom evidence into a standard market snapshot."""
 
     if count <= 0 or count > 600:
         raise KiwoomPrimaryEvidenceError(
@@ -164,11 +221,20 @@ def build_kiwoom_primary_snapshot(
         )
 
     quote_rows = _rows(
-        directory / str(manifest.get("quotes_file", "quotes.csv"))
+        _evidence_path(directory, manifest.get("quotes_file"), "quotes_file")
     )
     bar_rows = _rows(
-        directory / str(manifest.get("daily_bars_file", "daily_bars.csv"))
+        _evidence_path(directory, manifest.get("daily_bars_file"), "daily_bars_file")
     )
+    adjustment_rows = _rows(
+        _evidence_path(
+            directory,
+            manifest.get("adjustment_evidence_file"),
+            "adjustment_evidence_file",
+        )
+    )
+    adjustment_by_key = _indexed_adjustment_evidence(adjustment_rows)
+
     quote_by_symbol: dict[str, dict[str, str]] = {}
     for row in quote_rows:
         symbol = row.get("ticker", "").strip().zfill(6)
@@ -176,9 +242,7 @@ def build_kiwoom_primary_snapshot(
             raise KiwoomPrimaryEvidenceError(f"duplicate Kiwoom quote: {symbol}")
         quote_by_symbol[symbol] = row
     if tuple(sorted(quote_by_symbol)) != EXPECTED_SYMBOLS:
-        raise KiwoomPrimaryEvidenceError(
-            "Kiwoom quote symbol set is incomplete"
-        )
+        raise KiwoomPrimaryEvidenceError("Kiwoom quote symbol set is incomplete")
 
     bars_by_symbol: dict[str, list[dict[str, str]]] = defaultdict(list)
     seen_bars: set[tuple[str, str]] = set()
@@ -187,11 +251,18 @@ def build_kiwoom_primary_snapshot(
         candle_date = row.get("date", "").strip()
         key = (symbol, candle_date)
         if key in seen_bars:
-            raise KiwoomPrimaryEvidenceError(
-                f"duplicate Kiwoom daily bar: {key}"
-            )
+            raise KiwoomPrimaryEvidenceError(f"duplicate Kiwoom daily bar: {key}")
         seen_bars.add(key)
+        _true(row.get("adjusted"), f"daily_bars.adjusted:{key}")
+        if key not in adjustment_by_key:
+            raise KiwoomPrimaryEvidenceError(
+                f"Kiwoom daily bar lacks adjustment evidence: {key}"
+            )
         bars_by_symbol[symbol].append(row)
+    if seen_bars != set(adjustment_by_key):
+        raise KiwoomPrimaryEvidenceError(
+            "Kiwoom adjustment evidence does not match the daily-bar universe"
+        )
 
     prices = tuple(
         MarketPrice(
@@ -214,9 +285,11 @@ def build_kiwoom_primary_snapshot(
             key=lambda row: row.get("date", ""),
         )[-count:]
         if not selected:
-            raise KiwoomPrimaryEvidenceError(
-                f"no Kiwoom daily bars for {symbol}"
-            )
+            raise KiwoomPrimaryEvidenceError(f"no Kiwoom daily bars for {symbol}")
+        selected_evidence = [
+            adjustment_by_key[(symbol, row.get("date", "").strip())]
+            for row in selected
+        ]
         symbol_candles: list[Candle] = []
         for row in selected:
             try:
@@ -237,12 +310,16 @@ def build_kiwoom_primary_snapshot(
                     volume=_decimal(row.get("volume"), "volume"),
                     currency="KRW",
                     interval="1d",
-                    adjusted=False,
+                    adjusted=True,
                 )
             )
         candles.extend(symbol_candles)
         features.append(calculate_technical_features(tuple(symbol_candles)))
-        raw_candles[symbol] = selected
+        raw_candles[symbol] = {
+            "price_basis": "adjusted",
+            "bars": selected,
+            "adjustment_evidence": selected_evidence,
+        }
 
     ranked = add_relative_strength_ranks(
         tuple(sorted(features, key=lambda item: item.symbol))
@@ -253,6 +330,9 @@ def build_kiwoom_primary_snapshot(
         "source_manifest_path": str(manifest_path.resolve()),
         "source_export_directory": str(directory.resolve()),
         "captured_at_utc": captured_at.isoformat(),
+        "price_basis": "adjusted",
+        "adjustment_request_value": "1",
+        "corporate_action_row_count": manifest.get("corporate_action_row_count", 0),
         "quotes": quote_rows,
         "account_api_enabled": False,
         "order_api_enabled": False,
@@ -261,7 +341,7 @@ def build_kiwoom_primary_snapshot(
         captured_at=captured_at,
         provider=PROVIDER,
         interval="1d",
-        adjusted=False,
+        adjusted=True,
         prices=prices,
         candles=tuple(
             sorted(candles, key=lambda item: (item.symbol, item.timestamp))

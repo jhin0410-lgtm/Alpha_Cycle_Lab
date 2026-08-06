@@ -45,7 +45,7 @@ def load_kiwoom_primary_provenance(
     *,
     decision_symbols: tuple[str, ...],
 ) -> KiwoomPrimaryProvenance:
-    """Validate a standard market snapshot backed by one immutable Kiwoom export."""
+    """Validate a standard market snapshot backed by adjusted Kiwoom evidence."""
 
     market_root = Path(market_directory).resolve(strict=True)
     manifest_path = market_root / "manifest.json"
@@ -54,6 +54,13 @@ def load_kiwoom_primary_provenance(
     raw_prices = _object(raw_prices_path)
     if manifest.get("provider") != PROVIDER:
         raise ValueError("market snapshot is not a Kiwoom-primary snapshot")
+    if manifest.get("adjusted") is not True:
+        raise ValueError("Kiwoom-primary market snapshot is not adjusted")
+    if raw_prices.get("price_basis") != "adjusted":
+        raise ValueError("Kiwoom-primary raw price basis is not adjusted")
+    if str(raw_prices.get("adjustment_request_value", "")) != "1":
+        raise ValueError("Kiwoom-primary raw evidence did not request adjusted prices")
+
     market_snapshot_id = str(manifest.get("snapshot_id", "")).strip()
     if len(market_snapshot_id) != 64:
         raise ValueError("Kiwoom-primary market snapshot_id is invalid")
@@ -73,6 +80,12 @@ def load_kiwoom_primary_provenance(
         raise ValueError("Kiwoom source export is not completed")
     if source_manifest.get("snapshot_id") != source_snapshot_id:
         raise ValueError("Kiwoom source snapshot_id does not match")
+    if source_manifest.get("adjusted_prices") is not True:
+        raise ValueError("Kiwoom source export is not adjusted")
+    if source_manifest.get("price_basis") != "adjusted":
+        raise ValueError("Kiwoom source price basis is not adjusted")
+    if str(source_manifest.get("adjustment_request_value", "")) != "1":
+        raise ValueError("Kiwoom source did not record 수정주가구분=1")
     if bool(source_manifest.get("account_api_enabled")):
         raise ValueError("Kiwoom source enabled account API")
     if bool(source_manifest.get("order_api_enabled")):
@@ -101,6 +114,8 @@ def load_kiwoom_primary_provenance(
         "expected_symbols": list(source_symbols),
         "decision_symbols": list(normalized_decisions),
         "source_manifest_path": str(source_manifest_path),
+        "price_basis": "adjusted",
+        "adjustment_request_value": "1",
         "automatic_provider_substitution_enabled": False,
         "account_api_enabled": False,
         "order_api_enabled": False,
@@ -111,6 +126,7 @@ def load_kiwoom_primary_provenance(
     )
     warnings = (
         "kiwoom_primary_only_tossinvest_unavailable",
+        "historical_ohlc_adjusted_basis_verified_single_provider",
         "historical_ohlc_not_cross_provider_certified",
         "reference_price_not_cross_provider_certified",
         "single_provider_market_scope_user_selected_login_server",
@@ -122,9 +138,9 @@ def load_kiwoom_primary_provenance(
         assessment_id=assessment_id,
         result_id=result_id,
         checked_at_utc=checked_at,
-        raw_status="single_provider_read_only",
+        raw_status="single_provider_read_only_adjusted",
         classification="kiwoom_primary_tossinvest_ip_blocked",
-        historical_scope_status="single_provider_unverified",
+        historical_scope_status="single_provider_adjusted_unverified_cross_provider",
         market_snapshot_id=market_snapshot_id,
         kiwoom_snapshot_id=source_snapshot_id,
         expected_symbols=source_symbols,

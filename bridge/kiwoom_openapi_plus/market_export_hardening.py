@@ -1,23 +1,59 @@
 """Production hardening for the read-only Kiwoom market exporter.
 
 This module is stdlib-only so it remains usable in the isolated Python 3.10 x86
-bridge. It adds rolling OpenAPI+ request limits and immutable export-directory
-allocation without changing TR parsing, account boundaries, or order behavior.
+bridge. It adds rolling request limits, adjusted-price collection, corporate-
+action response evidence, and immutable export-directory allocation without
+expanding the public-market-data boundary.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import time
 from collections import deque
 from collections.abc import Callable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
 Clock = Callable[[], float]
 Sleeper = Callable[[float], None]
+
+
+@dataclass(frozen=True)
+class AdjustedExportManifest:
+    schema_version: str
+    status: str
+    provider: str
+    snapshot_id: str
+    captured_at_utc: str
+    captured_at_kst: str
+    login_event_code: int
+    connected: bool
+    session_mode: str
+    symbols: tuple[str, ...]
+    quote_count: int
+    daily_bar_count: int
+    daily_bar_limit_per_symbol: int
+    adjusted_prices: bool
+    request_count: int
+    request_interval_seconds: float
+    official_request_limits: dict[str, int]
+    quote_tr_code: str
+    daily_tr_code: str
+    quotes_file: str
+    daily_bars_file: str
+    adjustment_evidence_file: str
+    price_basis: str
+    adjustment_request_value: str
+    corporate_action_row_count: int
+    account_api_enabled: bool
+    order_api_enabled: bool
+    warnings: tuple[str, ...]
+    provider_messages: tuple[str, ...]
 
 
 class RollingRequestGate:
@@ -73,8 +109,174 @@ class RollingRequestGate:
             self._sleeper(delay)
 
 
+def _install_adjusted_daily_collection(namespace: dict[str, Any]) -> None:
+    """Replace opt10081 parsing with adjusted-price, evidence-preserving logic."""
+
+    exporter_type = namespace["KiwoomMarketExporter"]
+    daily_type = namespace["DailyBar"]
+    clean = namespace["_clean"]
+    integer = namespace["_integer"]
+    daily_tr_code = namespace["DAILY_TR_CODE"]
+
+    def adjusted_daily_payload(
+        self: Any,
+        *,
+        screen_no: str,
+        request_name: str,
+        tr_code: str,
+        previous_next: str,
+    ) -> dict[str, object]:
+        repeat = int(
+            self.control.dynamicCall(
+                "GetRepeatCnt(QString, QString)",
+                tr_code,
+                request_name,
+            )
+        )
+        fields = {
+            "date": "일자",
+            "current_price": "현재가",
+            "volume": "거래량",
+            "trading_value": "거래대금",
+            "open_price": "시가",
+            "high_price": "고가",
+            "low_price": "저가",
+            "adjustment_code": "수정주가구분",
+            "adjustment_ratio": "수정비율",
+            "adjustment_event": "수정주가이벤트",
+            "previous_close": "전일종가",
+        }
+        rows: list[dict[str, str]] = []
+        for index in range(max(repeat, 0)):
+            rows.append(
+                {
+                    key: self._comm_data(tr_code, request_name, index, label)
+                    for key, label in fields.items()
+                }
+            )
+        return {
+            "kind": "daily",
+            "screen_no": screen_no,
+            "request_name": request_name,
+            "tr_code": tr_code,
+            "previous_next": previous_next,
+            "rows": rows,
+        }
+
+    def adjusted_daily_bars(
+        self: Any,
+        ticker: str,
+        *,
+        screen_no: str,
+        reference_date: str,
+        limit: int,
+    ) -> list[Any]:
+        request_name = f"daily_{ticker}"
+        payload = self._request(
+            request_name=request_name,
+            tr_code=daily_tr_code,
+            screen_no=screen_no,
+            inputs=(
+                ("종목코드", ticker),
+                ("기준일자", reference_date),
+                ("수정주가구분", "1"),
+            ),
+        )
+        rows_object = payload.get("rows")
+        if not isinstance(rows_object, list):
+            raise RuntimeError(f"daily payload missing rows for {ticker}")
+        bars: list[Any] = []
+        evidence = getattr(self, "adjustment_evidence", None)
+        if not isinstance(evidence, list):
+            evidence = []
+            self.adjustment_evidence = evidence
+        for row_object in rows_object[:limit]:
+            if not isinstance(row_object, dict):
+                continue
+            raw = {str(key): clean(value) for key, value in row_object.items()}
+            date = raw.get("date", "")
+            open_price = integer(raw.get("open_price", ""), absolute=True)
+            high_price = integer(raw.get("high_price", ""), absolute=True)
+            low_price = integer(raw.get("low_price", ""), absolute=True)
+            close_price = integer(raw.get("current_price", ""), absolute=True)
+            volume = integer(raw.get("volume", ""), absolute=True)
+            if (
+                not re.fullmatch(r"[0-9]{8}", date)
+                or open_price is None
+                or high_price is None
+                or low_price is None
+                or close_price is None
+                or volume is None
+            ):
+                continue
+            bars.append(
+                daily_type(
+                    ticker=ticker,
+                    date=date,
+                    open_price=open_price,
+                    high_price=high_price,
+                    low_price=low_price,
+                    close_price=close_price,
+                    volume=volume,
+                    trading_value=integer(
+                        raw.get("trading_value", ""), absolute=True
+                    ),
+                    open_price_raw=raw.get("open_price", ""),
+                    high_price_raw=raw.get("high_price", ""),
+                    low_price_raw=raw.get("low_price", ""),
+                    close_price_raw=raw.get("current_price", ""),
+                    volume_raw=raw.get("volume", ""),
+                    trading_value_raw=raw.get("trading_value", ""),
+                    adjusted=True,
+                    request_name=request_name,
+                    tr_code=str(payload.get("tr_code", daily_tr_code)),
+                    screen_no=str(payload.get("screen_no", screen_no)),
+                )
+            )
+            evidence.append(
+                {
+                    "ticker": ticker,
+                    "date": date,
+                    "requested_price_basis": "adjusted",
+                    "adjustment_request_value": "1",
+                    "response_adjustment_code_raw": raw.get(
+                        "adjustment_code", ""
+                    ),
+                    "response_adjustment_ratio_raw": raw.get(
+                        "adjustment_ratio", ""
+                    ),
+                    "response_adjustment_event_raw": raw.get(
+                        "adjustment_event", ""
+                    ),
+                    "previous_close_raw": raw.get("previous_close", ""),
+                }
+            )
+        if not bars:
+            raise RuntimeError(f"no valid Kiwoom daily bars returned for {ticker}")
+        return bars
+
+    exporter_type._daily_payload = adjusted_daily_payload
+    exporter_type.daily_bars = adjusted_daily_bars
+
+
+def _has_corporate_action(row: Mapping[str, object]) -> bool:
+    event = str(row.get("response_adjustment_event_raw", "")).strip()
+    if event.casefold() not in {"", "0", "none", "null", "n/a"}:
+        return True
+
+    raw_ratio = str(row.get("response_adjustment_ratio_raw", "")).strip()
+    if not raw_ratio:
+        return False
+    normalized = raw_ratio.replace(",", "").replace("%", "")
+    try:
+        ratio = Decimal(normalized)
+    except InvalidOperation:
+        return False
+    return ratio.is_finite() and ratio != 0
+
+
 def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
-    """Create a writer using the exporter's own record and manifest contracts."""
+    """Create an immutable writer for adjusted bars and source response evidence."""
 
     provider = namespace["PROVIDER"]
     quote_tr_code = namespace["QUOTE_TR_CODE"]
@@ -97,17 +299,34 @@ def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
         bars: list[Any],
         exporter: Any,
     ) -> tuple[Any, Path]:
+        if not bars or any(getattr(bar, "adjusted", None) is not True for bar in bars):
+            raise ValueError("Kiwoom primary export requires adjusted daily bars only")
+        adjustment_rows = getattr(exporter, "adjustment_evidence", None)
+        if not isinstance(adjustment_rows, list) or len(adjustment_rows) != len(bars):
+            raise ValueError(
+                "adjustment response evidence must cover every exported daily bar"
+            )
+        for row in adjustment_rows:
+            if (
+                row.get("requested_price_basis") != "adjusted"
+                or row.get("adjustment_request_value") != "1"
+            ):
+                raise ValueError("adjustment evidence contains an unexpected price basis")
+
         captured_utc = capture_now(utc_zone)
         captured_kst = captured_utc.astimezone(kst_zone)
         quote_rows = [asdict(value) for value in quotes]
         bar_rows = [asdict(value) for value in bars]
+        action_count = sum(_has_corporate_action(row) for row in adjustment_rows)
         hash_payload: dict[str, object] = {
             "provider": provider,
             "captured_at_utc": captured_utc.isoformat(),
             "symbols": list(symbols),
             "quotes": quote_rows,
             "daily_bars": bar_rows,
-            "adjusted_prices": False,
+            "adjustment_evidence": adjustment_rows,
+            "adjusted_prices": True,
+            "price_basis": "adjusted",
         }
         identity = snapshot_id(hash_payload)
         directory_name = (
@@ -121,20 +340,25 @@ def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
 
         quotes_path = export_directory / "quotes.csv"
         bars_path = export_directory / "daily_bars.csv"
+        adjustment_path = export_directory / "adjustment_evidence.csv"
         manifest_path = export_directory / "manifest.json"
         latest_path = output_root / "latest_market_export.json"
         write_csv(quotes_path, quote_rows)
         write_csv(bars_path, bar_rows)
+        write_csv(adjustment_path, adjustment_rows)
 
         warnings = (
             "Only the first OpenAPI+ daily-chart response page is collected.",
+            "Adjusted-price basis was requested with opt10081 수정주가구분=1.",
+            "Corporate-action response fields are preserved without inferring an "
+            "event when the provider returns empty metadata.",
             "The login server mode is not inspected because account/login-info APIs "
             "are outside this read-only market-data boundary.",
             "Kiwoom evidence is exported independently and is not a silent replacement "
             "for another market-data provider.",
         )
         manifest = manifest_type(
-            schema_version="1.1",
+            schema_version="1.2",
             status="completed",
             provider=provider,
             snapshot_id=identity,
@@ -147,7 +371,7 @@ def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
             quote_count=len(quotes),
             daily_bar_count=len(bars),
             daily_bar_limit_per_symbol=daily_count,
-            adjusted_prices=False,
+            adjusted_prices=True,
             request_count=exporter.request_count,
             request_interval_seconds=exporter.request_gate.interval_seconds,
             official_request_limits=official_limits,
@@ -155,6 +379,10 @@ def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
             daily_tr_code=daily_tr_code,
             quotes_file=quotes_path.name,
             daily_bars_file=bars_path.name,
+            adjustment_evidence_file=adjustment_path.name,
+            price_basis="adjusted",
+            adjustment_request_value="1",
+            corporate_action_row_count=action_count,
             account_api_enabled=False,
             order_api_enabled=False,
             warnings=warnings,
@@ -175,7 +403,10 @@ def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
             "manifest_path": str(manifest_path),
             "quote_count": manifest.quote_count,
             "daily_bar_count": manifest.daily_bar_count,
-            "adjusted_prices": manifest.adjusted_prices,
+            "adjusted_prices": True,
+            "price_basis": "adjusted",
+            "adjustment_evidence_file": manifest.adjustment_evidence_file,
+            "corporate_action_row_count": action_count,
             "account_api_enabled": False,
             "order_api_enabled": False,
         }
@@ -189,7 +420,9 @@ def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
 
 
 def apply_hardening(namespace: dict[str, Any]) -> None:
-    """Replace only the exporter request gate and artifact writer."""
+    """Apply request limits, adjusted-price collection, and immutable writing."""
 
     namespace["RequestGate"] = RollingRequestGate
+    namespace["ExportManifest"] = AdjustedExportManifest
+    _install_adjusted_daily_collection(namespace)
     namespace["write_export"] = build_immutable_writer(namespace)

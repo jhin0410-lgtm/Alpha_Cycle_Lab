@@ -49,7 +49,8 @@ $OutputRoot = [System.IO.Path]::GetFullPath($OutputRoot)
 
 . $QtInitializer -BridgePython $BridgePython
 Write-Host "The official Kiwoom login window will open."
-Write-Host "This command exports public quote and unadjusted daily-bar evidence only."
+Write-Host "This command exports public quotes and adjusted daily-bar evidence."
+Write-Host "opt10081 adjustment response fields are preserved for verification."
 Write-Host "Account, holdings, balance, and order APIs remain disabled."
 
 $arguments = @("--symbols")
