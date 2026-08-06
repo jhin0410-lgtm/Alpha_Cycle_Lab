@@ -10,6 +10,11 @@ from pathlib import Path
 
 import pandas as pd
 
+from alpha_cycle.intelligence.catalyst_evidence_policy import (
+    apply_catalyst_evidence_policy,
+    apply_catalyst_report_policy,
+    gate_catalyst_playbook,
+)
 from alpha_cycle.intelligence.decision import (
     InvestmentDecisionSnapshot,
     _load_valuation_snapshot,
@@ -190,7 +195,8 @@ def _calibrated_playbook_scorecards(
         snapshot.catalysts,
         evaluation_date=snapshot.evaluation_date,
     )
-    return gate_execution_playbook(calibrated, snapshot.market_context)
+    market_gated = gate_execution_playbook(calibrated, snapshot.market_context)
+    return gate_catalyst_playbook(market_gated)
 
 
 def _decision_records_with_audit(
@@ -241,6 +247,7 @@ def _attach_execution_playbook(
         report = clarify_valuation_report(report, snapshot.valuation_metrics)
     report = apply_market_report_policy(report, snapshot.market_context)
     report = append_execution_playbook_report(report, scorecards)
+    report = apply_catalyst_report_policy(report)
     report = append_review_priority_audit(report, scorecards)
     return replace(
         snapshot,
@@ -271,13 +278,15 @@ def build_investment_decision_snapshot(
         policy=policy,
         now=now,
     )
+    decision_policy = policy or base.policy
     base = apply_market_evidence_policy(
         base,
         market_snapshot=market_snapshot,
         exposures=dict(exposures or {}),
-        policy=policy or base.policy,
+        policy=decision_policy,
     )
     base = _normalize_disclosure_provenance(base)
+    base = apply_catalyst_evidence_policy(base, policy=decision_policy)
     if valuation_snapshot is None:
         return _attach_execution_playbook(base)
 
@@ -294,7 +303,6 @@ def build_investment_decision_snapshot(
         valuation_metrics,
         decision_tickers,
     )
-    decision_policy = policy or base.policy
     scorecards = apply_valuation_to_scorecards(
         base.scorecards,
         valuation_metrics,
@@ -337,6 +345,7 @@ def build_investment_decision_snapshot(
     report = clarify_valuation_report(report, valuation_metrics)
     report = apply_market_report_policy(report, base.market_context)
     report = append_execution_playbook_report(report, scorecards)
+    report = apply_catalyst_report_policy(report)
     report = append_review_priority_audit(report, scorecards)
 
     return replace(
