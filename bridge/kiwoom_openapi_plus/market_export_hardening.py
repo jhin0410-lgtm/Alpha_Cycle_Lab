@@ -15,6 +15,7 @@ from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -260,9 +261,18 @@ def _install_adjusted_daily_collection(namespace: dict[str, Any]) -> None:
 
 def _has_corporate_action(row: Mapping[str, object]) -> bool:
     event = str(row.get("response_adjustment_event_raw", "")).strip()
-    ratio = str(row.get("response_adjustment_ratio_raw", "")).strip()
-    normalized_ratio = ratio.replace(",", "").replace("%", "")
-    return bool(event) or normalized_ratio not in {"", "0", "0.0", "+0", "-0"}
+    if event.casefold() not in {"", "0", "none", "null", "n/a"}:
+        return True
+
+    raw_ratio = str(row.get("response_adjustment_ratio_raw", "")).strip()
+    if not raw_ratio:
+        return False
+    normalized = raw_ratio.replace(",", "").replace("%", "")
+    try:
+        ratio = Decimal(normalized)
+    except InvalidOperation:
+        return False
+    return ratio.is_finite() and ratio != 0
 
 
 def build_immutable_writer(namespace: Mapping[str, Any]) -> Callable[..., Any]:
