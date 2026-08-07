@@ -16,6 +16,9 @@ from alpha_cycle.intelligence.decision_scoring import COMPONENT_WEIGHTS, Decisio
 from alpha_cycle.intelligence.disclosure_body_metrics import (
     parse_disclosure_body_metrics,
 )
+from alpha_cycle.intelligence.disclosure_correction_delta import (
+    verify_correction_delta,
+)
 
 _POSITIVE_TITLE_PREFIXES = ("중요도 critical 공시 ", "중요도 high 공시 ")
 _DIRECTION_GAP = "공시 본문·변경 수치·시장 기대 대비 투자 방향 미분석"
@@ -32,7 +35,10 @@ def _decode(value: object) -> list[str]:
 
 
 def _encode(values: list[str]) -> str:
-    return json.dumps(list(dict.fromkeys(item for item in values if item)), ensure_ascii=False)
+    return json.dumps(
+        list(dict.fromkeys(item for item in values if item)),
+        ensure_ascii=False,
+    )
 
 
 def _number(value: object) -> float | None:
@@ -58,7 +64,9 @@ def _document_record(
 
 def _valid_sha256(value: object) -> bool:
     text = str(value).strip().casefold()
-    return len(text) == 64 and all(character in "0123456789abcdef" for character in text)
+    return len(text) == 64 and all(
+        character in "0123456789abcdef" for character in text
+    )
 
 
 def _body_status(record: Mapping[str, object] | None) -> tuple[bool, bool]:
@@ -75,6 +83,18 @@ def _body_status(record: Mapping[str, object] | None) -> tuple[bool, bool]:
     if not isinstance(truncated, bool):
         return False, False
     return True, truncated
+
+
+def _parent_hashes(
+    evidence: Mapping[str, object] | None,
+    parent_receipt: object,
+) -> tuple[str | None, str | None]:
+    receipt = str(parent_receipt or "").strip()
+    record = _document_record(evidence, receipt)
+    body_available, truncated = _body_status(record)
+    if not body_available or truncated or record is None:
+        return None, None
+    return str(record.get("text_sha256")), str(record.get("archive_sha256"))
 
 
 def annotate_catalyst_direction(
@@ -95,6 +115,12 @@ def annotate_catalyst_direction(
     metric_statuses: list[str] = []
     metric_types: list[str | None] = []
     metric_payloads: list[str | None] = []
+    delta_statuses: list[str] = []
+    delta_payloads: list[str | None] = []
+    parent_receipts: list[str | None] = []
+    parent_text_hashes: list[str | None] = []
+    parent_archive_hashes: list[str | None] = []
+
     for raw in result.to_dict(orient="records"):
         category = str(raw.get("category", ""))
         receipt = str(raw.get("rcept_no", "")).strip()
@@ -106,6 +132,12 @@ def annotate_catalyst_direction(
         )
         body_available, truncated = _body_status(record)
         metrics: dict[str, object] | None = None
+        delta: dict[str, object] | None = None
+        delta_status = "not_applicable"
+        parent_receipt: str | None = None
+        parent_text_hash: str | None = None
+        parent_archive_hash: str | None = None
+
         if body_available:
             assert record is not None
             metrics = parse_disclosure_body_metrics(
@@ -115,33 +147,64 @@ def annotate_catalyst_direction(
             metrics_status = str(metrics.get("status", "unparsed"))
             metrics_type = str(metrics.get("type", "unsupported"))
             metrics_verified = metrics_status == "verified" and not truncated
-            if bool(raw.get("is_correction", False)):
-                if metrics_verified:
+            is_correction = bool(raw.get("is_correction", False))
+
+            if is_correction and metrics_verified and document_evidence is not None:
+                delta = verify_correction_delta(
+                    raw,
+                    record,
+                    document_evidence,
+                    current_metrics=metrics,
+                )
+                delta_status = str(delta.get("status", "unverified"))
+                parent_value = delta.get("parent_rcept_no")
+                if parent_value is not None:
+                    parent_receipt = str(parent_value).strip() or None
+                parent_text_hash, parent_archive_hash = _parent_hashes(
+                    document_evidence,
+                    parent_receipt,
+                )
+
+            if is_correction:
+                if delta_status == "verified":
+                    status = "unresolved_correction_delta_verified"
+                    basis = "filing_correction_delta_verified_unscored"
+                elif metrics_verified:
                     status = "unresolved_correction_body_metrics_verified"
+                    basis = "filing_body_metrics_verified_unscored"
                 else:
                     status = (
                         "unresolved_correction_partial_body"
                         if truncated
                         else "unresolved_correction_body_available"
                     )
+                    basis = (
+                        "filing_body_partial"
+                        if truncated
+                        else "filing_body_available_unclassified"
+                    )
             elif category == "operational_risk":
                 status = "negative_operational_risk_title_body_available"
+                basis = (
+                    "filing_body_partial"
+                    if truncated
+                    else "filing_body_available_unclassified"
+                )
             elif metrics_verified:
                 status = "unresolved_body_metrics_verified"
+                basis = "filing_body_metrics_verified_unscored"
             else:
                 status = (
                     "unresolved_partial_body"
                     if truncated
                     else "unresolved_body_available"
                 )
-            if metrics_verified:
-                basis = "filing_body_metrics_verified_unscored"
-            else:
                 basis = (
                     "filing_body_partial"
                     if truncated
                     else "filing_body_available_unclassified"
                 )
+
             document_statuses.append("collected")
             text_hashes.append(str(record.get("text_sha256")))
             archive_hashes.append(str(record.get("archive_sha256")))
@@ -168,6 +231,7 @@ def annotate_catalyst_direction(
             metric_statuses.append("not_applicable")
             metric_types.append(None)
             metric_payloads.append(None)
+            delta_status = "not_applicable"
         elif record_status == "excluded_capacity":
             status = "deferred_body_backlog"
             basis = "bounded_body_collection_backlog"
@@ -179,9 +243,11 @@ def annotate_catalyst_direction(
             metric_statuses.append("not_collected")
             metric_types.append(None)
             metric_payloads.append(None)
+            delta_status = "not_collected"
         else:
             if bool(raw.get("is_correction", False)):
                 status = "unresolved_correction_title_only"
+                delta_status = "body_unavailable"
             elif category == "operational_risk":
                 status = "negative_operational_risk_title"
             else:
@@ -195,8 +261,19 @@ def annotate_catalyst_direction(
             metric_statuses.append("body_unavailable")
             metric_types.append(None)
             metric_payloads.append(None)
+
         statuses.append(status)
         bases.append(basis)
+        delta_statuses.append(delta_status)
+        delta_payloads.append(
+            json.dumps(delta, ensure_ascii=False, sort_keys=True)
+            if delta is not None
+            else None
+        )
+        parent_receipts.append(parent_receipt)
+        parent_text_hashes.append(parent_text_hash)
+        parent_archive_hashes.append(parent_archive_hash)
+
     result["direction_status"] = statuses
     result["direction_basis"] = bases
     result["document_evidence_status"] = document_statuses
@@ -207,6 +284,11 @@ def annotate_catalyst_direction(
     result["body_metrics_status"] = metric_statuses
     result["body_metrics_type"] = metric_types
     result["body_metrics_json"] = metric_payloads
+    result["correction_delta_status"] = delta_statuses
+    result["correction_delta_json"] = delta_payloads
+    result["correction_parent_rcept_no"] = parent_receipts
+    result["correction_parent_text_sha256"] = parent_text_hashes
+    result["correction_parent_archive_sha256"] = parent_archive_hashes
     return result
 
 
@@ -221,6 +303,7 @@ def _direction_counts(catalysts: pd.DataFrame) -> dict[str, dict[str, int]]:
                 "unresolved_title": 0,
                 "unresolved_body": 0,
                 "verified_metrics": 0,
+                "verified_correction_deltas": 0,
                 "backlog": 0,
                 "non_directional": 0,
             },
@@ -232,10 +315,15 @@ def _direction_counts(catalysts: pd.DataFrame) -> dict[str, dict[str, int]]:
             values["non_directional"] += 1
         elif status.startswith("negative_"):
             values["negative"] += 1
-        elif "body" in status:
+        elif "body" in status or status == "unresolved_correction_delta_verified":
             values["unresolved_body"] += 1
-            if "body_metrics_verified" in status:
+            if (
+                "body_metrics_verified" in status
+                or status == "unresolved_correction_delta_verified"
+            ):
                 values["verified_metrics"] += 1
+            if status == "unresolved_correction_delta_verified":
+                values["verified_correction_deltas"] += 1
         else:
             values["unresolved_title"] += 1
     return counts
@@ -306,6 +394,7 @@ def apply_catalyst_evidence_policy(
     unresolved_title: list[str] = []
     unresolved_body: list[str] = []
     metrics_warnings: list[str] = []
+    delta_warnings: list[str] = []
     backlog_warnings: list[str] = []
     negative: list[str] = []
     empty_counts = {
@@ -313,6 +402,7 @@ def apply_catalyst_evidence_policy(
         "unresolved_title": 0,
         "unresolved_body": 0,
         "verified_metrics": 0,
+        "verified_correction_deltas": 0,
         "backlog": 0,
         "non_directional": 0,
     }
@@ -342,14 +432,16 @@ def apply_catalyst_evidence_policy(
                         "unresolved_body_metrics_verified"
                     )
                     opposing.append(
-                        f"중요 공시 구조화 수치 {values['verified_metrics']}건 검증; "
+                        f"중요 공시 구조화 수치 {values['verified_metrics']}건 검증, "
+                        f"정정 delta {values['verified_correction_deltas']}건 인증; "
                         "시장 기대 대비 투자 방향 규칙 미적용"
                     )
                 else:
                     row["catalyst_evidence_status"] = "unresolved_body_available"
                     opposing.append(
                         f"중요 공시 원문 {values['unresolved_body']}건 확보, "
-                        f"구조화 수치 검증 {values['verified_metrics']}건; "
+                        f"구조화 수치 검증 {values['verified_metrics']}건, "
+                        f"정정 delta {values['verified_correction_deltas']}건 인증; "
                         "나머지 본문 구조 또는 투자 방향 미평가"
                     )
                 unresolved_body.append(ticker)
@@ -358,6 +450,7 @@ def apply_catalyst_evidence_policy(
                 opposing.append(
                     f"중요 공시 원문 {values['unresolved_body']}건 확보, "
                     f"구조화 수치 검증 {values['verified_metrics']}건, "
+                    f"정정 delta {values['verified_correction_deltas']}건 인증, "
                     f"실제 원문 수집 실패·미확인 {values['unresolved_title']}건; "
                     "방향 판정 미완료"
                 )
@@ -383,6 +476,10 @@ def apply_catalyst_evidence_policy(
             opposing.append("방향성이 검증된 촉매 근거 없음")
         if values["verified_metrics"]:
             metrics_warnings.append(f"{ticker}={values['verified_metrics']}")
+        if values["verified_correction_deltas"]:
+            delta_warnings.append(
+                f"{ticker}={values['verified_correction_deltas']}"
+            )
         if values["backlog"]:
             opposing.append(
                 f"원문 수집 상한으로 과거 중요 공시 {values['backlog']}건은 "
@@ -409,6 +506,11 @@ def apply_catalyst_evidence_policy(
         warnings.append(
             "catalyst_body_metrics_verified:"
             + ",".join(sorted(set(metrics_warnings)))
+        )
+    if delta_warnings:
+        warnings.append(
+            "catalyst_correction_delta_verified:"
+            + ",".join(sorted(set(delta_warnings)))
         )
     if backlog_warnings:
         warnings.append(
@@ -458,7 +560,10 @@ def gate_catalyst_playbook(scorecards: pd.DataFrame) -> pd.DataFrame:
         additions.append("매출·이익·현금흐름 영향 확인 뒤 비중 확대")
         reductions = _decode(raw.get("reduce_conditions"))
         if status == "negative_title_evidence":
-            reductions.insert(0, "운영위험 공시 본문과 손익 영향 확인 전 비중 확대 금지")
+            reductions.insert(
+                0,
+                "운영위험 공시 본문과 손익 영향 확인 전 비중 확대 금지",
+            )
         result.at[index, "evidence_gaps"] = _encode(gaps)
         result.at[index, "entry_conditions"] = _encode(entry)
         result.at[index, "add_conditions"] = _encode(additions)
@@ -470,8 +575,8 @@ def apply_catalyst_report_policy(report: str) -> str:
     result = report.replace("- 확인된 촉매\n", "- 확인된 주요 공시·촉매 후보\n")
     marker = "## 실행 플레이북\n"
     note = (
-        "\n- 공시 중요도와 투자 방향을 구분하며, 본문·구조화 수치를 검증해도 "
-        "시장 기대 대비 방향 확인 전 긍정 촉매로 점수화하지 않음\n"
+        "\n- 공시 중요도와 투자 방향을 구분하며, 본문·구조화 수치·정정 delta를 "
+        "검증해도 시장 기대 대비 방향 확인 전 긍정 촉매로 점수화하지 않음\n"
     )
     return result.replace(marker, marker + note, 1) if marker in result else result
 
