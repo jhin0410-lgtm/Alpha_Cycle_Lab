@@ -13,6 +13,9 @@ import pandas as pd
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_scoring import COMPONENT_WEIGHTS, DecisionPolicy
+from alpha_cycle.intelligence.disclosure_body_metrics import (
+    parse_disclosure_body_metrics,
+)
 
 _POSITIVE_TITLE_PREFIXES = ("중요도 critical 공시 ", "중요도 high 공시 ")
 _DIRECTION_GAP = "공시 본문·변경 수치·시장 기대 대비 투자 방향 미분석"
@@ -89,26 +92,57 @@ def annotate_catalyst_direction(
     archive_hashes: list[str | None] = []
     text_chars: list[int | None] = []
     truncated_values: list[bool | None] = []
+    metric_statuses: list[str] = []
+    metric_types: list[str | None] = []
+    metric_payloads: list[str | None] = []
     for raw in result.to_dict(orient="records"):
         category = str(raw.get("category", ""))
         receipt = str(raw.get("rcept_no", "")).strip()
         record = _document_record(document_evidence, receipt)
-        record_status = str(record.get("status", "not_selected")) if record is not None else "not_selected"
+        record_status = (
+            str(record.get("status", "not_selected"))
+            if record is not None
+            else "not_selected"
+        )
         body_available, truncated = _body_status(record)
+        metrics: dict[str, object] | None = None
         if body_available:
+            assert record is not None
+            metrics = parse_disclosure_body_metrics(
+                record.get("report_name", raw.get("report_name", "")),
+                record.get("text", ""),
+            )
+            metrics_status = str(metrics.get("status", "unparsed"))
+            metrics_type = str(metrics.get("type", "unsupported"))
+            metrics_verified = metrics_status == "verified" and not truncated
             if bool(raw.get("is_correction", False)):
-                status = (
-                    "unresolved_correction_partial_body"
-                    if truncated
-                    else "unresolved_correction_body_available"
-                )
+                if metrics_verified:
+                    status = "unresolved_correction_body_metrics_verified"
+                else:
+                    status = (
+                        "unresolved_correction_partial_body"
+                        if truncated
+                        else "unresolved_correction_body_available"
+                    )
             elif category == "operational_risk":
                 status = "negative_operational_risk_title_body_available"
+            elif metrics_verified:
+                status = "unresolved_body_metrics_verified"
             else:
-                status = "unresolved_partial_body" if truncated else "unresolved_body_available"
-            basis = "filing_body_partial" if truncated else "filing_body_available_unclassified"
+                status = (
+                    "unresolved_partial_body"
+                    if truncated
+                    else "unresolved_body_available"
+                )
+            if metrics_verified:
+                basis = "filing_body_metrics_verified_unscored"
+            else:
+                basis = (
+                    "filing_body_partial"
+                    if truncated
+                    else "filing_body_available_unclassified"
+                )
             document_statuses.append("collected")
-            assert record is not None
             text_hashes.append(str(record.get("text_sha256")))
             archive_hashes.append(str(record.get("archive_sha256")))
             chars_value = record.get("text_chars")
@@ -118,6 +152,11 @@ def annotate_catalyst_direction(
                 else None
             )
             truncated_values.append(truncated)
+            metric_statuses.append(metrics_status)
+            metric_types.append(metrics_type)
+            metric_payloads.append(
+                json.dumps(metrics, ensure_ascii=False, sort_keys=True)
+            )
         elif record_status == "excluded_periodic":
             status = "not_directional_periodic_report"
             basis = "periodic_report_financial_evidence_path"
@@ -126,6 +165,9 @@ def annotate_catalyst_direction(
             archive_hashes.append(None)
             text_chars.append(None)
             truncated_values.append(None)
+            metric_statuses.append("not_applicable")
+            metric_types.append(None)
+            metric_payloads.append(None)
         elif record_status == "excluded_capacity":
             status = "deferred_body_backlog"
             basis = "bounded_body_collection_backlog"
@@ -134,6 +176,9 @@ def annotate_catalyst_direction(
             archive_hashes.append(None)
             text_chars.append(None)
             truncated_values.append(None)
+            metric_statuses.append("not_collected")
+            metric_types.append(None)
+            metric_payloads.append(None)
         else:
             if bool(raw.get("is_correction", False)):
                 status = "unresolved_correction_title_only"
@@ -147,6 +192,9 @@ def annotate_catalyst_direction(
             archive_hashes.append(None)
             text_chars.append(None)
             truncated_values.append(None)
+            metric_statuses.append("body_unavailable")
+            metric_types.append(None)
+            metric_payloads.append(None)
         statuses.append(status)
         bases.append(basis)
     result["direction_status"] = statuses
@@ -156,6 +204,9 @@ def annotate_catalyst_direction(
     result["document_archive_sha256"] = archive_hashes
     result["document_text_chars"] = text_chars
     result["document_text_truncated"] = truncated_values
+    result["body_metrics_status"] = metric_statuses
+    result["body_metrics_type"] = metric_types
+    result["body_metrics_json"] = metric_payloads
     return result
 
 
@@ -169,6 +220,7 @@ def _direction_counts(catalysts: pd.DataFrame) -> dict[str, dict[str, int]]:
                 "negative": 0,
                 "unresolved_title": 0,
                 "unresolved_body": 0,
+                "verified_metrics": 0,
                 "backlog": 0,
                 "non_directional": 0,
             },
@@ -182,6 +234,8 @@ def _direction_counts(catalysts: pd.DataFrame) -> dict[str, dict[str, int]]:
             values["negative"] += 1
         elif "body" in status:
             values["unresolved_body"] += 1
+            if "body_metrics_verified" in status:
+                values["verified_metrics"] += 1
         else:
             values["unresolved_title"] += 1
     return counts
@@ -211,7 +265,11 @@ def _recompute(row: dict[str, object], policy: DecisionPolicy) -> None:
             action = "fundamental_positive_wait_for_timing"
     elif composite >= policy.mixed_threshold:
         state = "mixed_setup"
-        action = "selective_or_wait_for_adjusted_timing" if technical_gated else "selective_or_wait"
+        action = (
+            "selective_or_wait_for_adjusted_timing"
+            if technical_gated
+            else "selective_or_wait"
+        )
     else:
         state, action = "negative_setup", "avoid_or_reduce_candidate"
     row.update(
@@ -247,12 +305,14 @@ def apply_catalyst_evidence_policy(
     rows: list[dict[str, object]] = []
     unresolved_title: list[str] = []
     unresolved_body: list[str] = []
+    metrics_warnings: list[str] = []
     backlog_warnings: list[str] = []
     negative: list[str] = []
     empty_counts = {
         "negative": 0,
         "unresolved_title": 0,
         "unresolved_body": 0,
+        "verified_metrics": 0,
         "backlog": 0,
         "non_directional": 0,
     }
@@ -270,22 +330,34 @@ def apply_catalyst_evidence_policy(
             row["catalyst_score"] = 1.0
             row["catalyst_evidence_status"] = "negative_title_evidence"
             opposing.append(
-                f"부정 방향 운영위험 공시 제목 {values['negative']}건; 본문 영향 확인 필요"
+                f"부정 방향 운영위험 공시 제목 {values['negative']}건; "
+                "본문 영향 확인 필요"
             )
             negative.append(ticker)
         elif values["unresolved_body"] or values["unresolved_title"]:
             row["catalyst_score"] = None
             if values["unresolved_body"] and not values["unresolved_title"]:
-                row["catalyst_evidence_status"] = "unresolved_body_available"
-                opposing.append(
-                    f"중요 공시 원문 {values['unresolved_body']}건 확보; "
-                    "수치·시장 기대 대비 투자 방향 규칙 미적용"
-                )
+                if values["verified_metrics"] == values["unresolved_body"]:
+                    row["catalyst_evidence_status"] = (
+                        "unresolved_body_metrics_verified"
+                    )
+                    opposing.append(
+                        f"중요 공시 구조화 수치 {values['verified_metrics']}건 검증; "
+                        "시장 기대 대비 투자 방향 규칙 미적용"
+                    )
+                else:
+                    row["catalyst_evidence_status"] = "unresolved_body_available"
+                    opposing.append(
+                        f"중요 공시 원문 {values['unresolved_body']}건 확보, "
+                        f"구조화 수치 검증 {values['verified_metrics']}건; "
+                        "나머지 본문 구조 또는 투자 방향 미평가"
+                    )
                 unresolved_body.append(ticker)
             elif values["unresolved_body"]:
                 row["catalyst_evidence_status"] = "unresolved_mixed_body_title"
                 opposing.append(
                     f"중요 공시 원문 {values['unresolved_body']}건 확보, "
+                    f"구조화 수치 검증 {values['verified_metrics']}건, "
                     f"실제 원문 수집 실패·미확인 {values['unresolved_title']}건; "
                     "방향 판정 미완료"
                 )
@@ -309,6 +381,8 @@ def apply_catalyst_evidence_policy(
             row["catalyst_score"] = None
             row["catalyst_evidence_status"] = "no_directional_catalyst_evidence"
             opposing.append("방향성이 검증된 촉매 근거 없음")
+        if values["verified_metrics"]:
+            metrics_warnings.append(f"{ticker}={values['verified_metrics']}")
         if values["backlog"]:
             opposing.append(
                 f"원문 수집 상한으로 과거 중요 공시 {values['backlog']}건은 "
@@ -331,14 +405,26 @@ def apply_catalyst_evidence_policy(
             "catalyst_direction_unresolved_body_available:"
             + ",".join(sorted(set(unresolved_body)))
         )
+    if metrics_warnings:
+        warnings.append(
+            "catalyst_body_metrics_verified:"
+            + ",".join(sorted(set(metrics_warnings)))
+        )
     if backlog_warnings:
         warnings.append(
             "catalyst_document_backlog_bounded:"
             + ",".join(sorted(set(backlog_warnings)))
         )
     if negative:
-        warnings.append("negative_operational_risk_title_evidence:" + ",".join(sorted(set(negative))))
-    scorecards = pd.DataFrame(rows).sort_values("ticker", kind="stable").reset_index(drop=True)
+        warnings.append(
+            "negative_operational_risk_title_evidence:"
+            + ",".join(sorted(set(negative)))
+        )
+    scorecards = (
+        pd.DataFrame(rows)
+        .sort_values("ticker", kind="stable")
+        .reset_index(drop=True)
+    )
     return replace(
         snapshot,
         catalysts=catalysts,
@@ -357,6 +443,7 @@ def gate_catalyst_playbook(scorecards: pd.DataFrame) -> pd.DataFrame:
         if status not in {
             "unresolved_title_only",
             "unresolved_body_available",
+            "unresolved_body_metrics_verified",
             "unresolved_mixed_body_title",
             "bounded_body_backlog_only",
             "negative_title_evidence",
@@ -382,7 +469,10 @@ def gate_catalyst_playbook(scorecards: pd.DataFrame) -> pd.DataFrame:
 def apply_catalyst_report_policy(report: str) -> str:
     result = report.replace("- 확인된 촉매\n", "- 확인된 주요 공시·촉매 후보\n")
     marker = "## 실행 플레이북\n"
-    note = "\n- 공시 중요도와 투자 방향을 구분하며, 본문 검증 전 긍정 촉매로 점수화하지 않음\n"
+    note = (
+        "\n- 공시 중요도와 투자 방향을 구분하며, 본문·구조화 수치를 검증해도 "
+        "시장 기대 대비 방향 확인 전 긍정 촉매로 점수화하지 않음\n"
+    )
     return result.replace(marker, marker + note, 1) if marker in result else result
 
 
