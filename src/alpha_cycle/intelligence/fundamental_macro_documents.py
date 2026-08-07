@@ -229,7 +229,12 @@ class FundamentalMacroCollector(BaseFundamentalMacroCollector):
             str(ticker).zfill(6): int(count)
             for ticker, count in selected.groupby("ticker", sort=True).size().items()
         } if not selected.empty else {}
-        status_counts = dict(Counter(str(record.get("status", "unknown")) for record in documents.values()))
+        status_counts = dict(
+            Counter(
+                str(record.get("status", "unknown"))
+                for record in documents.values()
+            )
+        )
         raw["_disclosure_document_evidence"] = {
             "schema_version": DOCUMENT_EVIDENCE_SCHEMA_VERSION,
             "provider": "opendart",
