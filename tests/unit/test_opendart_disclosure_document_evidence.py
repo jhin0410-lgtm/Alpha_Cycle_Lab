@@ -168,17 +168,58 @@ def test_document_selection_keeps_latest_correction_and_excludes_periodic_report
 
 
 def test_document_selection_records_capacity_without_calling_it_unavailable() -> None:
-    selected, ledger, warnings = documents._selection_plan(
+    selected, support, ledger, warnings = documents._selection_plan(
         _disclosures(),
         evaluation_date=date(2026, 8, 7),
         max_documents_per_ticker=1,
     )
 
     assert list(selected["rcept_no"].astype(str)) == ["20260807000001"]
+    assert support.empty
     assert ledger["20260807000001"]["status"] == "selected_pending"
     assert ledger["20260710000404"]["status"] == "excluded_capacity"
     assert ledger["20260317000001"]["status"] == "excluded_periodic"
     assert warnings == ("disclosure_document_selection_truncated:000660:1/2",)
+
+
+def test_selected_correction_collects_validated_parent_chain_as_support() -> None:
+    selected, support, ledger, warnings = documents._selection_plan(
+        _disclosures(),
+        evaluation_date=date(2026, 8, 7),
+        max_documents_per_ticker=2,
+        max_support_documents_per_ticker=4,
+    )
+
+    assert set(selected["rcept_no"].astype(str)) == {
+        "20260807000001",
+        "20260710000404",
+    }
+    assert list(support["rcept_no"].astype(str)) == [
+        "20260706000403",
+        "20260624000420",
+    ]
+    assert ledger["20260706000403"]["role"] == "correction_parent_support"
+    assert ledger["20260706000403"]["status"] == "selected_support_pending"
+    assert ledger["20260706000403"]["supports_selected_receipts"] == [
+        "20260710000404"
+    ]
+    assert ledger["20260624000420"]["correction_chain_order"] == 0
+    assert warnings == ()
+
+
+def test_correction_support_capacity_is_explicit_and_fail_closed() -> None:
+    _, support, ledger, warnings = documents._selection_plan(
+        _disclosures(),
+        evaluation_date=date(2026, 8, 7),
+        max_documents_per_ticker=2,
+        max_support_documents_per_ticker=1,
+    )
+
+    assert list(support["rcept_no"].astype(str)) == ["20260706000403"]
+    assert "20260624000420" not in ledger
+    assert warnings == (
+        "disclosure_correction_support_capacity_truncated:000660:1/2",
+    )
 
 
 class FakeDocumentClient:
@@ -186,7 +227,7 @@ class FakeDocumentClient:
         receipt = str(rcept_no)
         if receipt == "20260710000404":
             raise ValueError("document unavailable")
-        text = "신규 시설투자 본문 증거"
+        text = f"공시 본문 증거 {receipt}"
         return DisclosureDocumentEvidence(
             rcept_no=receipt,
             retrieved_at=NOW + timedelta(minutes=1),
@@ -213,7 +254,7 @@ class FakeDocumentClient:
         )
 
 
-def test_extended_collector_embeds_document_evidence_without_failing_on_one_missing_body(
+def test_extended_collector_embeds_primary_and_support_document_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -238,6 +279,7 @@ def test_extended_collector_embeds_document_evidence_without_failing_on_one_miss
         object(),  # type: ignore[arg-type]
         document_client=FakeDocumentClient(),  # type: ignore[arg-type]
         max_documents_per_ticker=2,
+        max_support_documents_per_ticker=4,
     )
     snapshot = collector.collect(
         ["000660"],
@@ -256,20 +298,34 @@ def test_extended_collector_embeds_document_evidence_without_failing_on_one_miss
     assert isinstance(raw, dict)
     bundle = raw["_disclosure_document_evidence"]
     assert isinstance(bundle, dict)
-    assert bundle["schema_version"] == 2
+    assert bundle["schema_version"] == 3
     stored = bundle["documents"]
     assert isinstance(stored, dict)
     assert stored["20260807000001"]["status"] == "collected"
+    assert stored["20260807000001"]["role"] == "primary_catalyst"
     assert stored["20260710000404"]["status"] == "unavailable"
+    assert stored["20260706000403"]["status"] == "collected"
+    assert stored["20260706000403"]["role"] == "correction_parent_support"
+    assert stored["20260624000420"]["status"] == "collected"
     assert stored["20260317000001"]["status"] == "excluded_periodic"
+    assert bundle["selected_counts"] == {"000660": 2}
+    assert bundle["support_counts"] == {"000660": 2}
+    assert bundle["support_receipts"] == [
+        "20260706000403",
+        "20260624000420",
+    ]
     assert bundle["status_counts"] == {
-        "collected": 1,
+        "collected": 3,
         "unavailable": 1,
         "excluded_periodic": 1,
     }
     assert snapshot.captured_at == NOW + timedelta(minutes=1)
     assert any(
         warning == "disclosure_document_unavailable:000660:20260710000404"
+        for warning in snapshot.warnings
+    )
+    assert not any(
+        warning.startswith("disclosure_correction_support_unavailable")
         for warning in snapshot.warnings
     )
     assert json.dumps(raw, ensure_ascii=False)
