@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import date
 
 _TARGET_DATE = re.compile(
-    r"(?:\b2\.\s*)?정정\s*관련\s*공시서류\s*제출일\s*"
+    r"(?:\b2\.\s*)?정정\s*관련\s*공시서류\s*제출일\s*[:：]?\s*"
     r"(?P<date>"
     r"\d{4}\s*년\s*\d{1,2}\s*월\s*\d{1,2}\s*일"
     r"|\d{4}[-./]\d{1,2}[-./]\d{1,2}"
@@ -72,7 +72,7 @@ def resolve_correction_parent_from_body(
         if not isinstance(raw_value, Mapping):
             continue
         receipt = str(raw_value.get("rcept_no", key)).strip()
-        if receipt == current_receipt:
+        if str(key).strip() != receipt or receipt == current_receipt:
             continue
         candidate_ticker = str(raw_value.get("ticker", "")).strip().zfill(6)
         candidate_family = str(raw_value.get("correction_family_key", "")).strip()
