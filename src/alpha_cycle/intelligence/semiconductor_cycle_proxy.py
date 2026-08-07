@@ -24,10 +24,10 @@ _QUARTERS = frozenset({"Q1", "Q2", "Q3", "Q4"})
 def _number(value: object) -> float | None:
     if value is None or value is pd.NA or value is pd.NaT or isinstance(value, bool):
         return None
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
+    converted = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(converted):
         return None
+    result = float(converted)
     return result if math.isfinite(result) else None
 
 
@@ -76,7 +76,8 @@ def _latest_quarterly_rows(
             ["period_end", "available_date", "period_order"],
             kind="stable",
         )
-        result[str(ticker)] = ordered.iloc[-1].to_dict()
+        raw = ordered.iloc[-1].to_dict()
+        result[str(ticker)] = {str(key): value for key, value in raw.items()}
     return result
 
 
@@ -256,7 +257,7 @@ def build_semiconductor_cycle_proxy(
         for row in rows
         if isinstance(row.get("inventory_supportive_vs_revenue"), bool)
     ]
-    aggregate = {
+    aggregate: dict[str, object] = {
         "issuer_count_expected": len(expected),
         "issuer_count_observed": len(rows),
         "revenue_growth_breadth": sum(
