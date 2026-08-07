@@ -7,8 +7,8 @@ import json
 import pandas as pd
 
 from alpha_cycle.intelligence.catalyst_evidence_policy import (
-    _direction_counts,
     annotate_catalyst_direction,
+    _direction_counts,
 )
 from alpha_cycle.intelligence.disclosure_body_metrics import (
     parse_disclosure_body_metrics,
