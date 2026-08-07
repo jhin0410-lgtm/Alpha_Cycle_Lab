@@ -77,9 +77,9 @@ def _unit(section: str) -> tuple[str | None, int | None]:
     if match is None:
         return None, None
     raw = re.sub(r"\s+", "", match.group(1)).replace(",%", "").replace("%", "")
-    for name, scale in _UNIT_SCALES.items():
+    for name in sorted(_UNIT_SCALES, key=len, reverse=True):
         if name in raw:
-            return name, scale
+            return name, _UNIT_SCALES[name]
     return raw or None, None
 
 
