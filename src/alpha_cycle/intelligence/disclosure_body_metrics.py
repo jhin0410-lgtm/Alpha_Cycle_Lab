@@ -184,6 +184,14 @@ def _earnings_signature(result: Mapping[str, object]) -> tuple[object, ...]:
     )
 
 
+def _earnings_candidate_rank(result: Mapping[str, object]) -> tuple[int, int]:
+    metrics = result.get("metrics")
+    metric_count = len(metrics) if isinstance(metrics, Mapping) else 0
+    unit = result.get("unit")
+    recognized_unit = isinstance(unit, str) and unit in _UNIT_SCALES
+    return metric_count, int(recognized_unit)
+
+
 def _parse_earnings(text: str) -> dict[str, object]:
     sections = _bounded_sections(text, _EARNINGS_HEADING)
     if not sections:
@@ -209,15 +217,7 @@ def _parse_earnings(text: str) -> dict[str, object]:
 
     partial = [item for item in candidates if item.get("status") == "partial"]
     if partial:
-        return max(
-            partial,
-            key=lambda item: (
-                len(item.get("metrics", {}))
-                if isinstance(item.get("metrics"), Mapping)
-                else 0,
-                int(item.get("unit") in _UNIT_SCALES),
-            ),
-        )
+        return max(partial, key=_earnings_candidate_rank)
     return {
         "schema_version": BODY_METRICS_SCHEMA_VERSION,
         "type": "earnings_preliminary",
