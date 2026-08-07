@@ -16,7 +16,6 @@ from alpha_cycle.adjusted_market_consistency_compat import BASIS_MISMATCH_PREFIX
 from alpha_cycle.intelligence.market_consistency_provenance import (
     _assessment_symbols,
     _boolean,
-    _integer,
     _linked_file,
     _object,
     _recomputed_id,
