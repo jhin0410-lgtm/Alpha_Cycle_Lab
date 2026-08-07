@@ -32,6 +32,23 @@ def _is_periodic_report(report_name: object) -> bool:
     return any(token in text for token in _PERIODIC_REPORT_TOKENS)
 
 
+def _integer(value: object, *, field: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"Disclosure document {field} must be an integer")
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if text and text.removeprefix("-").isdigit():
+        return int(text)
+    try:
+        numeric = float(text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Disclosure document {field} must be an integer") from exc
+    if not numeric.is_integer():
+        raise ValueError(f"Disclosure document {field} must be an integer")
+    return int(numeric)
+
+
 def _row_record(row: dict[str, object]) -> dict[str, object]:
     return {
         "ticker": str(row.get("ticker", "")).strip().zfill(6),
@@ -40,12 +57,18 @@ def _row_record(row: dict[str, object]) -> dict[str, object]:
         "receipt_date": str(row.get("receipt_date", "")),
         "category": str(row.get("category", "")).strip(),
         "priority": str(row.get("priority", "")).strip(),
-        "material_score": int(row.get("material_score", 0)),
+        "material_score": _integer(
+            row.get("material_score", 0),
+            field="material_score",
+        ),
         "is_correction": bool(row.get("is_correction", False)),
         "correction_chain_root_rcept_no": str(
             row.get("correction_chain_root_rcept_no", "")
         ).strip(),
-        "correction_chain_order": int(row.get("correction_chain_order", 0)),
+        "correction_chain_order": _integer(
+            row.get("correction_chain_order", 0),
+            field="correction_chain_order",
+        ),
     }
 
 
