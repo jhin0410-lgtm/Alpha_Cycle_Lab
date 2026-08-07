@@ -75,6 +75,7 @@ GROUPED_CURRENT_BODY = """
 def _record(
     *,
     receipt: str,
+    receipt_date: str,
     report_name: str,
     text: str,
     order: int,
@@ -85,6 +86,7 @@ def _record(
         "status": "collected",
         "ticker": "005930",
         "rcept_no": receipt,
+        "receipt_date": receipt_date,
         "report_name": report_name,
         "correction_family_key": FAMILY,
         "correction_parent_rcept_no": parent,
@@ -104,6 +106,7 @@ def _record(
 def test_grouped_samsung_style_correction_table_certifies_against_parent() -> None:
     current = _record(
         receipt=CURRENT_RECEIPT,
+        receipt_date="2026-04-30",
         report_name="[기재정정]연결재무제표기준영업(잠정)실적(공정공시)",
         text=GROUPED_CURRENT_BODY,
         order=1,
@@ -111,6 +114,7 @@ def test_grouped_samsung_style_correction_table_certifies_against_parent() -> No
     )
     parent = _record(
         receipt=PARENT_RECEIPT,
+        receipt_date="2026-04-07",
         report_name="연결재무제표기준영업(잠정)실적(공정공시)",
         text=PARENT_BODY,
         order=0,
@@ -132,6 +136,8 @@ def test_grouped_samsung_style_correction_table_certifies_against_parent() -> No
     result = verify_correction_delta(catalyst, current, evidence)
 
     assert result["status"] == "verified"
+    assert result["parent_resolution_source"] == "body_target_submission_date"
+    assert result["parent_target_submission_date"] == "2026-04-07"
     assert result["changed_field_count"] == 2
     fields = result["fields"]
     assert isinstance(fields, list)
@@ -148,6 +154,7 @@ def test_grouped_samsung_style_correction_table_certifies_against_parent() -> No
 def test_grouped_parser_fails_closed_when_numeric_columns_are_incomplete() -> None:
     current = _record(
         receipt=CURRENT_RECEIPT,
+        receipt_date="2026-04-30",
         report_name="[기재정정]연결재무제표기준영업(잠정)실적(공정공시)",
         text=GROUPED_CURRENT_BODY.replace("57.23\n57.23", "57.23", 1),
         order=1,
@@ -155,6 +162,7 @@ def test_grouped_parser_fails_closed_when_numeric_columns_are_incomplete() -> No
     )
     parent = _record(
         receipt=PARENT_RECEIPT,
+        receipt_date="2026-04-07",
         report_name="연결재무제표기준영업(잠정)실적(공정공시)",
         text=PARENT_BODY,
         order=0,

@@ -10,6 +10,9 @@ from typing import Any
 from alpha_cycle.intelligence.disclosure_body_metrics import (
     parse_disclosure_body_metrics,
 )
+from alpha_cycle.intelligence.disclosure_correction_parent import (
+    resolve_correction_parent_from_body,
+)
 from alpha_cycle.intelligence.disclosure_grouped_correction import (
     parse_grouped_earnings_delta_rows,
 )
@@ -202,6 +205,69 @@ def _parent_binding_valid(
     return current_receipt in {str(value).strip() for value in supporters}
 
 
+def _heuristic_parent_receipt(
+    catalyst: Mapping[Any, object],
+    current_record: Mapping[str, object],
+) -> str:
+    receipt = str(catalyst.get("correction_parent_rcept_no", "") or "").strip()
+    if receipt:
+        return receipt
+    return str(current_record.get("correction_parent_rcept_no", "") or "").strip()
+
+
+def _parent_resolution(
+    catalyst: Mapping[Any, object],
+    current_record: Mapping[str, object],
+    document_evidence: Mapping[str, object],
+) -> dict[str, object]:
+    heuristic_parent = _heuristic_parent_receipt(catalyst, current_record)
+    body_resolution = resolve_correction_parent_from_body(
+        current_record,
+        document_evidence,
+    )
+    body_status = str(body_resolution.get("status", ""))
+    if body_status != "target_submission_date_not_found":
+        result = dict(body_resolution)
+        result["heuristic_parent_rcept_no"] = heuristic_parent or None
+        return result
+    return {
+        "status": "resolved" if heuristic_parent else "parent_not_found",
+        "resolution_source": "window_heuristic" if heuristic_parent else None,
+        "target_submission_date": None,
+        "parent_rcept_no": heuristic_parent or None,
+        "heuristic_parent_rcept_no": heuristic_parent or None,
+    }
+
+
+def _resolution_failure(
+    resolution: Mapping[str, object],
+    metric_type: str,
+) -> dict[str, object] | None:
+    status = str(resolution.get("status", ""))
+    status_map = {
+        "target_submission_date_invalid": "parent_body_target_invalid",
+        "target_parent_not_found": "parent_body_target_unresolved",
+        "target_parent_ambiguous": "parent_body_target_ambiguous",
+        "parent_not_found": "parent_body_unavailable",
+    }
+    mapped = status_map.get(status)
+    if mapped is None:
+        return None
+    result: dict[str, object] = {
+        "schema_version": CORRECTION_DELTA_SCHEMA_VERSION,
+        "status": mapped,
+        "metric_type": metric_type,
+        "parent_rcept_no": resolution.get("parent_rcept_no"),
+        "parent_resolution_source": resolution.get("resolution_source"),
+        "parent_target_submission_date": resolution.get("target_submission_date"),
+        "heuristic_parent_rcept_no": resolution.get("heuristic_parent_rcept_no"),
+    }
+    candidates = resolution.get("candidate_rcept_nos")
+    if isinstance(candidates, list):
+        result["candidate_rcept_nos"] = candidates
+    return result
+
+
 def verify_correction_delta(
     catalyst: Mapping[Any, object],
     current_record: Mapping[str, object],
@@ -263,13 +329,12 @@ def verify_correction_delta(
             "metric_type": metric_type,
         }
 
-    parent_receipt = str(
-        catalyst.get("correction_parent_rcept_no", "") or ""
-    ).strip()
-    if not parent_receipt:
-        parent_receipt = str(
-            current_record.get("correction_parent_rcept_no", "") or ""
-        ).strip()
+    resolution = _parent_resolution(catalyst, current_record, document_evidence)
+    failure = _resolution_failure(resolution, metric_type)
+    if failure is not None:
+        return failure
+
+    parent_receipt = str(resolution.get("parent_rcept_no", "") or "").strip()
     parent_value = document_evidence.get(parent_receipt) if parent_receipt else None
     parent_record = parent_value if isinstance(parent_value, Mapping) else None
     if not parent_receipt or not _collected_body(parent_record):
@@ -278,9 +343,14 @@ def verify_correction_delta(
             "status": "parent_body_unavailable",
             "metric_type": metric_type,
             "parent_rcept_no": parent_receipt or None,
+            "parent_resolution_source": resolution.get("resolution_source"),
+            "parent_target_submission_date": resolution.get("target_submission_date"),
+            "heuristic_parent_rcept_no": resolution.get("heuristic_parent_rcept_no"),
         }
     assert parent_record is not None
-    if not _parent_binding_valid(
+
+    resolution_source = str(resolution.get("resolution_source", ""))
+    if resolution_source == "window_heuristic" and not _parent_binding_valid(
         current_receipt,
         current_record,
         parent_receipt,
@@ -291,6 +361,22 @@ def verify_correction_delta(
             "status": "parent_lineage_binding_mismatch",
             "metric_type": metric_type,
             "parent_rcept_no": parent_receipt,
+            "parent_resolution_source": resolution_source,
+            "parent_target_submission_date": None,
+            "heuristic_parent_rcept_no": resolution.get("heuristic_parent_rcept_no"),
+        }
+    if (
+        resolution_source == "body_target_submission_date"
+        and str(parent_record.get("rcept_no", "")).strip() != parent_receipt
+    ):
+        return {
+            "schema_version": CORRECTION_DELTA_SCHEMA_VERSION,
+            "status": "parent_lineage_binding_mismatch",
+            "metric_type": metric_type,
+            "parent_rcept_no": parent_receipt,
+            "parent_resolution_source": resolution_source,
+            "parent_target_submission_date": resolution.get("target_submission_date"),
+            "heuristic_parent_rcept_no": resolution.get("heuristic_parent_rcept_no"),
         }
 
     parent_metrics = parse_disclosure_body_metrics(
@@ -306,6 +392,9 @@ def verify_correction_delta(
             "status": "parent_metrics_unverified",
             "metric_type": metric_type,
             "parent_rcept_no": parent_receipt,
+            "parent_resolution_source": resolution_source,
+            "parent_target_submission_date": resolution.get("target_submission_date"),
+            "heuristic_parent_rcept_no": resolution.get("heuristic_parent_rcept_no"),
         }
 
     verified_rows: list[dict[str, object]] = []
@@ -348,6 +437,9 @@ def verify_correction_delta(
         "metric_type": metric_type,
         "current_rcept_no": current_receipt,
         "parent_rcept_no": parent_receipt,
+        "parent_resolution_source": resolution_source,
+        "parent_target_submission_date": resolution.get("target_submission_date"),
+        "heuristic_parent_rcept_no": resolution.get("heuristic_parent_rcept_no"),
         "current_text_sha256": str(current_record.get("text_sha256")),
         "current_archive_sha256": str(current_record.get("archive_sha256")),
         "parent_text_sha256": str(parent_record.get("text_sha256")),
