@@ -112,10 +112,10 @@ def _earnings_delta_rows(text: object) -> list[dict[str, object]]:
     section = _correction_section(text, heading)
     if section is None:
         return []
-    rowwise = _rowwise_earnings_delta_rows(section)
-    if rowwise:
-        return rowwise
-    return parse_grouped_earnings_delta_rows(section)
+    grouped = parse_grouped_earnings_delta_rows(section)
+    if grouped:
+        return grouped
+    return _rowwise_earnings_delta_rows(section)
 
 
 def _capex_delta_rows(text: object) -> list[dict[str, object]]:
