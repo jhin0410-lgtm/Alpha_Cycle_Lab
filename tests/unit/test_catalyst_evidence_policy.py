@@ -105,6 +105,7 @@ def test_selection_policy_exclusions_are_not_mislabeled_as_missing_bodies() -> N
         "negative": 0,
         "unresolved_title": 0,
         "unresolved_body": 1,
+        "verified_metrics": 0,
         "backlog": 1,
         "non_directional": 1,
     }
@@ -194,7 +195,7 @@ def test_report_renames_verified_catalyst_language() -> None:
     result = apply_catalyst_report_policy(report)
 
     assert "확인된 주요 공시·촉매 후보" in result
-    assert "본문 검증 전 긍정 촉매로 점수화하지 않음" in result
+    assert "시장 기대 대비 방향 확인 전 긍정 촉매로 점수화하지 않음" in result
     assert "- 확인된 촉매\n" not in result
 
 
