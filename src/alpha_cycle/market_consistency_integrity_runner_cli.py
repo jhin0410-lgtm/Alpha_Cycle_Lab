@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from alpha_cycle import market_consistency_runner_cli as runner
+from alpha_cycle.adjusted_market_consistency_compat import (
+    adjusted_market_consistency_runtime,
+)
 from alpha_cycle.market_consistency_assessment_integrity import (
     assess_consistency_result,
 )
@@ -24,7 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     setattr(runner, ASSESSOR_ATTRIBUTE, assess_consistency_result)
     setattr(runner, ATOMIC_JSON_ATTRIBUTE, _atomic_json)
     try:
-        return runner.main(argv)
+        with adjusted_market_consistency_runtime():
+            return runner.main(argv)
     finally:
         setattr(runner, CHECKER_ATTRIBUTE, original_checker)
         setattr(runner, ASSESSOR_ATTRIBUTE, original_assessor)
