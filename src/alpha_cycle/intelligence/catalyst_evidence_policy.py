@@ -110,7 +110,12 @@ def annotate_catalyst_direction(
             assert record is not None
             text_hashes.append(str(record.get("text_sha256")))
             archive_hashes.append(str(record.get("archive_sha256")))
-            text_chars.append(int(record.get("text_chars", 0)))
+            chars_value = record.get("text_chars")
+            text_chars.append(
+                chars_value
+                if isinstance(chars_value, int) and not isinstance(chars_value, bool)
+                else None
+            )
             truncated_values.append(truncated)
         else:
             if bool(raw.get("is_correction", False)):
