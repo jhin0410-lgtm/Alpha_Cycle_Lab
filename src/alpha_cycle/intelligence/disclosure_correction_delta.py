@@ -10,6 +10,9 @@ from typing import Any
 from alpha_cycle.intelligence.disclosure_body_metrics import (
     parse_disclosure_body_metrics,
 )
+from alpha_cycle.intelligence.disclosure_grouped_correction import (
+    parse_grouped_earnings_delta_rows,
+)
 
 CORRECTION_DELTA_SCHEMA_VERSION = 1
 _NUMBER = r"(?:-?\d[\d,]*(?:\.\d+)?|-)"
@@ -71,13 +74,7 @@ def _correction_section(text: object, heading: re.Pattern[str]) -> str | None:
     return re.sub(r"\s+", " ", body[marker.end() : end]).strip()
 
 
-def _earnings_delta_rows(text: object) -> list[dict[str, object]]:
-    heading = re.compile(
-        r"연결\s*재무제표\s*기준\s*영업\s*\(잠정\)\s*실적\s*\(공정공시\)"
-    )
-    section = _correction_section(text, heading)
-    if section is None:
-        return []
+def _rowwise_earnings_delta_rows(section: str) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     definitions = (
         ("sales", ("매출액(당해실적)", "매출액 당해실적")),
@@ -106,6 +103,19 @@ def _earnings_delta_rows(text: object) -> list[dict[str, object]]:
             }
         )
     return rows
+
+
+def _earnings_delta_rows(text: object) -> list[dict[str, object]]:
+    heading = re.compile(
+        r"연결\s*재무제표\s*기준\s*영업\s*\(잠정\)\s*실적\s*\(공정공시\)"
+    )
+    section = _correction_section(text, heading)
+    if section is None:
+        return []
+    grouped = parse_grouped_earnings_delta_rows(section)
+    if grouped:
+        return grouped
+    return _rowwise_earnings_delta_rows(section)
 
 
 def _capex_delta_rows(text: object) -> list[dict[str, object]]:
