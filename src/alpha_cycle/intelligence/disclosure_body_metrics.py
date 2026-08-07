@@ -44,6 +44,10 @@ def _canonical_number(value: str) -> str | None:
     return format(numeric, "f")
 
 
+def _string_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
 def _scaled_krw(value: str | None, scale: int | None) -> int | None:
     if value is None or scale is None:
         return None
@@ -121,19 +125,15 @@ def _parse_earnings(text: str) -> dict[str, object]:
         if parsed is None:
             continue
         parsed["current_krw"] = _scaled_krw(
-            parsed.get("current") if isinstance(parsed.get("current"), str) else None,
+            _string_or_none(parsed.get("current")),
             scale,
         )
         parsed["previous_quarter_krw"] = _scaled_krw(
-            (
-                parsed.get("previous_quarter")
-                if isinstance(parsed.get("previous_quarter"), str)
-                else None
-            ),
+            _string_or_none(parsed.get("previous_quarter")),
             scale,
         )
         parsed["prior_year_krw"] = _scaled_krw(
-            parsed.get("prior_year") if isinstance(parsed.get("prior_year"), str) else None,
+            _string_or_none(parsed.get("prior_year")),
             scale,
         )
         rows[key] = parsed
