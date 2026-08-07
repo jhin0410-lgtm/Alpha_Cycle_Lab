@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
@@ -152,6 +153,39 @@ def _normalize_disclosure_provenance(
     )
 
 
+def _load_disclosure_document_evidence(
+    research_snapshot: str | Path,
+) -> Mapping[str, object]:
+    root = Path(research_snapshot)
+    raw_path = root / "raw_opendart.json" if root.is_dir() else root.parent / "raw_opendart.json"
+    if not raw_path.is_file():
+        return {}
+    payload: object = json.loads(raw_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("raw_opendart.json must contain an object")
+    bundle = payload.get("_disclosure_document_evidence")
+    if bundle is None:
+        return {}
+    if not isinstance(bundle, dict):
+        raise ValueError("OpenDART disclosure document evidence must be an object")
+    if bundle.get("provider") != "opendart" or bundle.get("endpoint") != "/api/document.xml":
+        raise ValueError("Unexpected OpenDART disclosure document evidence contract")
+    documents = bundle.get("documents")
+    if not isinstance(documents, dict):
+        raise ValueError("OpenDART disclosure document evidence has no documents object")
+    normalized: dict[str, object] = {}
+    for key, value in documents.items():
+        receipt = str(key).strip()
+        if len(receipt) != 14 or not receipt.isdigit():
+            raise ValueError("OpenDART document evidence has an invalid receipt number")
+        if not isinstance(value, dict):
+            raise ValueError("OpenDART document evidence record must be an object")
+        if str(value.get("rcept_no", "")).strip() != receipt:
+            raise ValueError("OpenDART document evidence receipt binding mismatch")
+        normalized[receipt] = cast(Mapping[str, object], value)
+    return normalized
+
+
 def _attach_valuation_context(
     scorecards: pd.DataFrame,
     valuation_metrics: pd.DataFrame,
@@ -286,7 +320,11 @@ def build_investment_decision_snapshot(
         policy=decision_policy,
     )
     base = _normalize_disclosure_provenance(base)
-    base = apply_catalyst_evidence_policy(base, policy=decision_policy)
+    base = apply_catalyst_evidence_policy(
+        base,
+        policy=decision_policy,
+        document_evidence=_load_disclosure_document_evidence(research_snapshot),
+    )
     if valuation_snapshot is None:
         return _attach_execution_playbook(base)
 
