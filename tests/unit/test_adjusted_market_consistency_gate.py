@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -13,6 +13,7 @@ from alpha_cycle import pipeline_market_consistency_degraded as degraded
 from alpha_cycle.market_consistency_cli import ConsistencyError
 
 SYMBOLS = ("000660", "005930", "005935")
+KST = timezone(timedelta(hours=9))
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
@@ -108,9 +109,7 @@ def _build_kiwoom(
         "provider": "kiwoom_openapi_plus",
         "snapshot_id": snapshot_id,
         "captured_at_utc": captured_at.isoformat(),
-        "captured_at_kst": captured_at.astimezone(
-            timezone_kst := datetime.now().astimezone().tzinfo or UTC
-        ).isoformat(),
+        "captured_at_kst": captured_at.astimezone(KST).isoformat(),
         "symbols": list(SYMBOLS),
         "adjusted_prices": adjusted,
         "daily_tr_code": "opt10081",
