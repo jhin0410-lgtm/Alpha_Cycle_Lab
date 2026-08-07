@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 
 BODY_METRICS_SCHEMA_VERSION = 1
@@ -25,6 +26,18 @@ _UNIT_SCALES: dict[str, int] = {
 def _last_section(text: str, pattern: re.Pattern[str]) -> str | None:
     matches = list(pattern.finditer(text))
     return text[matches[-1].start() :] if matches else None
+
+
+def _bounded_sections(text: str, pattern: re.Pattern[str]) -> list[str]:
+    """Return every same-heading section without trusting archive member order."""
+
+    matches = list(pattern.finditer(text))
+    return [
+        text[match.start() : matches[index + 1].start()]
+        if index + 1 < len(matches)
+        else text[match.start() :]
+        for index, match in enumerate(matches)
+    ]
 
 
 def _compact(text: str) -> str:
@@ -104,15 +117,7 @@ def _earnings_row(section: str, label: str) -> dict[str, object] | None:
     }
 
 
-def _parse_earnings(text: str) -> dict[str, object]:
-    raw_section = _last_section(text, _EARNINGS_HEADING)
-    if raw_section is None:
-        return {
-            "schema_version": BODY_METRICS_SCHEMA_VERSION,
-            "type": "earnings_preliminary",
-            "status": "unparsed",
-            "reason": "full_earnings_table_heading_not_found",
-        }
+def _parse_earnings_section(raw_section: str) -> dict[str, object]:
     section = _compact(raw_section)
     unit, scale = _unit(section)
     rows: dict[str, dict[str, object]] = {}
@@ -161,6 +166,64 @@ def _parse_earnings(text: str) -> dict[str, object]:
             else "standard_earnings_rows_not_found"
         )
     return result
+
+
+def _earnings_signature(result: Mapping[str, object]) -> tuple[object, ...]:
+    metrics = result.get("metrics")
+    rows = metrics if isinstance(metrics, Mapping) else {}
+
+    def current(field: str) -> object:
+        row = rows.get(field)
+        return row.get("current") if isinstance(row, Mapping) else None
+
+    return (
+        result.get("unit"),
+        current("sales"),
+        current("operating_profit"),
+        current("net_income"),
+    )
+
+
+def _earnings_candidate_rank(result: Mapping[str, object]) -> tuple[int, int]:
+    metrics = result.get("metrics")
+    metric_count = len(metrics) if isinstance(metrics, Mapping) else 0
+    unit = result.get("unit")
+    recognized_unit = isinstance(unit, str) and unit in _UNIT_SCALES
+    return metric_count, int(recognized_unit)
+
+
+def _parse_earnings(text: str) -> dict[str, object]:
+    sections = _bounded_sections(text, _EARNINGS_HEADING)
+    if not sections:
+        return {
+            "schema_version": BODY_METRICS_SCHEMA_VERSION,
+            "type": "earnings_preliminary",
+            "status": "unparsed",
+            "reason": "full_earnings_table_heading_not_found",
+        }
+
+    candidates = [_parse_earnings_section(section) for section in sections]
+    verified = [item for item in candidates if item.get("status") == "verified"]
+    if verified:
+        signatures = {_earnings_signature(item) for item in verified}
+        if len(signatures) > 1:
+            return {
+                "schema_version": BODY_METRICS_SCHEMA_VERSION,
+                "type": "earnings_preliminary",
+                "status": "unparsed",
+                "reason": "ambiguous_multiple_full_earnings_tables",
+            }
+        return verified[-1]
+
+    partial = [item for item in candidates if item.get("status") == "partial"]
+    if partial:
+        return max(partial, key=_earnings_candidate_rank)
+    return {
+        "schema_version": BODY_METRICS_SCHEMA_VERSION,
+        "type": "earnings_preliminary",
+        "status": "unparsed",
+        "reason": "standard_earnings_rows_not_found",
+    }
 
 
 def _capex_amount(section: str, label: str) -> int | None:
