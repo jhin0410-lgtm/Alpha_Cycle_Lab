@@ -12,8 +12,9 @@ from __future__ import annotations
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from alpha_cycle import market_consistency_cli as core
 from alpha_cycle import market_consistency_runner_cli as runner
@@ -62,7 +63,7 @@ def _load_toss(directory: Path) -> core.SnapshotEvidence:
         field="Toss captured_at",
     )
 
-    prices: dict[str, core.Decimal] = {}
+    prices: dict[str, Decimal] = {}
     for row in core._read_csv(directory / "prices.csv"):
         core._require_fields(
             row,
@@ -185,7 +186,7 @@ def _load_kiwoom(directory: Path) -> core.SnapshotEvidence:
         manifest.get("captured_at_utc"), field="Kiwoom captured_at_utc"
     )
 
-    prices: dict[str, core.Decimal] = {}
+    prices: dict[str, Decimal] = {}
     for row in core._read_csv(directory / "quotes.csv"):
         core._require_fields(row, ("ticker", "current_price"), source="quotes.csv")
         ticker = row["ticker"].strip()
@@ -260,7 +261,7 @@ def _compare_daily(
     kiwoom: core.SnapshotEvidence,
     *,
     required_days: int,
-    price_tolerance_won: core.Decimal,
+    price_tolerance_won: Decimal,
 ) -> tuple[list[core.DailyComparison], tuple[str, ...], list[str], list[str]]:
     toss_adjusted = _basis_from_evidence(toss)
     kiwoom_adjusted = _basis_from_evidence(kiwoom)
@@ -273,11 +274,14 @@ def _compare_daily(
             "historical OHLC not compared because provider adjustment bases differ"
         )
         return [], (), [failure], [warning]
-    return original(
-        toss,
-        kiwoom,
-        required_days=required_days,
-        price_tolerance_won=price_tolerance_won,
+    return cast(
+        tuple[list[core.DailyComparison], tuple[str, ...], list[str], list[str]],
+        original(
+            toss,
+            kiwoom,
+            required_days=required_days,
+            price_tolerance_won=price_tolerance_won,
+        ),
     )
 
 
@@ -326,7 +330,7 @@ def _classify_scope(
         None,
     )
     if mismatch is None:
-        return original(result, evidence)
+        return cast(runner.ScopeClassification, original(result, evidence))
 
     toss_scope, kiwoom_scope, _ = _source_scope_contracts(result)
     return runner.ScopeClassification(
@@ -363,7 +367,7 @@ def adjusted_market_consistency_runtime() -> Iterator[None]:
         kiwoom: core.SnapshotEvidence,
         *,
         required_days: int,
-        price_tolerance_won: core.Decimal,
+        price_tolerance_won: Decimal,
     ) -> tuple[list[core.DailyComparison], tuple[str, ...], list[str], list[str]]:
         return _compare_daily(
             original_compare_daily,
