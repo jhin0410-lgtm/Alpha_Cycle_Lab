@@ -167,6 +167,20 @@ def test_document_selection_keeps_latest_correction_and_excludes_periodic_report
     assert warnings == ()
 
 
+def test_document_selection_records_capacity_without_calling_it_unavailable() -> None:
+    selected, ledger, warnings = documents._selection_plan(
+        _disclosures(),
+        evaluation_date=date(2026, 8, 7),
+        max_documents_per_ticker=1,
+    )
+
+    assert list(selected["rcept_no"].astype(str)) == ["20260807000001"]
+    assert ledger["20260807000001"]["status"] == "selected_pending"
+    assert ledger["20260710000404"]["status"] == "excluded_capacity"
+    assert ledger["20260317000001"]["status"] == "excluded_periodic"
+    assert warnings == ("disclosure_document_selection_truncated:000660:1/2",)
+
+
 class FakeDocumentClient:
     def document(self, rcept_no: object) -> DisclosureDocumentEvidence:
         receipt = str(rcept_no)
@@ -242,10 +256,17 @@ def test_extended_collector_embeds_document_evidence_without_failing_on_one_miss
     assert isinstance(raw, dict)
     bundle = raw["_disclosure_document_evidence"]
     assert isinstance(bundle, dict)
+    assert bundle["schema_version"] == 2
     stored = bundle["documents"]
     assert isinstance(stored, dict)
     assert stored["20260807000001"]["status"] == "collected"
     assert stored["20260710000404"]["status"] == "unavailable"
+    assert stored["20260317000001"]["status"] == "excluded_periodic"
+    assert bundle["status_counts"] == {
+        "collected": 1,
+        "unavailable": 1,
+        "excluded_periodic": 1,
+    }
     assert snapshot.captured_at == NOW + timedelta(minutes=1)
     assert any(
         warning == "disclosure_document_unavailable:000660:20260710000404"

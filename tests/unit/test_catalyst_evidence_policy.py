@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from alpha_cycle.intelligence import catalyst_evidence_policy as catalyst_policy
 from alpha_cycle.intelligence.catalyst_evidence_policy import (
     annotate_catalyst_direction,
     apply_catalyst_report_policy,
@@ -49,6 +50,89 @@ def test_title_only_material_filings_are_not_labeled_positive() -> None:
     assert result.loc[2, "direction_status"] == "negative_operational_risk_title"
     assert set(result["direction_basis"]) == {"filing_title_only"}
     assert not result["direction_status"].astype(str).str.startswith("positive_").any()
+
+
+def test_selection_policy_exclusions_are_not_mislabeled_as_missing_bodies() -> None:
+    catalysts = pd.DataFrame(
+        [
+            {
+                "ticker": "000660",
+                "rcept_no": "20260807000001",
+                "category": "capex_investment",
+                "is_correction": False,
+            },
+            {
+                "ticker": "000660",
+                "rcept_no": "20260729000001",
+                "category": "earnings",
+                "is_correction": False,
+            },
+            {
+                "ticker": "000660",
+                "rcept_no": "20260515000001",
+                "category": "earnings",
+                "is_correction": False,
+            },
+        ]
+    )
+    evidence: dict[str, object] = {
+        "20260807000001": {
+            "status": "collected",
+            "text_chars": 123,
+            "text_sha256": "a" * 64,
+            "archive_sha256": "b" * 64,
+            "text_truncated": False,
+        },
+        "20260729000001": {
+            "status": "excluded_capacity",
+            "selection_reason": "bounded_document_collection_capacity",
+        },
+        "20260515000001": {
+            "status": "excluded_periodic",
+            "selection_reason": "periodic_report_financial_evidence_path",
+        },
+    }
+
+    result = annotate_catalyst_direction(catalysts, document_evidence=evidence)
+
+    assert result.loc[0, "direction_status"] == "unresolved_body_available"
+    assert result.loc[1, "direction_status"] == "deferred_body_backlog"
+    assert result.loc[2, "direction_status"] == "not_directional_periodic_report"
+    assert result.loc[1, "document_evidence_status"] == "excluded_capacity"
+    assert result.loc[2, "document_evidence_status"] == "excluded_periodic"
+    counts = catalyst_policy._direction_counts(result)["000660"]
+    assert counts == {
+        "negative": 0,
+        "unresolved_title": 0,
+        "unresolved_body": 1,
+        "backlog": 1,
+        "non_directional": 1,
+    }
+
+
+def test_actual_unavailable_document_remains_fail_closed_title_only() -> None:
+    catalysts = pd.DataFrame(
+        [
+            {
+                "ticker": "005930",
+                "rcept_no": "20260730000001",
+                "category": "earnings",
+                "is_correction": True,
+            }
+        ]
+    )
+    evidence: dict[str, object] = {
+        "20260730000001": {
+            "status": "unavailable",
+            "failure_type": "ValueError",
+        }
+    }
+
+    result = annotate_catalyst_direction(catalysts, document_evidence=evidence)
+
+    assert result.loc[0, "direction_status"] == "unresolved_correction_title_only"
+    assert result.loc[0, "direction_basis"] == "filing_title_only"
+    assert result.loc[0, "document_evidence_status"] == "unavailable"
 
 
 def test_playbook_requires_body_level_direction_verification() -> None:
