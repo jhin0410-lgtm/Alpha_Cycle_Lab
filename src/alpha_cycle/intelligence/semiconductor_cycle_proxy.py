@@ -31,7 +31,12 @@ def _number(value: object) -> float | None:
     return result if math.isfinite(result) else None
 
 
-def _growth(current: float | None, prior: float | None, *, absolute: bool = False) -> float | None:
+def _growth(
+    current: float | None,
+    prior: float | None,
+    *,
+    absolute: bool = False,
+) -> float | None:
     if current is None or prior is None:
         return None
     left = abs(current) if absolute else current
@@ -39,6 +44,11 @@ def _growth(current: float | None, prior: float | None, *, absolute: bool = Fals
     if right == 0:
         return None
     return left / abs(right) - 1.0
+
+
+def _is_positive(value: object) -> bool:
+    number = _number(value)
+    return number is not None and number > 0
 
 
 def _latest_quarterly_rows(
@@ -91,7 +101,9 @@ def _market_confirmed(market: Mapping[str, object]) -> bool | None:
     ):
         value = _number(market.get(key))
         if value is not None:
-            signals.append(value > threshold if key != "price_to_sma_20" else value >= threshold)
+            signals.append(
+                value > threshold if key != "price_to_sma_20" else value >= threshold
+            )
     if len(signals) < 2:
         return None
     return sum(signals) >= 2
@@ -215,23 +227,19 @@ def build_semiconductor_cycle_proxy(
     else:
         coverage = "complete_issuer_proxy"
         issuer_count = len(rows)
-        revenue_growth = sum(
-            _number(row.get("revenue_yoy")) is not None
-            and cast_float(row.get("revenue_yoy")) > 0
-            for row in rows
-        )
         operating_growth = sum(
-            _number(row.get("operating_income_yoy")) is not None
-            and cast_float(row.get("operating_income_yoy")) > 0
-            for row in rows
+            _is_positive(row.get("operating_income_yoy")) for row in rows
         )
         margin_improving = sum(
-            _number(row.get("operating_margin_change_yoy_pp")) is not None
-            and cast_float(row.get("operating_margin_change_yoy_pp")) > 0
-            for row in rows
+            _is_positive(row.get("operating_margin_change_yoy_pp")) for row in rows
         )
-        market_confirmed_count = sum(row.get("market_confirmed") is True for row in rows)
-        if operating_growth == issuer_count and margin_improving >= max(1, issuer_count // 2):
+        market_confirmed_count = sum(
+            row.get("market_confirmed") is True for row in rows
+        )
+        if (
+            operating_growth == issuer_count
+            and margin_improving >= max(1, issuer_count // 2)
+        ):
             if market_confirmed_count == issuer_count:
                 state = "issuer_expansion_market_confirmed"
             elif market_confirmed_count == 0:
@@ -252,21 +260,17 @@ def build_semiconductor_cycle_proxy(
         "issuer_count_expected": len(expected),
         "issuer_count_observed": len(rows),
         "revenue_growth_breadth": sum(
-            _number(row.get("revenue_yoy")) is not None
-            and cast_float(row.get("revenue_yoy")) > 0
-            for row in rows
+            _is_positive(row.get("revenue_yoy")) for row in rows
         ),
         "operating_income_growth_breadth": sum(
-            _number(row.get("operating_income_yoy")) is not None
-            and cast_float(row.get("operating_income_yoy")) > 0
-            for row in rows
+            _is_positive(row.get("operating_income_yoy")) for row in rows
         ),
         "margin_improvement_breadth": sum(
-            _number(row.get("operating_margin_change_yoy_pp")) is not None
-            and cast_float(row.get("operating_margin_change_yoy_pp")) > 0
-            for row in rows
+            _is_positive(row.get("operating_margin_change_yoy_pp")) for row in rows
         ),
-        "inventory_supportive_breadth": sum(value is True for value in inventory_observed),
+        "inventory_supportive_breadth": sum(
+            value is True for value in inventory_observed
+        ),
         "inventory_breadth_observed": len(inventory_observed),
         "market_confirmation_breadth": sum(
             row.get("market_confirmed") is True for row in rows
@@ -288,13 +292,6 @@ def build_semiconductor_cycle_proxy(
     )
 
 
-def cast_float(value: object) -> float:
-    result = _number(value)
-    if result is None:
-        raise ValueError("Expected a finite numeric cycle-proxy value")
-    return result
-
-
 def attach_semiconductor_cycle_proxy_to_scorecards(
     scorecards: pd.DataFrame,
     proxy: SemiconductorCycleProxy,
@@ -311,7 +308,9 @@ def attach_semiconductor_cycle_proxy_to_scorecards(
     result["industry_cycle_certified"] = proxy.industry_cycle_certified
     result["cycle_proxy_coverage_status"] = proxy.coverage_status
     result["cycle_proxy_issuer_phase"] = result["ticker"].map(
-        lambda ticker: str(issuer_lookup.get(str(ticker), {}).get("issuer_phase", "not_observed"))
+        lambda ticker: str(
+            issuer_lookup.get(str(ticker), {}).get("issuer_phase", "not_observed")
+        )
     )
     result["cycle_proxy_period"] = result["ticker"].map(
         lambda ticker: str(issuer_lookup.get(str(ticker), {}).get("period_label", ""))
@@ -366,6 +365,10 @@ def append_semiconductor_cycle_proxy_report(
 ) -> str:
     """Append a transparent non-scoring cycle-proxy section to the decision report."""
 
+    header = (
+        "| 종목 | 기준분기 | 매출 YoY | 영업이익 YoY | 마진 YoY 변화 | "
+        "재고 YoY | Capex YTD YoY | 20일 수익률 | 시장확인 | 발행사 국면 |"
+    )
     lines = [
         report.rstrip(),
         "",
@@ -377,12 +380,17 @@ def append_semiconductor_cycle_proxy_report(
         "메모리 가격·산업 생산/출하/재고 통계를 대체하지 않습니다.",
         "- 현재 의사결정 점수에는 반영하지 않습니다.",
         "",
-        "| 종목 | 기준분기 | 매출 YoY | 영업이익 YoY | 마진 YoY 변화 | 재고 YoY | Capex YTD YoY | 20일 수익률 | 시장확인 | 발행사 국면 |",
+        header,
         "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for row in proxy.issuer_rows:
         confirmed = row.get("market_confirmed")
-        market_text = "확인" if confirmed is True else "미확인" if confirmed is False else "자료부족"
+        if confirmed is True:
+            market_text = "확인"
+        elif confirmed is False:
+            market_text = "미확인"
+        else:
+            market_text = "자료부족"
         lines.append(
             "| "
             + " | ".join(
@@ -402,17 +410,31 @@ def append_semiconductor_cycle_proxy_report(
             + " |"
         )
     aggregate = proxy.aggregate
+    observed = aggregate["issuer_count_observed"]
+    market_observed = aggregate["market_confirmation_observed"]
     lines.extend(
         [
             "",
             "### 프록시 breadth",
             "",
-            f"- 매출 증가: {aggregate['revenue_growth_breadth']}/{aggregate['issuer_count_observed']}",
-            f"- 영업이익 증가: {aggregate['operating_income_growth_breadth']}/{aggregate['issuer_count_observed']}",
-            f"- 영업마진 개선: {aggregate['margin_improvement_breadth']}/{aggregate['issuer_count_observed']}",
-            f"- 가격 추세 확인: {aggregate['market_confirmation_breadth']}/{aggregate['market_confirmation_observed']}",
+            f"- 매출 증가: {aggregate['revenue_growth_breadth']}/{observed}",
+            (
+                "- 영업이익 증가: "
+                f"{aggregate['operating_income_growth_breadth']}/{observed}"
+            ),
+            (
+                "- 영업마진 개선: "
+                f"{aggregate['margin_improvement_breadth']}/{observed}"
+            ),
+            (
+                "- 가격 추세 확인: "
+                f"{aggregate['market_confirmation_breadth']}/{market_observed}"
+            ),
             "",
-            "공식 산업 사이클 인증에는 KOSIS 반도체 생산·출하·재고와 메모리 가격/공급 데이터가 추가로 필요합니다.",
+            (
+                "공식 산업 사이클 인증에는 KOSIS 반도체 생산·출하·재고와 "
+                "메모리 가격/공급 데이터가 추가로 필요합니다."
+            ),
         ]
     )
     return "\n".join(lines).rstrip() + "\n"
