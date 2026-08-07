@@ -69,7 +69,7 @@ def _date_value(value: str | None) -> str | None:
 
 
 def _unit(section: str) -> tuple[str | None, int | None]:
-    match = re.search(r"단위\s*:\s*([^\n]{1,30}?)\s+구분", section)
+    match = re.search(r"단위\s*:\s*(.{1,30}?)\s+구분", section)
     if match is None:
         return None, None
     raw = re.sub(r"\s+", "", match.group(1)).replace(",%", "").replace("%", "")
@@ -110,7 +110,7 @@ def _parse_earnings(text: str) -> dict[str, object]:
             "reason": "full_earnings_table_heading_not_found",
         }
     section = _compact(raw_section)
-    unit, scale = _unit(raw_section)
+    unit, scale = _unit(section)
     rows: dict[str, dict[str, object]] = {}
     for key, label in (
         ("sales", "매출액"),
