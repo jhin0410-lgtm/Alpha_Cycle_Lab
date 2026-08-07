@@ -25,6 +25,7 @@ _BASE_COLUMNS = (
     "document_evidence_status",
     "body_metrics_status",
     "body_metrics_type",
+    "body_metrics_reason",
     "correction_delta_status",
     "verified_field_count",
     "changed_field_count",
@@ -78,6 +79,14 @@ def _json_mapping(value: object) -> Mapping[str, object] | None:
     except (TypeError, ValueError):
         return None
     return cast(Mapping[str, object], parsed) if isinstance(parsed, dict) else None
+
+
+def _body_metrics_reason(value: object) -> str:
+    payload = _json_mapping(value)
+    if payload is None:
+        return ""
+    reason = payload.get("reason")
+    return str(reason).strip() if reason is not None else ""
 
 
 def _delta_detail(value: object) -> tuple[int | None, int | None, str]:
@@ -202,6 +211,11 @@ def load_correction_delta_diagnostics(
         ]
     ).merge(lineage, on=["ticker", "rcept_no"], how="left", validate="one_to_one")
 
+    body_json = result.get(
+        "body_metrics_json",
+        pd.Series(index=result.index, dtype="string"),
+    )
+    result["body_metrics_reason"] = body_json.map(_body_metrics_reason)
     delta_json = result.get(
         "correction_delta_json",
         pd.Series(index=result.index, dtype="string"),
