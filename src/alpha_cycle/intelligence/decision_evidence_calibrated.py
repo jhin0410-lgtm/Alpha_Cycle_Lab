@@ -41,6 +41,13 @@ from alpha_cycle.intelligence.evidence_coverage_policy import (
 from alpha_cycle.intelligence.report_financial_formatting import (
     apply_financial_report_formatting,
 )
+from alpha_cycle.intelligence.semiconductor_cycle_proxy import (
+    SemiconductorCycleProxy,
+    append_semiconductor_cycle_proxy_report,
+    attach_semiconductor_cycle_proxy_to_records,
+    attach_semiconductor_cycle_proxy_to_scorecards,
+    build_semiconductor_cycle_proxy,
+)
 from alpha_cycle.intelligence.technical_evidence_policy import (
     apply_market_report_policy,
     gate_execution_playbook,
@@ -53,7 +60,10 @@ def _price_lookup(market_context: pd.DataFrame) -> dict[str, object]:
     return {str(key).zfill(6): value for key, value in raw.items()}
 
 
-def _rebuild_scorecards(snapshot: InvestmentDecisionSnapshot) -> pd.DataFrame:
+def _rebuild_scorecards(
+    snapshot: InvestmentDecisionSnapshot,
+    proxy: SemiconductorCycleProxy,
+) -> pd.DataFrame:
     adjusted = apply_evidence_coverage_policy(snapshot.scorecards, snapshot.policy)
     enriched = enrich_scorecards_with_playbook(
         adjusted,
@@ -68,7 +78,8 @@ def _rebuild_scorecards(snapshot: InvestmentDecisionSnapshot) -> pd.DataFrame:
         evaluation_date=snapshot.evaluation_date,
     )
     market_gated = gate_execution_playbook(calibrated, snapshot.market_context)
-    return gate_catalyst_playbook(market_gated)
+    catalyst_gated = gate_catalyst_playbook(market_gated)
+    return attach_semiconductor_cycle_proxy_to_scorecards(catalyst_gated, proxy)
 
 
 def _rebuild_records(
@@ -80,12 +91,14 @@ def _rebuild_records(
         evaluation_date=snapshot.evaluation_date,
         price_lookup=_price_lookup(snapshot.market_context),
     )
-    return attach_priority_audit_to_records(records, scorecards)
+    audited = attach_priority_audit_to_records(records, scorecards)
+    return attach_semiconductor_cycle_proxy_to_records(audited, scorecards)
 
 
 def _rebuild_report(
     snapshot: InvestmentDecisionSnapshot,
     scorecards: pd.DataFrame,
+    proxy: SemiconductorCycleProxy,
 ) -> str:
     report = build_report(
         snapshot.evaluation_date,
@@ -114,7 +127,8 @@ def _rebuild_report(
         snapshot.financial_kpis,
         snapshot.financial_history,
     )
-    return apply_financial_report_formatting(report, snapshot.financial_kpis)
+    report = apply_financial_report_formatting(report, snapshot.financial_kpis)
+    return append_semiconductor_cycle_proxy_report(report, proxy)
 
 
 def build_investment_decision_snapshot(
@@ -127,7 +141,7 @@ def build_investment_decision_snapshot(
     policy: DecisionPolicy | None = None,
     now: datetime | None = None,
 ) -> InvestmentDecisionSnapshot:
-    """Build a resilient snapshot, then neutral-impute missing score components."""
+    """Build a resilient snapshot, then calibrate non-scoring evidence layers."""
 
     snapshot = _build_resilient_snapshot(
         research_snapshot,
@@ -138,11 +152,25 @@ def build_investment_decision_snapshot(
         policy=policy,
         now=now,
     )
-    scorecards = _rebuild_scorecards(snapshot)
-    records = _rebuild_records(snapshot, scorecards)
-    report = _rebuild_report(snapshot, scorecards)
+    proxy = build_semiconductor_cycle_proxy(
+        snapshot.financial_history,
+        snapshot.market_context,
+    )
+    warnings = tuple(
+        dict.fromkeys(
+            [
+                *snapshot.warnings,
+                f"semiconductor_cycle_proxy:{proxy.cycle_proxy_state}",
+                "semiconductor_cycle_proxy_industry_not_certified",
+            ]
+        )
+    )
+    working = replace(snapshot, warnings=warnings)
+    scorecards = _rebuild_scorecards(working, proxy)
+    records = _rebuild_records(working, scorecards)
+    report = _rebuild_report(working, scorecards, proxy)
     return replace(
-        snapshot,
+        working,
         scorecards=scorecards,
         decision_records=records,
         report_markdown=report,
