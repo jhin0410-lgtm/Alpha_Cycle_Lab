@@ -18,10 +18,10 @@ from alpha_cycle.intelligence.decision_scoring import (
     load_company_exposures,
 )
 from alpha_cycle.intelligence.fundamental_macro import (
-    FundamentalMacroCollector,
     FundamentalMacroSnapshot,
     write_fundamental_macro_snapshot,
 )
+from alpha_cycle.intelligence.fundamental_macro_documents import FundamentalMacroCollector
 from alpha_cycle.intelligence.market import (
     MarketIntelligenceCollector,
     MarketIntelligenceSnapshot,

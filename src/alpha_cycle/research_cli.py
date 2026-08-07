@@ -9,10 +9,8 @@ from datetime import date
 from pathlib import Path
 
 from alpha_cycle.data.research import RevisionPolicy
-from alpha_cycle.intelligence.fundamental_macro import (
-    FundamentalMacroCollector,
-    write_fundamental_macro_snapshot,
-)
+from alpha_cycle.intelligence.fundamental_macro import write_fundamental_macro_snapshot
+from alpha_cycle.intelligence.fundamental_macro_documents import FundamentalMacroCollector
 from alpha_cycle.providers.ecos import EcosReadOnlyClient, load_ecos_series_config
 from alpha_cycle.providers.opendart import (
     REPORT_PERIODS,
