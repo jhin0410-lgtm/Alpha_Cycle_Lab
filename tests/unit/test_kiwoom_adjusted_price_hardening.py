@@ -6,7 +6,7 @@ import importlib.util
 import runpy
 import sys
 from pathlib import Path
-from types import ModuleType, MethodType
+from types import MethodType, ModuleType
 from typing import Any
 
 import pytest
