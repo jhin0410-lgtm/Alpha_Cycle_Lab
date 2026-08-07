@@ -93,6 +93,7 @@ def annotate_catalyst_direction(
         category = str(raw.get("category", ""))
         receipt = str(raw.get("rcept_no", "")).strip()
         record = _document_record(document_evidence, receipt)
+        record_status = str(record.get("status", "not_selected")) if record is not None else "not_selected"
         body_available, truncated = _body_status(record)
         if body_available:
             if bool(raw.get("is_correction", False)):
@@ -117,6 +118,22 @@ def annotate_catalyst_direction(
                 else None
             )
             truncated_values.append(truncated)
+        elif record_status == "excluded_periodic":
+            status = "not_directional_periodic_report"
+            basis = "periodic_report_financial_evidence_path"
+            document_statuses.append(record_status)
+            text_hashes.append(None)
+            archive_hashes.append(None)
+            text_chars.append(None)
+            truncated_values.append(None)
+        elif record_status == "excluded_capacity":
+            status = "deferred_body_backlog"
+            basis = "bounded_body_collection_backlog"
+            document_statuses.append(record_status)
+            text_hashes.append(None)
+            archive_hashes.append(None)
+            text_chars.append(None)
+            truncated_values.append(None)
         else:
             if bool(raw.get("is_correction", False)):
                 status = "unresolved_correction_title_only"
@@ -125,9 +142,7 @@ def annotate_catalyst_direction(
             else:
                 status = "unresolved_title_only"
             basis = "filing_title_only"
-            document_statuses.append(
-                str(record.get("status", "not_selected")) if record is not None else "not_selected"
-            )
+            document_statuses.append(record_status)
             text_hashes.append(None)
             archive_hashes.append(None)
             text_chars.append(None)
@@ -150,10 +165,20 @@ def _direction_counts(catalysts: pd.DataFrame) -> dict[str, dict[str, int]]:
         ticker = str(raw.get("ticker", "")).zfill(6)
         values = counts.setdefault(
             ticker,
-            {"negative": 0, "unresolved_title": 0, "unresolved_body": 0},
+            {
+                "negative": 0,
+                "unresolved_title": 0,
+                "unresolved_body": 0,
+                "backlog": 0,
+                "non_directional": 0,
+            },
         )
         status = str(raw.get("direction_status", "unresolved_title_only"))
-        if status.startswith("negative_"):
+        if status == "deferred_body_backlog":
+            values["backlog"] += 1
+        elif status == "not_directional_periodic_report":
+            values["non_directional"] += 1
+        elif status.startswith("negative_"):
             values["negative"] += 1
         elif "body" in status:
             values["unresolved_body"] += 1
@@ -222,14 +247,19 @@ def apply_catalyst_evidence_policy(
     rows: list[dict[str, object]] = []
     unresolved_title: list[str] = []
     unresolved_body: list[str] = []
+    backlog_warnings: list[str] = []
     negative: list[str] = []
+    empty_counts = {
+        "negative": 0,
+        "unresolved_title": 0,
+        "unresolved_body": 0,
+        "backlog": 0,
+        "non_directional": 0,
+    }
     for raw in snapshot.scorecards.to_dict(orient="records"):
         row = {str(key): value for key, value in raw.items()}
         ticker = str(row["ticker"]).zfill(6)
-        values = counts.get(
-            ticker,
-            {"negative": 0, "unresolved_title": 0, "unresolved_body": 0},
-        )
+        values = counts.get(ticker, empty_counts)
         positives = [
             item
             for item in _decode(row.get("positive_evidence"))
@@ -256,7 +286,8 @@ def apply_catalyst_evidence_policy(
                 row["catalyst_evidence_status"] = "unresolved_mixed_body_title"
                 opposing.append(
                     f"중요 공시 원문 {values['unresolved_body']}건 확보, "
-                    f"본문 미확보 {values['unresolved_title']}건; 방향 판정 미완료"
+                    f"실제 원문 수집 실패·미확인 {values['unresolved_title']}건; "
+                    "방향 판정 미완료"
                 )
                 unresolved_body.append(ticker)
                 unresolved_title.append(ticker)
@@ -264,13 +295,26 @@ def apply_catalyst_evidence_policy(
                 row["catalyst_evidence_status"] = "unresolved_title_only"
                 opposing.append(
                     f"중요 공시 {values['unresolved_title']}건 방향 미평가: "
-                    "제목만으로 긍정 촉매 판단 불가"
+                    "본문 증거 미확보로 긍정 촉매 판단 불가"
                 )
                 unresolved_title.append(ticker)
+        elif values["backlog"]:
+            row["catalyst_score"] = None
+            row["catalyst_evidence_status"] = "bounded_body_backlog_only"
+            opposing.append(
+                f"원문 수집 상한 밖 중요 공시 {values['backlog']}건 존재; "
+                "완전한 촉매 방향 인증 아님"
+            )
         else:
             row["catalyst_score"] = None
             row["catalyst_evidence_status"] = "no_directional_catalyst_evidence"
             opposing.append("방향성이 검증된 촉매 근거 없음")
+        if values["backlog"]:
+            opposing.append(
+                f"원문 수집 상한으로 과거 중요 공시 {values['backlog']}건은 "
+                "비인증 backlog로 유지"
+            )
+            backlog_warnings.append(f"{ticker}={values['backlog']}")
         row["positive_evidence"] = _encode(positives)
         row["opposing_evidence"] = _encode(opposing)
         _recompute(row, policy)
@@ -286,6 +330,11 @@ def apply_catalyst_evidence_policy(
         warnings.append(
             "catalyst_direction_unresolved_body_available:"
             + ",".join(sorted(set(unresolved_body)))
+        )
+    if backlog_warnings:
+        warnings.append(
+            "catalyst_document_backlog_bounded:"
+            + ",".join(sorted(set(backlog_warnings)))
         )
     if negative:
         warnings.append("negative_operational_risk_title_evidence:" + ",".join(sorted(set(negative))))
@@ -309,6 +358,7 @@ def gate_catalyst_playbook(scorecards: pd.DataFrame) -> pd.DataFrame:
             "unresolved_title_only",
             "unresolved_body_available",
             "unresolved_mixed_body_title",
+            "bounded_body_backlog_only",
             "negative_title_evidence",
             "no_directional_catalyst_evidence",
         }:
