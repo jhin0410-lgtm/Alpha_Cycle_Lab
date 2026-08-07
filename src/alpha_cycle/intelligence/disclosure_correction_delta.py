@@ -63,7 +63,11 @@ def _correction_section(text: object, final_heading: re.Pattern[str]) -> str | N
     marker = re.search(r"정정\s*항목\s+정정\s*전\s+정정\s*후", body)
     if marker is None:
         return None
-    final_matches = [match for match in final_heading.finditer(body) if match.start() > marker.end()]
+    final_matches = [
+        match
+        for match in final_heading.finditer(body)
+        if match.start() > marker.end()
+    ]
     end = final_matches[-1].start() if final_matches else len(body)
     if end <= marker.end():
         return None
@@ -221,10 +225,13 @@ def verify_correction_delta(
             "status": "current_body_unavailable",
         }
 
-    metrics = dict(current_metrics) if current_metrics is not None else parse_disclosure_body_metrics(
-        current_record.get("report_name", catalyst.get("report_name", "")),
-        current_record.get("text", ""),
-    )
+    if current_metrics is not None:
+        metrics = dict(current_metrics)
+    else:
+        metrics = parse_disclosure_body_metrics(
+            current_record.get("report_name", catalyst.get("report_name", "")),
+            current_record.get("text", ""),
+        )
     if metrics.get("status") != "verified":
         return {
             "schema_version": CORRECTION_DELTA_SCHEMA_VERSION,
