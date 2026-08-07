@@ -94,7 +94,15 @@ class ExpectationIntelligenceCollector:
         self,
         symbols: list[str] | tuple[str, ...],
     ) -> ExpectationIntelligenceSnapshot:
-        normalized = tuple(sorted(set(str(value).strip() for value in symbols if str(value).strip())))
+        normalized = tuple(
+            sorted(
+                set(
+                    str(value).strip()
+                    for value in symbols
+                    if str(value).strip()
+                )
+            )
+        )
         if not normalized:
             raise ValueError("At least one expectation symbol is required")
         records = tuple(
