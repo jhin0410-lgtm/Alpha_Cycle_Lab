@@ -29,6 +29,7 @@ def _write_pair(
     evaluation_date: date,
     market_id: str,
     symbols: list[str] | None = None,
+    adjusted: object = True,
 ) -> tuple[Path, Path]:
     market = root / "market-intelligence" / market_name
     research = root / "research-intelligence" / research_name
@@ -41,7 +42,7 @@ def _write_pair(
                 "captured_at": captured_at.isoformat(),
                 "symbols": symbols or ["000660", "005930", "005935"],
                 "interval": "1d",
-                "adjusted": False,
+                "adjusted": adjusted,
             }
         ),
         encoding="utf-8",
@@ -82,6 +83,53 @@ def test_find_resume_pair_accepts_linked_same_day_snapshot(tmp_path: Path) -> No
     assert pair.research_directory == research
     assert pair.source_evaluation_date == date(2026, 8, 1)
     assert pair.age == timedelta(hours=2)
+    assert pair.market_manifest["adjusted"] is True
+
+
+def test_find_resume_pair_rejects_unadjusted_snapshot(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    _write_pair(
+        tmp_path,
+        market_name="20260801T100000000000Z__aaaaaaaaaaaa",
+        research_name="20260801T103000000000Z__bbbbbbbbbbbb",
+        captured_at=now - timedelta(hours=2),
+        evaluation_date=date(2026, 8, 1),
+        market_id="a" * 64,
+        adjusted=False,
+    )
+
+    assert (
+        resume.find_resume_pair(
+            tmp_path,
+            evaluation_date=date(2026, 8, 1),
+            now=now,
+            max_age_hours=24,
+        )
+        is None
+    )
+
+
+def test_find_resume_pair_rejects_non_boolean_adjustment_basis(tmp_path: Path) -> None:
+    now = datetime(2026, 8, 1, 12, tzinfo=UTC)
+    _write_pair(
+        tmp_path,
+        market_name="20260801T100000000000Z__aaaaaaaaaaaa",
+        research_name="20260801T103000000000Z__bbbbbbbbbbbb",
+        captured_at=now - timedelta(hours=2),
+        evaluation_date=date(2026, 8, 1),
+        market_id="a" * 64,
+        adjusted="true",
+    )
+
+    assert (
+        resume.find_resume_pair(
+            tmp_path,
+            evaluation_date=date(2026, 8, 1),
+            now=now,
+            max_age_hours=24,
+        )
+        is None
+    )
 
 
 def test_find_resume_pair_accepts_cross_midnight_snapshot(tmp_path: Path) -> None:

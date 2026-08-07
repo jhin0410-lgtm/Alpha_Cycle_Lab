@@ -130,7 +130,7 @@ def find_resume_pair(
     now: datetime,
     max_age_hours: float,
 ) -> ResumePair | None:
-    """Find the newest linked, fresh pair without an intervening completed session."""
+    """Find the newest linked, fresh, adjusted pair without a completed session gap."""
 
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("Resume clock must be timezone-aware")
@@ -185,7 +185,7 @@ def find_resume_pair(
             continue
         if str(market_manifest.get("interval", "")) != "1d":
             continue
-        if bool(market_manifest.get("adjusted", True)):
+        if market_manifest.get("adjusted") is not True:
             continue
 
         return ResumePair(
@@ -212,8 +212,8 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
         raise PipelineStageError(
             "resume_validation",
             ValueError(
-                "No linked market/research snapshot pair is fresh enough and free of "
-                "an intervening completed weekday session within "
+                "No linked adjusted market/research snapshot pair is fresh enough and "
+                "free of an intervening completed weekday session within "
                 f"{args.max_market_age_hours:g} hours"
             ),
         )
