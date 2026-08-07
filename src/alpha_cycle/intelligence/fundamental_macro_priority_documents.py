@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections import Counter
 from copy import deepcopy
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -229,9 +229,7 @@ def _priority_selection_plan(
         selected = selected.reindex(columns=normalized.columns)
 
     body_target_reserve = _support_reserve(max_support_documents_per_ticker)
-    heuristic_support_budget = (
-        max_support_documents_per_ticker - body_target_reserve
-    )
+    heuristic_support_budget = max_support_documents_per_ticker - body_target_reserve
     support, supporters, support_warnings = _correction_support_plan(
         selected,
         normalized_events,
@@ -352,7 +350,12 @@ def _body_target_support_plan(
         parent_receipt = receipts[0]
         existing = documents.get(parent_receipt)
         if existing is not None and existing.get("status") == "collected":
-            supporters = list(existing.get("supports_body_target_receipts", []))
+            raw_supporters = existing.get("supports_body_target_receipts", [])
+            supporters = (
+                [str(item) for item in raw_supporters]
+                if isinstance(raw_supporters, list)
+                else []
+            )
             if current_receipt not in supporters:
                 supporters.append(current_receipt)
             existing["supports_body_target_receipts"] = supporters
@@ -435,8 +438,8 @@ class FundamentalMacroCollector(BaseFundamentalMacroCollector):
         pending_status: str,
         failure_status: str,
         warning_prefix: str,
-        captured_at: object,
-    ) -> object:
+        captured_at: datetime,
+    ) -> datetime:
         latest = captured_at
         for row_value in frame.to_dict(orient="records"):
             row = {str(key): value for key, value in row_value.items()}
@@ -517,32 +520,28 @@ class FundamentalMacroCollector(BaseFundamentalMacroCollector):
         warnings = [*base.warnings, *selection_warnings]
         captured_at = base.captured_at
 
-        captured_at = cast(
-            type(base.captured_at),
-            self._download_frame(
-                selected,
-                documents,
-                warnings,
-                pending_status="selected_pending",
-                failure_status="unavailable",
-                warning_prefix="disclosure_document_unavailable",
-                captured_at=captured_at,
-            ),
+        captured_at = self._download_frame(
+            selected,
+            documents,
+            warnings,
+            pending_status="selected_pending",
+            failure_status="unavailable",
+            warning_prefix="disclosure_document_unavailable",
+            captured_at=captured_at,
         )
-        captured_at = cast(
-            type(base.captured_at),
-            self._download_frame(
-                support,
-                documents,
-                warnings,
-                pending_status="selected_support_pending",
-                failure_status="support_unavailable",
-                warning_prefix="disclosure_correction_support_unavailable",
-                captured_at=captured_at,
-            ),
+        captured_at = self._download_frame(
+            support,
+            documents,
+            warnings,
+            pending_status="selected_support_pending",
+            failure_status="support_unavailable",
+            warning_prefix="disclosure_correction_support_unavailable",
+            captured_at=captured_at,
         )
 
-        support_receipts = set(support["rcept_no"].astype(str)) if not support.empty else set()
+        support_receipts = (
+            set(support["rcept_no"].astype(str)) if not support.empty else set()
+        )
         body_target_support, body_target_warnings = _body_target_support_plan(
             selected,
             events,
@@ -551,17 +550,14 @@ class FundamentalMacroCollector(BaseFundamentalMacroCollector):
             existing_support_receipts=support_receipts,
         )
         warnings.extend(body_target_warnings)
-        captured_at = cast(
-            type(base.captured_at),
-            self._download_frame(
-                body_target_support,
-                documents,
-                warnings,
-                pending_status="selected_body_target_support_pending",
-                failure_status="body_target_support_unavailable",
-                warning_prefix="disclosure_body_target_support_unavailable",
-                captured_at=captured_at,
-            ),
+        captured_at = self._download_frame(
+            body_target_support,
+            documents,
+            warnings,
+            pending_status="selected_body_target_support_pending",
+            failure_status="body_target_support_unavailable",
+            warning_prefix="disclosure_body_target_support_unavailable",
+            captured_at=captured_at,
         )
 
         pending_statuses = {
