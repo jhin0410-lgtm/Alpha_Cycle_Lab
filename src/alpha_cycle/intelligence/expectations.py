@@ -42,6 +42,15 @@ def _periods(record: KisEstimatePerformEvidence) -> list[str]:
     return periods
 
 
+def _output_row_count(payload: object, name: str) -> int:
+    if not isinstance(payload, dict):
+        raise ValueError("Expectation payload must be an object")
+    value = payload.get(name)
+    if not isinstance(value, list):
+        raise ValueError(f"Expectation {name} must be an array")
+    return len(value)
+
+
 @dataclass(frozen=True)
 class ExpectationIntelligenceSnapshot:
     captured_at: datetime
@@ -132,9 +141,9 @@ def _structure_rows(snapshot: ExpectationIntelligenceSnapshot) -> list[dict[str,
                 "source_scope": record.source_scope,
                 "output1_shape": "array" if isinstance(output1, list) else "object",
                 "output1_rows": len(output1) if isinstance(output1, list) else 1,
-                "output2_rows": len(payload.get("output2", [])),
-                "output3_rows": len(payload.get("output3", [])),
-                "output4_rows": len(payload.get("output4", [])),
+                "output2_rows": _output_row_count(payload, "output2"),
+                "output3_rows": _output_row_count(payload, "output3"),
+                "output4_rows": _output_row_count(payload, "output4"),
                 "periods": json.dumps(_periods(record), ensure_ascii=False),
                 "raw_response_sha256": record.raw_response_sha256,
                 "semantic_status": "raw_structure_only",
