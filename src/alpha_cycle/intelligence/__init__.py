@@ -21,7 +21,9 @@ from alpha_cycle.intelligence.fundamental_macro import (
     FundamentalMacroSnapshot,
     write_fundamental_macro_snapshot,
 )
-from alpha_cycle.intelligence.fundamental_macro_documents import FundamentalMacroCollector
+from alpha_cycle.intelligence.fundamental_macro_priority_documents import (
+    FundamentalMacroCollector,
+)
 from alpha_cycle.intelligence.market import (
     MarketIntelligenceCollector,
     MarketIntelligenceSnapshot,
