@@ -27,6 +27,10 @@ _BASE_COLUMNS = (
     "body_metrics_type",
     "body_metrics_reason",
     "correction_delta_status",
+    "delta_parent_rcept_no",
+    "parent_resolution_source",
+    "parent_target_submission_date",
+    "heuristic_parent_rcept_no",
     "verified_field_count",
     "changed_field_count",
     "mismatch_fields",
@@ -89,10 +93,17 @@ def _body_metrics_reason(value: object) -> str:
     return str(reason).strip() if reason is not None else ""
 
 
-def _delta_detail(value: object) -> tuple[int | None, int | None, str]:
+def _optional_text(payload: Mapping[str, object], key: str) -> str:
+    value = payload.get(key)
+    return str(value).strip() if value is not None else ""
+
+
+def _delta_detail(
+    value: object,
+) -> tuple[int | None, int | None, str, str, str, str, str]:
     payload = _json_mapping(value)
     if payload is None:
-        return None, None, ""
+        return None, None, "", "", "", "", ""
     verified = payload.get("verified_field_count")
     changed = payload.get("changed_field_count")
     verified_count = (
@@ -121,7 +132,15 @@ def _delta_detail(value: object) -> tuple[int | None, int | None, str]:
                 if after_match is False:
                     problems.append("after!=current")
                 mismatches.append(f"{field}({'/'.join(problems)})")
-    return verified_count, changed_count, ";".join(mismatches)
+    return (
+        verified_count,
+        changed_count,
+        ";".join(mismatches),
+        _optional_text(payload, "parent_rcept_no"),
+        _optional_text(payload, "parent_resolution_source"),
+        _optional_text(payload, "parent_target_submission_date"),
+        _optional_text(payload, "heuristic_parent_rcept_no"),
+    )
 
 
 def load_correction_delta_diagnostics(
@@ -224,6 +243,10 @@ def load_correction_delta_diagnostics(
     result["verified_field_count"] = details.map(lambda item: item[0])
     result["changed_field_count"] = details.map(lambda item: item[1])
     result["mismatch_fields"] = details.map(lambda item: item[2])
+    result["delta_parent_rcept_no"] = details.map(lambda item: item[3])
+    result["parent_resolution_source"] = details.map(lambda item: item[4])
+    result["parent_target_submission_date"] = details.map(lambda item: item[5])
+    result["heuristic_parent_rcept_no"] = details.map(lambda item: item[6])
     if "receipt_date" not in result.columns:
         result["receipt_date"] = ""
     available_columns = [column for column in _BASE_COLUMNS if column in result.columns]
