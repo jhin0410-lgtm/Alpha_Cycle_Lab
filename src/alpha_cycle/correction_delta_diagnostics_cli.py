@@ -86,8 +86,16 @@ def _delta_detail(value: object) -> tuple[int | None, int | None, str]:
         return None, None, ""
     verified = payload.get("verified_field_count")
     changed = payload.get("changed_field_count")
-    verified_count = verified if isinstance(verified, int) and not isinstance(verified, bool) else None
-    changed_count = changed if isinstance(changed, int) and not isinstance(changed, bool) else None
+    verified_count = (
+        verified
+        if isinstance(verified, int) and not isinstance(verified, bool)
+        else None
+    )
+    changed_count = (
+        changed
+        if isinstance(changed, int) and not isinstance(changed, bool)
+        else None
+    )
     fields = payload.get("fields")
     mismatches: list[str] = []
     if isinstance(fields, list):
@@ -194,9 +202,11 @@ def load_correction_delta_diagnostics(
         ]
     ).merge(lineage, on=["ticker", "rcept_no"], how="left", validate="one_to_one")
 
-    details = result.get("correction_delta_json", pd.Series(index=result.index, dtype="string")).map(
-        _delta_detail
+    delta_json = result.get(
+        "correction_delta_json",
+        pd.Series(index=result.index, dtype="string"),
     )
+    details = delta_json.map(_delta_detail)
     result["verified_field_count"] = details.map(lambda item: item[0])
     result["changed_field_count"] = details.map(lambda item: item[1])
     result["mismatch_fields"] = details.map(lambda item: item[2])
@@ -256,7 +266,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Disclosure events: {events_path}")
         print(f"Correction catalysts: {len(frame)}")
         print("\nStatus summary")
-        print(_render(summary, args.format) if not summary.empty else "No correction catalysts found.")
+        if summary.empty:
+            print("No correction catalysts found.")
+        else:
+            print(_render(summary, args.format))
         if not frame.empty:
             print("\nCorrection details")
             print(_render(frame, args.format))
