@@ -7,13 +7,12 @@ import json
 import pandas as pd
 
 from alpha_cycle.intelligence.catalyst_evidence_policy import (
-    annotate_catalyst_direction,
     _direction_counts,
+    annotate_catalyst_direction,
 )
 from alpha_cycle.intelligence.disclosure_body_metrics import (
     parse_disclosure_body_metrics,
 )
-
 
 EARNINGS_CORRECTION_BODY = """
 정정신고(보고)
