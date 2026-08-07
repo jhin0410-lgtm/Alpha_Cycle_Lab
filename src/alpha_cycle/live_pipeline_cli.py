@@ -204,7 +204,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
             DEFAULT_MARKET_SYMBOLS,
             interval="1d",
             count=args.candle_count,
-            adjusted=False,
+            adjusted=True,
         ),
     )
     market_files = _run_stage(
