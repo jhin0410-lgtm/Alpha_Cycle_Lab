@@ -10,6 +10,9 @@ from typing import Any
 from alpha_cycle.intelligence.disclosure_body_metrics import (
     parse_disclosure_body_metrics,
 )
+from alpha_cycle.intelligence.disclosure_corporate_action_delta import (
+    corporate_action_delta_rows,
+)
 from alpha_cycle.intelligence.disclosure_correction_parent import (
     resolve_correction_parent_from_body,
 )
@@ -19,6 +22,23 @@ from alpha_cycle.intelligence.disclosure_grouped_correction import (
 
 CORRECTION_DELTA_SCHEMA_VERSION = 1
 _NUMBER = r"(?:-?\d[\d,]*(?:\.\d+)?|-)"
+_INTEGER_FIELDS = frozenset(
+    {
+        "investment_amount_krw",
+        "facility_funding_krw",
+        "issue_price_krw",
+        "reference_price_krw",
+        "dr_total_krw",
+        "share_issue_price_krw",
+    }
+)
+_CORPORATE_ACTION_TYPES = frozenset(
+    {
+        "equity_issuance",
+        "depositary_receipt_issuance",
+        "overseas_listing",
+    }
+)
 
 
 def _valid_sha256(value: object) -> bool:
@@ -57,6 +77,8 @@ def _decimal_equal(left: object, right: object) -> bool:
 
 
 def _integer_equal(left: object, right: object) -> bool:
+    if left is None or right is None:
+        return left is None and right is None
     try:
         return int(str(left).replace(",", "")) == int(str(right).replace(",", ""))
     except ValueError:
@@ -155,19 +177,20 @@ def _capex_delta_rows(text: object) -> list[dict[str, object]]:
 
 
 def _metric_value(metrics: Mapping[str, object], field: str) -> object:
-    if str(metrics.get("type", "")) == "earnings_preliminary":
+    metric_type = str(metrics.get("type", ""))
+    if metric_type == "earnings_preliminary":
         rows = metrics.get("metrics")
         if not isinstance(rows, Mapping):
             return None
         row = rows.get(field)
         return row.get("current") if isinstance(row, Mapping) else None
-    if str(metrics.get("type", "")) == "facility_investment":
+    if metric_type == "facility_investment" or metric_type in _CORPORATE_ACTION_TYPES:
         return metrics.get(field)
     return None
 
 
 def _value_equal(metric_type: str, field: str, left: object, right: object) -> bool:
-    if metric_type == "facility_investment" and field == "investment_amount_krw":
+    if field in _INTEGER_FIELDS:
         return _integer_equal(left, right)
     return _decimal_equal(left, right)
 
@@ -215,12 +238,37 @@ def _heuristic_parent_receipt(
     return str(current_record.get("correction_parent_rcept_no", "") or "").strip()
 
 
+def _correction_chain_order(
+    catalyst: Mapping[Any, object],
+    current_record: Mapping[str, object],
+) -> int | None:
+    for raw in (
+        catalyst.get("correction_chain_order"),
+        current_record.get("correction_chain_order"),
+    ):
+        try:
+            return int(str(raw))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 def _parent_resolution(
     catalyst: Mapping[Any, object],
     current_record: Mapping[str, object],
     document_evidence: Mapping[str, object],
 ) -> dict[str, object]:
     heuristic_parent = _heuristic_parent_receipt(catalyst, current_record)
+    chain_order = _correction_chain_order(catalyst, current_record)
+    if heuristic_parent and chain_order is not None and chain_order > 1:
+        return {
+            "status": "resolved",
+            "resolution_source": "correction_chain_parent",
+            "target_submission_date": None,
+            "parent_rcept_no": heuristic_parent,
+            "heuristic_parent_rcept_no": heuristic_parent,
+        }
+
     body_resolution = resolve_correction_parent_from_body(
         current_record,
         document_evidence,
@@ -316,6 +364,8 @@ def verify_correction_delta(
         rows = _earnings_delta_rows(current_record.get("text", ""))
     elif metric_type == "facility_investment":
         rows = _capex_delta_rows(current_record.get("text", ""))
+    elif metric_type in _CORPORATE_ACTION_TYPES:
+        rows = corporate_action_delta_rows(metric_type, current_record.get("text", ""))
     else:
         return {
             "schema_version": CORRECTION_DELTA_SCHEMA_VERSION,
@@ -350,7 +400,7 @@ def verify_correction_delta(
     assert parent_record is not None
 
     resolution_source = str(resolution.get("resolution_source", ""))
-    if resolution_source == "window_heuristic" and not _parent_binding_valid(
+    if resolution_source in {"window_heuristic", "correction_chain_parent"} and not _parent_binding_valid(
         current_receipt,
         current_record,
         parent_receipt,
@@ -405,9 +455,9 @@ def verify_correction_delta(
         before = row.get("before")
         after = row.get("after")
         current_value = _metric_value(metrics, field)
-        parent_value = _metric_value(parent_metrics, field)
+        parent_metric_value = _metric_value(parent_metrics, field)
         after_matches = _value_equal(metric_type, field, after, current_value)
-        before_matches = _value_equal(metric_type, field, before, parent_value)
+        before_matches = _value_equal(metric_type, field, before, parent_metric_value)
         changed = bool(row.get("changed", False))
         changed_count += int(changed)
         mismatch = mismatch or not after_matches or not before_matches
@@ -416,7 +466,7 @@ def verify_correction_delta(
                 "field": field,
                 "before": before,
                 "after": after,
-                "parent_current": parent_value,
+                "parent_current": parent_metric_value,
                 "current_final": current_value,
                 "changed": changed,
                 "before_matches_parent": before_matches,
