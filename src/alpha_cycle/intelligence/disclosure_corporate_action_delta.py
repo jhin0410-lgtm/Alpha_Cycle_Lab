@@ -138,7 +138,7 @@ def _dr_rows(text: object) -> list[dict[str, object]]:
         (
             "share_issue_price_krw",
             r"3\.\s*신주DR의\s*경우\s*신주\s*발행가액\s*\(원\).*?보통주식",
-            r"4\.\s*1\s*DR당\s*발행가액",
+            r"(?:4\.\s*1\s*DR당\s*발행가액|7\.\s*자금조달의\s*목적)",
         ),
         (
             "facility_funding_krw",
