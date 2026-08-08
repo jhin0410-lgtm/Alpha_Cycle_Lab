@@ -110,7 +110,7 @@ def _window_summary(ticker: str, rows: list[dict[str, str]], window: int) -> Flo
     latest_price = _price_abs(latest)
     oldest_price = _price_abs(oldest)
     price_return_pct: float | None = None
-    if latest_price is not None and oldest_price not in (None, 0):
+    if latest_price is not None and oldest_price is not None and oldest_price != 0:
         price_return_pct = (latest_price / oldest_price - 1.0) * 100.0
 
     volume = _sum_present(selected, "cumulative_volume")
@@ -119,7 +119,11 @@ def _window_summary(ticker: str, rows: list[dict[str, str]], window: int) -> Flo
     institution = _sum_present(selected, "institution_net_buy_shares")
     pension = _sum_present(selected, "pension_net_buy_shares")
     combined = foreign + institution if foreign is not None and institution is not None else None
-    ratio = combined / volume if combined is not None and volume not in (None, 0) else None
+    ratio = (
+        combined / volume
+        if combined is not None and volume is not None and volume != 0
+        else None
+    )
     state = (
         _descriptive_state(price_return_pct, combined)
         if len(selected) >= window
