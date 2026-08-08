@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
@@ -22,6 +23,21 @@ _WRITE_ATTRIBUTE = "write_investment_decision_snapshot"
 _EXECUTE_ATTRIBUTE = "_execute"
 _STATUS_ATTRIBUTE = "_write_status"
 _GATED_RERUN_COMMAND = "python -m alpha_cycle.live_pipeline_provenance_cli"
+
+
+def _rewrite_status_ascii_safe(
+    destination: Path,
+    payload: Mapping[str, object],
+) -> Path:
+    """Keep the latest-run pointer safe for Windows PowerShell 5.1 default decoding."""
+
+    temporary = destination.with_name(f".{destination.name}.ascii.tmp")
+    temporary.write_text(
+        json.dumps(dict(payload), ensure_ascii=True, indent=2, sort_keys=True),
+        encoding="ascii",
+    )
+    temporary.replace(destination)
+    return destination
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,11 +92,14 @@ def main(argv: list[str] | None = None) -> int:
             output_root: Path,
             payload: Mapping[str, object],
         ) -> Path:
+            mutable_payload: Mapping[str, object] = payload
             if isinstance(payload, dict):
                 payload["provenance_gate_enabled"] = True
                 if "rerun_command" in payload:
                     payload["rerun_command"] = _GATED_RERUN_COMMAND
-            return cast(Path, original_status_writer(output_root, payload))
+                mutable_payload = payload
+            destination = cast(Path, original_status_writer(output_root, mutable_payload))
+            return _rewrite_status_ascii_safe(destination, mutable_payload)
 
         setattr(live, _BUILD_ATTRIBUTE, gated_build)
         setattr(live, _WRITE_ATTRIBUTE, gated_write)

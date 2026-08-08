@@ -6,6 +6,10 @@ import re
 from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 
+from alpha_cycle.intelligence.disclosure_corporate_action_metrics import (
+    parse_corporate_action_body_metrics,
+)
+
 BODY_METRICS_SCHEMA_VERSION = 1
 
 _EARNINGS_HEADING = re.compile(
@@ -304,6 +308,9 @@ def parse_disclosure_body_metrics(report_name: object, text: object) -> dict[str
 
     report = re.sub(r"\s+", "", str(report_name)).casefold()
     body = str(text)
+    corporate = parse_corporate_action_body_metrics(report_name, body)
+    if corporate is not None:
+        return corporate
     if "연결재무제표기준영업(잠정)실적(공정공시)" in report:
         return _parse_earnings(body)
     if "신규시설투자등" in report or "신규시설투자" in report:
