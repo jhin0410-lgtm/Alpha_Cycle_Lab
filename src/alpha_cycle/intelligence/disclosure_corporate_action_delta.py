@@ -20,15 +20,18 @@ def _canonical_number(value: str) -> str | None:
 
 
 def _correction_summary(text: object, final_heading: re.Pattern[str]) -> str | None:
-    body = str(text)
-    marker = re.search(r"정정\s*(?:사항|항목).*?정정\s*전.*?정정\s*후", body, re.DOTALL)
+    body = re.sub(r"\s+", " ", str(text)).strip()
+    marker = re.search(
+        r"정\s*정\s*(?:사항|항\s*목).*?정\s*정\s*전.*?정\s*정\s*후",
+        body,
+    )
     if marker is None:
         return None
     headings = [match for match in final_heading.finditer(body) if match.start() > marker.end()]
     end = headings[-1].start() if headings else len(body)
     if end <= marker.end():
         return None
-    return re.sub(r"\s+", " ", body[marker.end() : end]).strip()
+    return body[marker.end() : end].strip()
 
 
 def _between(section: str, start: str, end: str | None) -> str | None:
