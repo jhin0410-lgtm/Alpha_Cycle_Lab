@@ -1,18 +1,13 @@
-"""Non-scoring diagnostics for the latest Kiwoom investor-flow export.
-
-This module consumes the immutable OPT10059 CSV artifact. Provider-native signed
-prices remain untouched in the source CSV; derived price calculations use absolute
-price because Kiwoom encodes direction in the sign of current-price fields.
-"""
+"""Non-scoring diagnostics for the latest Kiwoom investor-flow export."""
 
 from __future__ import annotations
 
 import argparse
 import csv
 import json
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
 
 DEFAULT_POINTER = Path(
     "data/private/live-research/kiwoom-openapi-plus-investor-flow/"
@@ -91,9 +86,7 @@ def _sum_present(rows: Iterable[dict[str, str]], key: str) -> int | None:
 
 def _price_abs(row: dict[str, str]) -> int | None:
     value = _integer(row.get("current_price", ""))
-    if value is None:
-        return None
-    return abs(value)
+    return None if value is None else abs(value)
 
 
 def _descriptive_state(price_return_pct: float | None, combined_flow: int | None) -> str:
@@ -110,11 +103,7 @@ def _descriptive_state(price_return_pct: float | None, combined_flow: int | None
     return "mixed_or_flat"
 
 
-def _window_summary(
-    ticker: str,
-    rows: list[dict[str, str]],
-    window: int,
-) -> FlowWindowSummary:
+def _window_summary(ticker: str, rows: list[dict[str, str]], window: int) -> FlowWindowSummary:
     selected = rows[:window]
     latest = selected[0]
     oldest = selected[-1]
@@ -129,13 +118,8 @@ def _window_summary(
     foreign = _sum_present(selected, "foreign_net_buy_shares")
     institution = _sum_present(selected, "institution_net_buy_shares")
     pension = _sum_present(selected, "pension_net_buy_shares")
-    combined: int | None = None
-    if foreign is not None and institution is not None:
-        combined = foreign + institution
-    ratio: float | None = None
-    if combined is not None and volume not in (None, 0):
-        ratio = combined / volume
-
+    combined = foreign + institution if foreign is not None and institution is not None else None
+    ratio = combined / volume if combined is not None and volume not in (None, 0) else None
     state = (
         _descriptive_state(price_return_pct, combined)
         if len(selected) >= window
@@ -170,9 +154,6 @@ def _row_sum(row: dict[str, str], keys: tuple[str, ...]) -> int | None:
 
 def _ticker_diagnostics(ticker: str, rows: list[dict[str, str]]) -> TickerDiagnostics:
     dates = [row.get("date", "") for row in rows]
-    descending = dates == sorted(dates, reverse=True)
-    positive_price_rows = sum(1 for row in rows if (_price_abs(row) or 0) > 0)
-
     market_residuals: list[int] = []
     institution_residuals: list[int] = []
     institution_parts = (
@@ -198,7 +179,6 @@ def _ticker_diagnostics(ticker: str, rows: list[dict[str, str]]) -> TickerDiagno
         )
         if market_total is not None:
             market_residuals.append(market_total)
-
         institution = _integer(row.get("institution_net_buy_shares", ""))
         parts = _row_sum(row, institution_parts)
         if institution is not None and parts is not None:
@@ -207,8 +187,8 @@ def _ticker_diagnostics(ticker: str, rows: list[dict[str, str]]) -> TickerDiagno
     return TickerDiagnostics(
         ticker=ticker,
         row_count=len(rows),
-        date_order_descending=descending,
-        positive_normalized_price_rows=positive_price_rows,
+        date_order_descending=dates == sorted(dates, reverse=True),
+        positive_normalized_price_rows=sum(1 for row in rows if (_price_abs(row) or 0) > 0),
         comparable_market_balance_rows=len(market_residuals),
         exact_market_balance_rows=sum(value == 0 for value in market_residuals),
         max_abs_market_balance_residual_shares=(
@@ -234,7 +214,7 @@ def _read_json(path: Path) -> dict[str, object]:
 
 
 def _request_contract_status(manifest: dict[str, object]) -> str:
-    expected = {
+    expected: dict[str, object] = {
         "amount_quantity_type": "2",
         "trade_type": "0",
         "unit_type": "1",
@@ -266,9 +246,8 @@ def build_report(pointer_path: Path = DEFAULT_POINTER) -> FlowDiagnosticsReport:
     grouped: dict[str, list[dict[str, str]]] = {}
     for row in rows:
         ticker = row.get("ticker", "").strip()
-        if not ticker:
-            continue
-        grouped.setdefault(ticker, []).append(row)
+        if ticker:
+            grouped.setdefault(ticker, []).append(row)
     if not grouped:
         raise ValueError("investor-flow CSV has no ticker rows")
 
@@ -276,8 +255,7 @@ def build_report(pointer_path: Path = DEFAULT_POINTER) -> FlowDiagnosticsReport:
     windows: list[FlowWindowSummary] = []
     for ticker, ticker_rows in grouped.items():
         diagnostics.append(_ticker_diagnostics(ticker, ticker_rows))
-        for window in WINDOWS:
-            windows.append(_window_summary(ticker, ticker_rows, window))
+        windows.extend(_window_summary(ticker, ticker_rows, window) for window in WINDOWS)
 
     return FlowDiagnosticsReport(
         status="completed",
@@ -309,14 +287,11 @@ def _print_report(report: FlowDiagnosticsReport) -> None:
             f"market_balance_max_abs={diag.max_abs_market_balance_residual_shares} "
             f"institution_breakdown_exact={diag.exact_institution_breakdown_rows}/"
             f"{diag.comparable_institution_breakdown_rows} "
-            f"institution_breakdown_max_abs="
-            f"{diag.max_abs_institution_breakdown_residual_shares}"
+            f"institution_breakdown_max_abs={diag.max_abs_institution_breakdown_residual_shares}"
         )
     print()
     for row in report.windows:
-        return_text = (
-            "n/a" if row.price_return_pct is None else f"{row.price_return_pct:.2f}%"
-        )
+        return_text = "n/a" if row.price_return_pct is None else f"{row.price_return_pct:.2f}%"
         ratio_text = (
             "n/a"
             if row.foreign_institution_volume_ratio is None
