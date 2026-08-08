@@ -90,7 +90,6 @@ class InvestorFlowEvidence:
         )
 
 
-
 def _integer(raw: object) -> int | None:
     text = str(raw or "").strip().replace(",", "")
     if not text:
@@ -104,7 +103,6 @@ def _integer(raw: object) -> int | None:
             return None
 
 
-
 def _sum_present(rows: Iterable[dict[str, str]], key: str) -> int | None:
     values = [_integer(row.get(key, "")) for row in rows]
     if any(value is None for value in values):
@@ -112,11 +110,9 @@ def _sum_present(rows: Iterable[dict[str, str]], key: str) -> int | None:
     return sum(value for value in values if value is not None)
 
 
-
 def _price_abs(row: dict[str, str]) -> int | None:
     value = _integer(row.get("current_price", ""))
     return None if value is None else abs(value)
-
 
 
 def _descriptive_state(price_return_pct: float | None, combined_flow: int | None) -> str:
@@ -131,7 +127,6 @@ def _descriptive_state(price_return_pct: float | None, combined_flow: int | None
     if price_return_pct > 0 and combined_flow < 0:
         return "selling_divergence"
     return "mixed_or_flat"
-
 
 
 def _window_summary(
@@ -207,13 +202,11 @@ def _window_summary(
     )
 
 
-
 def _row_sum(row: dict[str, str], keys: tuple[str, ...]) -> int | None:
     values = [_integer(row.get(key, "")) for key in keys]
     if any(value is None for value in values):
         return None
     return sum(value for value in values if value is not None)
-
 
 
 def _ticker_diagnostics(
@@ -282,13 +275,11 @@ def _ticker_diagnostics(
     )
 
 
-
 def _read_json(path: Path) -> dict[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"expected JSON object: {path}")
     return cast(dict[str, object], payload)
-
 
 
 def _request_contract_status(manifest: dict[str, object]) -> str:
@@ -308,7 +299,6 @@ def _request_contract_status(manifest: dict[str, object]) -> str:
     return VERIFIED_REQUEST_CONTRACT
 
 
-
 def _field_mapping_reason(
     *,
     source_scope: str,
@@ -322,7 +312,7 @@ def _field_mapping_reason(
         return "source_scope_mismatch"
     if pointer_snapshot_id != str(manifest.get("snapshot_id", "")):
         return "snapshot_id_mismatch"
-    if int(manifest.get("record_count", -1)) != row_count:
+    if _integer(manifest.get("record_count")) != row_count:
         return "record_count_mismatch"
     if _request_contract_status(manifest) != VERIFIED_REQUEST_CONTRACT:
         return _request_contract_status(manifest)
@@ -351,7 +341,6 @@ def _field_mapping_reason(
     return "verified_live_field_mapping"
 
 
-
 def _point_in_time_reason(
     manifest: dict[str, object],
     diagnostics: Sequence[TickerDiagnostics],
@@ -367,7 +356,6 @@ def _point_in_time_reason(
         if diag.rows_on_or_before_evaluation_date != diag.row_count:
             return f"future_flow_row:{diag.ticker}"
     return "verified_live_point_in_time"
-
 
 
 def load_investor_flow_evidence(
@@ -451,7 +439,6 @@ def load_investor_flow_evidence(
     )
 
 
-
 def attach_investor_flow_to_scorecards(
     scorecards: pd.DataFrame,
     evidence: InvestorFlowEvidence,
@@ -478,9 +465,9 @@ def attach_investor_flow_to_scorecards(
         }
         prefix = f"investor_flow_{window}d_"
         result[prefix + "state"] = result["ticker"].map(
-            lambda ticker: (
-                lookup[str(ticker)].descriptive_state
-                if evidence.evidence_verified and str(ticker) in lookup
+            lambda ticker, window_lookup=lookup: (
+                window_lookup[str(ticker)].descriptive_state
+                if evidence.evidence_verified and str(ticker) in window_lookup
                 else "unverified"
             )
         )
@@ -492,14 +479,13 @@ def attach_investor_flow_to_scorecards(
             ("foreign_institution_volume_ratio", "foreign_institution_volume_ratio"),
         ):
             result[prefix + suffix] = result["ticker"].map(
-                lambda ticker, attr=attribute: (
-                    getattr(lookup[str(ticker)], attr)
-                    if evidence.evidence_verified and str(ticker) in lookup
+                lambda ticker, attr=attribute, window_lookup=lookup: (
+                    getattr(window_lookup[str(ticker)], attr)
+                    if evidence.evidence_verified and str(ticker) in window_lookup
                     else None
                 )
             )
     return result
-
 
 
 def attach_investor_flow_to_records(
@@ -530,15 +516,12 @@ def attach_investor_flow_to_records(
     return records.merge(supplement, on="ticker", how="left", validate="one_to_one")
 
 
-
 def _format_pct(value: float | None) -> str:
     return "N/A" if value is None else f"{value:+.2f}%"
 
 
-
 def _format_ratio(value: float | None) -> str:
     return "N/A" if value is None else f"{value * 100.0:+.2f}%"
-
 
 
 def append_investor_flow_report(
