@@ -1,8 +1,6 @@
 """Regression coverage for SK hynix 2026-07-10 DR correction-table boundaries."""
 
-from alpha_cycle.intelligence.disclosure_corporate_action_delta import (
-    corporate_action_delta_rows,
-)
+from alpha_cycle.intelligence.disclosure_corporate_action_delta import corporate_action_delta_rows
 
 
 LIVE_SHAPED_DR_CORRECTION = """
