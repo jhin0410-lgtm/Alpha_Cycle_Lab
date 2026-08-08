@@ -13,7 +13,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryRoot = Split-Path -Parent $ScriptDirectory
-$Exporter = Join-Path $RepositoryRoot "bridge\kiwoom_openapi_plus\investor_flow_export.py"
+$Exporter = Join-Path $RepositoryRoot "bridge\kiwoom_openapi_plus\investor_flow_export_bootstrap.py"
 $QtInitializer = Join-Path $ScriptDirectory "initialize_kiwoom_openapi_plus_qt.ps1"
 $DefaultPython = Join-Path $RepositoryRoot ".venv-kiwoom-x86\Scripts\python.exe"
 $DefaultOutputRoot = Join-Path $RepositoryRoot "data\private\live-research\kiwoom-openapi-plus-investor-flow"
@@ -38,7 +38,7 @@ if (-not [System.IO.File]::Exists($BridgePython)) {
     exit 2
 }
 if (-not [System.IO.File]::Exists($Exporter)) {
-    throw "Kiwoom read-only investor-flow exporter is missing."
+    throw "Kiwoom read-only investor-flow exporter bootstrap is missing."
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
