@@ -1,6 +1,6 @@
 """Regression coverage for SK hynix 2026-07-10 DR correction-table boundaries."""
 
-from alpha_cycle.intelligence.disclosure_corporate_action_delta import corporate_action_delta_rows
+from alpha_cycle.intelligence import disclosure_corporate_action_delta as delta
 
 
 LIVE_SHAPED_DR_CORRECTION = """
@@ -35,7 +35,7 @@ LIVE_SHAPED_DR_CORRECTION = """
 
 
 def test_dr_delta_ignores_adjacent_fx_and_narrative_numbers() -> None:
-    rows = corporate_action_delta_rows(
+    rows = delta.corporate_action_delta_rows(
         "depositary_receipt_issuance",
         LIVE_SHAPED_DR_CORRECTION,
     )
