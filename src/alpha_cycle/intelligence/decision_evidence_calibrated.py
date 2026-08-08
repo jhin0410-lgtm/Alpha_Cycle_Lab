@@ -44,7 +44,9 @@ from alpha_cycle.intelligence.investor_flow_evidence import (
     append_investor_flow_report,
     attach_investor_flow_to_records,
     attach_investor_flow_to_scorecards,
-    load_investor_flow_evidence,
+)
+from alpha_cycle.intelligence.investor_flow_market_session import (
+    load_market_session_aligned_investor_flow_evidence,
 )
 from alpha_cycle.intelligence.report_financial_formatting import (
     apply_financial_report_formatting,
@@ -206,9 +208,10 @@ def _load_flow_evidence(
     if pointer is None:
         return None, None
     try:
-        evidence = load_investor_flow_evidence(
+        evidence = load_market_session_aligned_investor_flow_evidence(
             pointer,
             evaluation_date=snapshot.evaluation_date,
+            market_context=snapshot.market_context,
         )
     except (FileNotFoundError, OSError, ValueError) as exc:
         return None, f"investor_flow_evidence_unavailable:{type(exc).__name__}"
