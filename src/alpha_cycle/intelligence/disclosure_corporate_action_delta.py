@@ -132,8 +132,11 @@ def _dr_rows(text: object) -> list[dict[str, object]]:
     definitions = (
         (
             "dr_total_krw",
-            r"원화금액\s*\(원\)",
-            r"3\.\s*신주DR의\s*경우",
+            r"2\.\s*DR\s*발행총액.*?원화금액\s*\(원\)",
+            (
+                r"(?:2\.\s*DR\s*발행총액.*?기준환율등|"
+                r"3\.\s*신주DR의\s*경우)"
+            ),
         ),
         (
             "share_issue_price_krw",
@@ -143,7 +146,7 @@ def _dr_rows(text: object) -> list[dict[str, object]]:
         (
             "facility_funding_krw",
             r"7\.\s*자금조달의\s*목적.*?시설자금\s*\(원\)",
-            r"(?:8\.\s*청약일|$)",
+            r"(?:8\.\s*청약일|18\.\s*기타\s*투자판단|$)",
         ),
     )
     rows: list[dict[str, object]] = []
