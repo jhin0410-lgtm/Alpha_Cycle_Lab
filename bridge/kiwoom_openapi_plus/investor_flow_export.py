@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import Any
 
 from market_export import (
-    DEFAULT_SYMBOLS,
     PROVIDER,
     KiwoomMarketExporter,
     _clean,
@@ -33,7 +32,6 @@ SEMANTIC_STATUS = "provider_field_mapping_pending_live_certification"
 DEFAULT_OUTPUT_ROOT = Path(
     "data/private/live-research/kiwoom-openapi-plus-investor-flow"
 )
-_KST = datetime.now().astimezone().tzinfo
 _DATE = re.compile(r"^[0-9]{8}$")
 
 _PROVIDER_FIELDS = {
