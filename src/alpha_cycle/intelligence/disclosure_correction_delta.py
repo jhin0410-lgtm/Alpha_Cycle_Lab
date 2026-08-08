@@ -400,7 +400,11 @@ def verify_correction_delta(
     assert parent_record is not None
 
     resolution_source = str(resolution.get("resolution_source", ""))
-    if resolution_source in {"window_heuristic", "correction_chain_parent"} and not _parent_binding_valid(
+    chain_parent_source = resolution_source in {
+        "window_heuristic",
+        "correction_chain_parent",
+    }
+    if chain_parent_source and not _parent_binding_valid(
         current_receipt,
         current_record,
         parent_receipt,
