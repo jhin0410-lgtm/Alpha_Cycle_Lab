@@ -42,6 +42,10 @@ PUBLIC_IP_ENDPOINT = "https://api.ipify.org"
 DEFAULT_DECISION_SYMBOLS = ("005930", "000660")
 DEFAULT_MARKET_SYMBOLS = ("005930", "005935", "000660")
 DEFAULT_OUTPUT_ROOT = Path("data/private/live-research")
+DEFAULT_INVESTOR_FLOW_POINTER = Path(
+    "data/private/live-research/kiwoom-openapi-plus-investor-flow/"
+    "latest_investor_flow_export.json"
+)
 T = TypeVar("T")
 
 
@@ -184,6 +188,33 @@ def _run_stage(stage: str, operation: Callable[[], T]) -> T:
         raise PipelineStageError(stage, exc) from exc
 
 
+def _flow_status(scorecards: object) -> dict[str, object]:
+    if not hasattr(scorecards, "columns"):
+        return {
+            "investor_flow_available": False,
+            "investor_flow_evidence_verified": False,
+            "investor_flow_score_enabled": False,
+        }
+    frame = scorecards
+    columns = set(frame.columns)
+    if "investor_flow_evidence_verified" not in columns:
+        return {
+            "investor_flow_available": False,
+            "investor_flow_evidence_verified": False,
+            "investor_flow_score_enabled": False,
+        }
+    verified_values = frame["investor_flow_evidence_verified"].astype(bool)
+    snapshot_values = frame["investor_flow_snapshot_id"].dropna().astype(str).unique()
+    return {
+        "investor_flow_available": True,
+        "investor_flow_evidence_verified": bool(verified_values.all()),
+        "investor_flow_score_enabled": False,
+        "investor_flow_snapshot_id": (
+            str(snapshot_values[0]) if len(snapshot_values) == 1 else None
+        ),
+    }
+
+
 def _execute(args: argparse.Namespace) -> dict[str, object]:
     evaluation_date: date = args.evaluation_date or datetime.now(KOREA_TZ).date()
     if evaluation_date > datetime.now(KOREA_TZ).date():
@@ -275,12 +306,18 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
 
     company_config = Path("config/company_exposures.local.yaml")
     exposures = load_company_exposures(company_config if company_config.is_file() else None)
+    flow_pointer = (
+        DEFAULT_INVESTOR_FLOW_POINTER
+        if DEFAULT_INVESTOR_FLOW_POINTER.is_file()
+        else None
+    )
     decision_snapshot = _run_stage(
         "decision",
         lambda: build_investment_decision_snapshot(
             research_directory,
             market_directory,
             valuation_snapshot=valuation_directory,
+            investor_flow_pointer=flow_pointer,
             exposures=exposures,
             policy=DecisionPolicy(),
         ),
@@ -318,6 +355,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
             str(key): int(value)
             for key, value in scorecards["decision_state"].value_counts().items()
         },
+        **_flow_status(scorecards),
         "warnings": list(decision_snapshot.warnings),
         "order_api_enabled": False,
     }
