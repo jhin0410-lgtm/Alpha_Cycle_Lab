@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import pandas as pd
 
+from alpha_cycle.intelligence.decision_evidence_calibrated import (
+    _reconcile_investor_flow_evidence_gaps,
+)
 from alpha_cycle.intelligence.investor_flow_evidence import (
     FlowWindowSummary,
     InvestorFlowEvidence,
@@ -112,6 +117,54 @@ def test_unverified_flow_fails_closed_for_descriptive_values() -> None:
     assert attached["investor_flow_evidence_verified"].tolist() == [False, False]
     assert attached["investor_flow_5d_state"].tolist() == ["unverified", "unverified"]
     assert attached["investor_flow_5d_foreign_net_buy_shares"].isna().all()
+
+
+def test_verified_flow_removes_only_stale_flow_gap() -> None:
+    scorecards = pd.DataFrame(
+        {
+            "ticker": ["005930", "000660"],
+            "evidence_gaps": [
+                json.dumps(
+                    [
+                        "컨센서스·실적 추정치 상향·하향 데이터 미연결",
+                        "기관·외국인 수급 데이터 미연결",
+                    ],
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    [
+                        "산업 가격·재고·공급·설비투자 사이클 데이터 미연결",
+                        "기관·외국인 수급 데이터 미연결",
+                    ],
+                    ensure_ascii=False,
+                ),
+            ],
+        }
+    )
+
+    reconciled = _reconcile_investor_flow_evidence_gaps(scorecards, _evidence())
+
+    for raw in reconciled["evidence_gaps"]:
+        gaps = json.loads(raw)
+        assert "기관·외국인 수급 데이터 미연결" not in gaps
+        assert len(gaps) == 1
+
+
+def test_unverified_flow_keeps_flow_gap() -> None:
+    gap = json.dumps(["기관·외국인 수급 데이터 미연결"], ensure_ascii=False)
+    scorecards = pd.DataFrame(
+        {
+            "ticker": ["005930", "000660"],
+            "evidence_gaps": [gap, gap],
+        }
+    )
+
+    reconciled = _reconcile_investor_flow_evidence_gaps(
+        scorecards,
+        _evidence(verified=False),
+    )
+
+    assert reconciled["evidence_gaps"].tolist() == [gap, gap]
 
 
 def test_report_labels_flow_as_non_scoring() -> None:
