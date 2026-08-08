@@ -111,7 +111,7 @@ def _reconcile_investor_flow_evidence_gaps(
             if str(item).strip() and str(item).strip() != _INVESTOR_FLOW_GAP
         ]
         reconciled.append(json.dumps(filtered, ensure_ascii=False))
-    result["evidence_gaps"] = reconciled
+    result["evidence_gaps"] = pd.Series(reconciled, index=result.index, dtype="object")
     return result
 
 
