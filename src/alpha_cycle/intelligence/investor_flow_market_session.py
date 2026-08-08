@@ -10,7 +10,6 @@ while failing closed as soon as the market advances to a newer session.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
