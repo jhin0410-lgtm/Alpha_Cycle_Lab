@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -188,23 +188,16 @@ def _run_stage(stage: str, operation: Callable[[], T]) -> T:
         raise PipelineStageError(stage, exc) from exc
 
 
-def _flow_status(scorecards: object) -> dict[str, object]:
-    if not hasattr(scorecards, "columns"):
-        return {
-            "investor_flow_available": False,
-            "investor_flow_evidence_verified": False,
-            "investor_flow_score_enabled": False,
-        }
-    frame = scorecards
-    columns = set(frame.columns)
+def _flow_status(scorecards: Any) -> dict[str, object]:
+    columns = set(scorecards.columns)
     if "investor_flow_evidence_verified" not in columns:
         return {
             "investor_flow_available": False,
             "investor_flow_evidence_verified": False,
             "investor_flow_score_enabled": False,
         }
-    verified_values = frame["investor_flow_evidence_verified"].astype(bool)
-    snapshot_values = frame["investor_flow_snapshot_id"].dropna().astype(str).unique()
+    verified_values = scorecards["investor_flow_evidence_verified"].astype(bool)
+    snapshot_values = scorecards["investor_flow_snapshot_id"].dropna().astype(str).unique()
     return {
         "investor_flow_available": True,
         "investor_flow_evidence_verified": bool(verified_values.all()),
