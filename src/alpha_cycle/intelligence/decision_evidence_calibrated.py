@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
@@ -61,10 +62,57 @@ from alpha_cycle.intelligence.technical_evidence_policy import (
 )
 from alpha_cycle.intelligence.valuation import append_valuation_report
 
+_INVESTOR_FLOW_GAP = "기관·외국인 수급 데이터 미연결"
+
 
 def _price_lookup(market_context: pd.DataFrame) -> dict[str, object]:
     raw = market_context.set_index("ticker")["last_price"].to_dict()
     return {str(key).zfill(6): value for key, value in raw.items()}
+
+
+def _reconcile_investor_flow_evidence_gaps(
+    scorecards: pd.DataFrame,
+    evidence: InvestorFlowEvidence,
+) -> pd.DataFrame:
+    """Remove only the stale flow-data gap after ticker-level live verification."""
+
+    if not evidence.evidence_verified or "evidence_gaps" not in scorecards.columns:
+        return scorecards
+
+    verified_tickers = {
+        row.ticker
+        for row in evidence.windows
+        if row.window == 20 and row.observations >= 20
+    }
+    if not verified_tickers:
+        return scorecards
+
+    result = scorecards.copy()
+    reconciled: list[object] = []
+    for ticker, raw in zip(
+        result["ticker"].astype(str),
+        result["evidence_gaps"].tolist(),
+        strict=True,
+    ):
+        if str(ticker).zfill(6) not in verified_tickers or not isinstance(raw, str):
+            reconciled.append(raw)
+            continue
+        try:
+            parsed: object = json.loads(raw)
+        except (TypeError, ValueError):
+            reconciled.append(raw)
+            continue
+        if not isinstance(parsed, list):
+            reconciled.append(raw)
+            continue
+        filtered = [
+            str(item)
+            for item in parsed
+            if str(item).strip() and str(item).strip() != _INVESTOR_FLOW_GAP
+        ]
+        reconciled.append(json.dumps(filtered, ensure_ascii=False))
+    result["evidence_gaps"] = reconciled
+    return result
 
 
 def _rebuild_scorecards(
@@ -90,6 +138,7 @@ def _rebuild_scorecards(
     result = attach_semiconductor_cycle_proxy_to_scorecards(catalyst_gated, proxy)
     if flow_evidence is not None:
         result = attach_investor_flow_to_scorecards(result, flow_evidence)
+        result = _reconcile_investor_flow_evidence_gaps(result, flow_evidence)
     return result
 
 
