@@ -38,6 +38,13 @@ from alpha_cycle.intelligence.evidence_coverage_policy import (
     apply_evidence_coverage_policy,
     apply_evidence_report_policy,
 )
+from alpha_cycle.intelligence.investor_flow_evidence import (
+    InvestorFlowEvidence,
+    append_investor_flow_report,
+    attach_investor_flow_to_records,
+    attach_investor_flow_to_scorecards,
+    load_investor_flow_evidence,
+)
 from alpha_cycle.intelligence.report_financial_formatting import (
     apply_financial_report_formatting,
 )
@@ -63,6 +70,7 @@ def _price_lookup(market_context: pd.DataFrame) -> dict[str, object]:
 def _rebuild_scorecards(
     snapshot: InvestmentDecisionSnapshot,
     proxy: SemiconductorCycleProxy,
+    flow_evidence: InvestorFlowEvidence | None,
 ) -> pd.DataFrame:
     adjusted = apply_evidence_coverage_policy(snapshot.scorecards, snapshot.policy)
     enriched = enrich_scorecards_with_playbook(
@@ -79,12 +87,16 @@ def _rebuild_scorecards(
     )
     market_gated = gate_execution_playbook(calibrated, snapshot.market_context)
     catalyst_gated = gate_catalyst_playbook(market_gated)
-    return attach_semiconductor_cycle_proxy_to_scorecards(catalyst_gated, proxy)
+    result = attach_semiconductor_cycle_proxy_to_scorecards(catalyst_gated, proxy)
+    if flow_evidence is not None:
+        result = attach_investor_flow_to_scorecards(result, flow_evidence)
+    return result
 
 
 def _rebuild_records(
     snapshot: InvestmentDecisionSnapshot,
     scorecards: pd.DataFrame,
+    flow_evidence: InvestorFlowEvidence | None,
 ) -> pd.DataFrame:
     records = build_decision_records(
         scorecards,
@@ -92,13 +104,17 @@ def _rebuild_records(
         price_lookup=_price_lookup(snapshot.market_context),
     )
     audited = attach_priority_audit_to_records(records, scorecards)
-    return attach_semiconductor_cycle_proxy_to_records(audited, scorecards)
+    result = attach_semiconductor_cycle_proxy_to_records(audited, scorecards)
+    if flow_evidence is not None:
+        result = attach_investor_flow_to_records(result, scorecards)
+    return result
 
 
 def _rebuild_report(
     snapshot: InvestmentDecisionSnapshot,
     scorecards: pd.DataFrame,
     proxy: SemiconductorCycleProxy,
+    flow_evidence: InvestorFlowEvidence | None,
 ) -> str:
     report = build_report(
         snapshot.evaluation_date,
@@ -128,7 +144,42 @@ def _rebuild_report(
         snapshot.financial_history,
     )
     report = apply_financial_report_formatting(report, snapshot.financial_kpis)
-    return append_semiconductor_cycle_proxy_report(report, proxy)
+    report = append_semiconductor_cycle_proxy_report(report, proxy)
+    if flow_evidence is not None:
+        report = append_investor_flow_report(report, flow_evidence)
+    return report
+
+
+def _load_flow_evidence(
+    pointer: str | Path | None,
+    snapshot: InvestmentDecisionSnapshot,
+) -> tuple[InvestorFlowEvidence | None, str | None]:
+    if pointer is None:
+        return None, None
+    try:
+        evidence = load_investor_flow_evidence(
+            pointer,
+            evaluation_date=snapshot.evaluation_date,
+        )
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        return None, f"investor_flow_evidence_unavailable:{type(exc).__name__}"
+    if evidence.evidence_verified:
+        return evidence, None
+    return evidence, f"investor_flow_evidence_unverified:{evidence.reason}"
+
+
+def _flow_warnings(evidence: InvestorFlowEvidence | None) -> list[str]:
+    if evidence is None or not evidence.evidence_verified:
+        return []
+    states = []
+    for ticker in sorted({row.ticker for row in evidence.windows}):
+        row = evidence.window(ticker, 20)
+        if row is not None:
+            states.append(f"{ticker}={row.descriptive_state}")
+    result = [f"investor_flow_evidence_verified:{evidence.snapshot_id[:12]}"]
+    if states:
+        result.append("investor_flow_20d:" + ",".join(states))
+    return result
 
 
 def build_investment_decision_snapshot(
@@ -136,6 +187,7 @@ def build_investment_decision_snapshot(
     market_snapshot: str | Path,
     *,
     valuation_snapshot: str | Path | None = None,
+    investor_flow_pointer: str | Path | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
     policy: DecisionPolicy | None = None,
@@ -156,19 +208,20 @@ def build_investment_decision_snapshot(
         snapshot.financial_history,
         snapshot.market_context,
     )
-    warnings = tuple(
-        dict.fromkeys(
-            [
-                *snapshot.warnings,
-                f"semiconductor_cycle_proxy:{proxy.cycle_proxy_state}",
-                "semiconductor_cycle_proxy_industry_not_certified",
-            ]
-        )
-    )
+    flow_evidence, flow_warning = _load_flow_evidence(investor_flow_pointer, snapshot)
+    warning_values = [
+        *snapshot.warnings,
+        f"semiconductor_cycle_proxy:{proxy.cycle_proxy_state}",
+        "semiconductor_cycle_proxy_industry_not_certified",
+        *_flow_warnings(flow_evidence),
+    ]
+    if flow_warning is not None:
+        warning_values.append(flow_warning)
+    warnings = tuple(dict.fromkeys(warning_values))
     working = replace(snapshot, warnings=warnings)
-    scorecards = _rebuild_scorecards(working, proxy)
-    records = _rebuild_records(working, scorecards)
-    report = _rebuild_report(working, scorecards, proxy)
+    scorecards = _rebuild_scorecards(working, proxy, flow_evidence)
+    records = _rebuild_records(working, scorecards, flow_evidence)
+    report = _rebuild_report(working, scorecards, proxy, flow_evidence)
     return replace(
         working,
         scorecards=scorecards,
