@@ -27,12 +27,17 @@ def _canonical_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _write_artifact(tmp_path: Path) -> Path:
+def _write_artifact(
+    tmp_path: Path,
+    *,
+    phase: str = "expansion_inventory_controlled",
+    diagnostics_schema_version: int = 1,
+) -> Path:
     directory = tmp_path / "artifact"
     directory.mkdir()
     latest = {
         "period": "202606",
-        "heuristic_phase": "expansion_inventory_controlled",
+        "heuristic_phase": phase,
         "production_yoy_pct": 2.247752,
         "shipment_yoy_pct": 3.113208,
         "inventory_yoy_pct": 3.016241,
@@ -47,7 +52,7 @@ def _write_artifact(tmp_path: Path) -> Path:
         "inventory_vs_shipment_index_ratio": 40.622141,
     }
     diagnostics = {
-        "schema_version": 1,
+        "schema_version": diagnostics_schema_version,
         "status": "heuristic_diagnostics_available",
         "latest": latest,
         "monthly": [latest],
@@ -135,6 +140,35 @@ def test_loads_current_non_scoring_kosis_evidence(tmp_path: Path) -> None:
     assert evidence.point_in_time_backtest_eligible is False
     assert evidence.industry_cycle_certified is False
     assert evidence.decision_score_enabled is False
+
+
+def test_loads_schema_v2_balanced_phase_as_non_scoring_expansion(tmp_path: Path) -> None:
+    pointer = _write_artifact(
+        tmp_path,
+        phase="expansion_inventory_balanced",
+        diagnostics_schema_version=2,
+    )
+
+    evidence = load_semiconductor_industry_evidence(
+        pointer,
+        evaluation_date=date(2026, 8, 9),
+    )
+    bridge = build_semiconductor_cycle_bridge(_proxy(), evidence)
+
+    assert evidence.heuristic_phase == "expansion_inventory_balanced"
+    assert bridge.industry_direction == "expansionary"
+    assert bridge.alignment_state == "industry_issuer_expansion_aligned"
+    assert evidence.decision_score_enabled is False
+
+
+def test_rejects_unknown_diagnostics_schema(tmp_path: Path) -> None:
+    pointer = _write_artifact(tmp_path, diagnostics_schema_version=999)
+
+    with pytest.raises(ValueError, match="schema version is unsupported"):
+        load_semiconductor_industry_evidence(
+            pointer,
+            evaluation_date=date(2026, 8, 9),
+        )
 
 
 def test_rejects_retroactive_use_before_capture_date(tmp_path: Path) -> None:
