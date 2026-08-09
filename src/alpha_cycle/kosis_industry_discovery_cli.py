@@ -110,7 +110,7 @@ def discover(
     manifest = {**identity_material, "artifact_id": artifact_id}
     _write_json(directory / "manifest.json", manifest)
 
-    pointer = {
+    pointer: dict[str, object] = {
         "artifact_id": artifact_id,
         "artifact_directory": str(directory.resolve()),
         "manifest_path": str((directory / "manifest.json").resolve()),
