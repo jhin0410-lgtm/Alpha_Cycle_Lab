@@ -134,6 +134,35 @@ def test_discover_writes_verified_non_scoring_identity(tmp_path: Path) -> None:
     assert (tmp_path / "latest_kosis_industry_discovery.json").is_file()
 
 
+def test_discovery_latest_pointer_is_ascii_safe(tmp_path: Path) -> None:
+    output_root = tmp_path / "쿠쿠"
+    transport = FakeTransport(
+        [
+            _json_response([_search_row()]),
+            _json_response([{"TBL_NM": DEFAULT_INDUSTRY_SEARCH}]),
+        ]
+    )
+    client = KosisReadOnlyClient(
+        KosisCredentials(api_key="secret-key"),
+        transport=transport,
+        max_retries=0,
+        sleep=lambda _: None,
+    )
+
+    pointer = discover(
+        client=client,
+        search_name=DEFAULT_INDUSTRY_SEARCH,
+        org_id="101",
+        output_root=output_root,
+        now=datetime(2026, 8, 9, 9, 0, tzinfo=UTC),
+    )
+
+    pointer_bytes = (output_root / "latest_kosis_industry_discovery.json").read_bytes()
+    assert pointer_bytes.isascii()
+    decoded = json.loads(pointer_bytes.decode("ascii"))
+    assert decoded["artifact_directory"] == pointer["artifact_directory"]
+
+
 def test_discover_keeps_ambiguous_identity_uncertified(tmp_path: Path) -> None:
     transport = FakeTransport(
         [_json_response([_search_row(), {**_search_row(), "TBL_ID": "DT_TEST_TABLE_2"}])]
