@@ -11,10 +11,10 @@ from alpha_cycle.intelligence.decision_resilient import (
 )
 
 
-def test_intelligence_export_uses_evidence_calibrated_decision_builder() -> None:
+def test_intelligence_export_uses_industry_evidence_calibrated_decision_builder() -> None:
     assert (
         intelligence.build_investment_decision_snapshot.__module__
-        == "alpha_cycle.intelligence.decision_evidence_calibrated"
+        == "alpha_cycle.intelligence.decision_industry_evidence_calibrated"
     )
 
 
