@@ -58,7 +58,7 @@ def test_write_status_replaces_latest_run_atomically(tmp_path: Path) -> None:
     assert not (tmp_path / ".latest_run.json.tmp").exists()
 
 
-def test_main_reports_public_ip_for_toss_allowlist_blocker(
+def test_main_reports_public_ip_and_supported_fallback_for_toss_allowlist_blocker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -79,9 +79,13 @@ def test_main_reports_public_ip_for_toss_allowlist_blocker(
     assert payload["status"] == "blocked"
     assert payload["reason"] == "tossinvest_ip_allowlist"
     assert payload["public_ip"] == "203.0.113.10"
-    assert payload["rerun_command"] == "python -m alpha_cycle.live_pipeline_cli"
+    assert payload["rerun_command"] == ".\\scripts\\run_live_pipeline.cmd"
+    assert payload["direct_rerun_command"] == "python -m alpha_cycle.live_pipeline_cli"
+    assert payload["fallback_mode"] == "orchestrated_kiwoom_primary_readonly"
+    assert "Kiwoom" in payload["next_action"]
     persisted = json.loads((tmp_path / "latest_run.json").read_text(encoding="utf-8"))
     assert persisted["public_ip"] == "203.0.113.10"
+    assert persisted["order_api_enabled"] is False
     assert "CLIENT" not in json.dumps(persisted)
 
 
