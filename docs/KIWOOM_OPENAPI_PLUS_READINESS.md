@@ -118,9 +118,9 @@ account API: disabled
 order API: disabled
 ```
 
-## Read-only market export
+## Read-only adjusted market export
 
-After the login probe succeeds, collect an independent Kiwoom market snapshot:
+After the bridge can log in, collect an independent Kiwoom market snapshot:
 
 ```powershell
 .\scripts\export_kiwoom_openapi_plus_market.cmd
@@ -137,14 +137,29 @@ The exporter performs two sequential public-market TR requests per symbol:
 - `opt10001`: current quote and basic price fields
 - `opt10081`: daily chart, first response page only
 
-Daily bars use `수정주가구분=0`, matching the existing unadjusted-price pipeline.
-Prices are normalized to non-negative OHLC values while the exact provider strings
-are retained beside the normalized values. A negative signed current-price string
-is therefore not discarded or hidden.
+The hardened daily-bar path requests **`수정주가구분=1`**. Each accepted daily bar
+is marked as adjusted and is bound to separate adjustment-response evidence. The
+export preserves the raw adjustment code, adjustment ratio, adjustment event, and
+previous-close response fields instead of assuming that the requested basis alone
+proves adjustment.
 
-The exporter enforces at most four requests per second, below Kiwoom's published
-limit of five requests per second. It also records the published minute and hourly
-limits in the manifest. Requests are serialized in one ActiveX process.
+The downstream Kiwoom-primary adapter fails closed unless all of the following are
+true:
+
+- pointer and manifest both declare `adjusted_prices=true`;
+- pointer and manifest both declare `price_basis=adjusted`;
+- the manifest records `adjustment_request_value=1`;
+- every accepted daily bar has matching adjustment evidence;
+- the symbol set is exactly `000660`, `005930`, `005935`;
+- account and order APIs remain disabled;
+- the export is fresh enough for the primary-market adapter.
+
+Prices are normalized to non-negative OHLC values while exact provider strings are
+retained beside the normalized values. A negative signed current-price string is
+therefore not discarded or hidden.
+
+The exporter enforces conservative rolling request gates and serializes requests in
+one ActiveX process.
 
 A successful run writes:
 
@@ -155,22 +170,20 @@ data/private/live-research/kiwoom-openapi-plus-market/
     manifest.json
     quotes.csv
     daily_bars.csv
+    <adjustment evidence file recorded by manifest>
 ```
 
-The manifest records:
+The manifest records, among other fields:
 
 - provider and snapshot ID
 - UTC and Korea capture timestamps
 - exact symbol set
 - quote and bar counts
 - TR codes and request count
-- unadjusted-price status
+- adjusted-price status and requested adjustment value
+- adjustment-evidence file binding
 - source messages and explicit limitations
 - disabled account and order capabilities
-
-This export is not silently substituted for TossInvest or any other provider. The
-next integration gate compares providers by symbol, capture time, price basis, and
-explicit tolerances. Conflicts remain visible and fail closed.
 
 Optional overrides:
 
@@ -181,16 +194,39 @@ Optional overrides:
     -TimeoutSeconds 600
 ```
 
+## Live-pipeline fallback behavior
+
+For a normal Windows live run, use the repository launcher:
+
+```powershell
+.\scripts\run_live_pipeline.cmd
+```
+
+The direct Python module is the TossInvest market-source path. When the supported
+Windows launcher observes a sanitized `tossinvest_ip_allowlist` blocker (or a
+resume-unavailable state), the orchestrator can explicitly collect a **new**
+Kiwoom read-only adjusted export and then run the pipeline in
+`Kiwoom-primary-only` mode.
+
+This is not silent source substitution. The orchestrator checks that the Kiwoom
+bundle is newly captured, has the expected provider and symbols, stays inside the
+configured output root, keeps account/order APIs disabled, and then sends it
+through the Kiwoom primary provenance gate. If a new valid bundle cannot be
+published, no single-provider decision is published.
+
+The standalone exporter also remains usable independently; creating an export by
+itself does not automatically replace another provider.
+
 ## Deliberate limits
 
-The installation, login, and market-export tools do not enable:
+The installation, login, market-export, and fallback tools do not enable:
 
 - account-number lookup
 - holdings or balance collection
 - certificate or account-password collection
 - order placement, cancellation, or modification
-- automatic replacement of another market-data provider
 - automatic trading from the exported evidence
+- unmarked or provenance-free source replacement
 
 The bridge environment result is written locally to:
 
