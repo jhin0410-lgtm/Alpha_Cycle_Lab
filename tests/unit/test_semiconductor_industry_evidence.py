@@ -185,7 +185,7 @@ def test_expansion_alignment_and_score_invariance(tmp_path: Path) -> None:
     assert enriched.loc[0, "industry_evidence_available"]
     assert enriched.loc[1, "industry_evidence_available"]
     assert not enriched.loc[2, "industry_evidence_available"]
-    assert enriched.loc[0, "industry_evidence_score_enabled"] is False
+    assert not bool(enriched.loc[0, "industry_evidence_score_enabled"])
     assert enriched.loc[0, "industry_capacity_yoy_pct"] == pytest.approx(8.654906)
 
     records = pd.DataFrame(
