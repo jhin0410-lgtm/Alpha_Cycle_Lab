@@ -38,10 +38,12 @@ def _write_snapshot(tmp_path: Path, *, sensitive: bool = False) -> Path:
             "rt_cd": "0",
             "output1": {"sht_cd": symbol, "item_kor_nm": "회사"},
             "output2": [
-                {"data1": "매출액", "data2": "1", "data3": "2"},
-                {"data1": "영업이익", "data2": "3", "data3": "4"},
+                {"data1": "매출액", "data2": "__ESTIMATE_A__", "data3": "__ESTIMATE_B__"},
+                {"data1": "영업이익", "data2": "__ESTIMATE_C__", "data3": "__ESTIMATE_D__"},
             ],
-            "output3": [{"data1": "EPS", "data2": "10", "data3": "11"}],
+            "output3": [
+                {"data1": "EPS", "data2": "__ESTIMATE_E__", "data3": "__ESTIMATE_F__"}
+            ],
             "output4": [{"dt": "202512"}, {"dt": "202612E"}],
         }
         for symbol in ("000660", "005930")
@@ -76,7 +78,16 @@ def test_inspector_reports_keys_labels_and_periods_without_numeric_estimates(
     assert output2["row_count"] == 2
     assert output2["keys"] == ["data1", "data2", "data3"]
     assert output2["data1_labels"] == ["매출액", "영업이익"]
-    assert "1" not in json.dumps(result, ensure_ascii=False)
+    assert set(output2) == {
+        "shape",
+        "row_count",
+        "keys",
+        "data1_labels",
+        "period_labels",
+    }
+    rendered = json.dumps(result, ensure_ascii=False)
+    assert "__ESTIMATE_A__" not in rendered
+    assert "__ESTIMATE_F__" not in rendered
     assert output4["period_labels"] == ["202512", "202612E"]
 
 
