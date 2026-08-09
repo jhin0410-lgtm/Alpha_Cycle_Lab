@@ -43,9 +43,12 @@ def _write_json(path: Path, value: object, *, ensure_ascii: bool = False) -> Non
     temporary.replace(path)
 
 
-def _inventory(rows: tuple[KosisParameterRow, ...]) -> dict[str, object]:
+def build_parameter_inventory(rows: tuple[KosisParameterRow, ...]) -> dict[str, object]:
+    """Build table inventory without pretending one item has one universal unit."""
+
     classifications: dict[tuple[str, ...], dict[str, object]] = {}
-    items: dict[tuple[str, str], dict[str, str]] = {}
+    item_names: dict[str, str] = {}
+    item_units: dict[str, set[tuple[str, str]]] = {}
     for row in rows:
         classifications.setdefault(
             row.classification_ids,
@@ -55,29 +58,37 @@ def _inventory(rows: tuple[KosisParameterRow, ...]) -> dict[str, object]:
                 "classification_names": row.classification_names,
             },
         )
-        items.setdefault(
-            (row.item_id, row.unit_id),
+        existing_name = item_names.setdefault(row.item_id, row.item_name)
+        if existing_name != row.item_name:
+            raise ValueError("KOSIS item ID mapped to multiple item names")
+        item_units.setdefault(row.item_id, set()).add((row.unit_id, row.unit_name))
+
+    item_rows: list[dict[str, object]] = []
+    for item_id in sorted(item_names):
+        units = sorted(item_units.get(item_id, set()))
+        item_rows.append(
             {
-                "item_id": row.item_id,
-                "item_name": row.item_name,
-                "unit_id": row.unit_id,
-                "unit_name": row.unit_name,
-            },
+                "item_id": item_id,
+                "item_name": item_names[item_id],
+                "unit_variant_count": len(units),
+                "units": [
+                    {"unit_id": unit_id, "unit_name": unit_name}
+                    for unit_id, unit_name in units
+                ],
+            }
         )
 
     periods = sorted({row.period for row in rows})
     source_change_dates = sorted({row.last_changed for row in rows if row.last_changed})
     return {
+        "inventory_schema_version": 2,
         "classification_count": len(classifications),
         "classifications": sorted(
             classifications.values(),
             key=lambda value: cast(tuple[str, ...], value["classification_ids"]),
         ),
-        "item_count": len(items),
-        "items": sorted(
-            items.values(),
-            key=lambda value: (value["item_id"], value["unit_id"]),
-        ),
+        "item_count": len(item_rows),
+        "items": item_rows,
         "period_count": len(periods),
         "periods": periods,
         "source_change_dates": source_change_dates,
@@ -91,19 +102,21 @@ def capture_parameter_data(
     query: KosisParameterQuery,
     output_root: Path,
     now: datetime,
+    expected_table_name: str = DEFAULT_INDUSTRY_SEARCH,
 ) -> dict[str, object]:
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("KOSIS capture clock must be timezone-aware")
+    expected_title = expected_table_name.strip()
+    if not expected_title:
+        raise ValueError("KOSIS expected_table_name cannot be blank")
 
     rows, raw_payload = client.fetch_parameter_data(query)
     titles = {row.table_name for row in rows}
-    if titles != {DEFAULT_INDUSTRY_SEARCH}:
-        raise ValueError(
-            "KOSIS parameter data title does not match the verified industry table"
-        )
+    if titles != {expected_title}:
+        raise ValueError("KOSIS parameter data title does not match the verified table")
 
     normalized_rows = [asdict(row) for row in rows]
-    inventory = _inventory(rows)
+    inventory = build_parameter_inventory(rows)
     captured_at = now.astimezone(UTC)
     query_payload = query.params()
     probe_scope = (
@@ -117,14 +130,14 @@ def capture_parameter_data(
     raw_sha256 = hashlib.sha256(_canonical_bytes(raw_payload)).hexdigest()
     normalized_sha256 = hashlib.sha256(_canonical_bytes(normalized_rows)).hexdigest()
     identity_material: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source": "kosis_openapi",
-        "source_scope": "mining_manufacturing_parameter_data",
+        "source_scope": "parameter_data",
         "query_scope": query_scope,
         "captured_at": captured_at.isoformat(),
         "org_id": query.org_id,
         "table_id": query.table_id,
-        "table_name": DEFAULT_INDUSTRY_SEARCH,
+        "table_name": expected_title,
         "query": query_payload,
         "row_count": len(rows),
         "classification_count": inventory["classification_count"],
@@ -158,6 +171,7 @@ def capture_parameter_data(
         "query_scope": query_scope,
         "org_id": query.org_id,
         "table_id": query.table_id,
+        "table_name": expected_title,
         "row_count": len(rows),
         "classification_count": inventory["classification_count"],
         "item_count": inventory["item_count"],
@@ -168,8 +182,6 @@ def capture_parameter_data(
         "decision_score_enabled": False,
     }
     output_root.mkdir(parents=True, exist_ok=True)
-    # Keep the latest pointer ASCII-only so Windows PowerShell 5.1 can read paths
-    # containing Korean characters without relying on its legacy default encoding.
     _write_json(output_root / LATEST_POINTER_NAME, pointer, ensure_ascii=True)
     return pointer
 
@@ -178,12 +190,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-kosis-parameters",
         description=(
-            "Capture official KOSIS mining/manufacturing parameter data while "
-            "keeping industry-cycle scoring disabled"
+            "Capture an exact verified KOSIS table while keeping industry-cycle "
+            "scoring disabled"
         ),
     )
     parser.add_argument("--org-id", default=DEFAULT_KOSIS_ORG_ID)
     parser.add_argument("--table-id", default=DEFAULT_KOSIS_TABLE_ID)
+    parser.add_argument("--expected-table-name", default=DEFAULT_INDUSTRY_SEARCH)
     parser.add_argument(
         "--obj",
         action="append",
@@ -234,6 +247,7 @@ def main(argv: list[str] | None = None) -> int:
             query=query,
             output_root=args.output,
             now=datetime.now(UTC),
+            expected_table_name=str(args.expected_table_name),
         )
         print(json.dumps(pointer, ensure_ascii=False, sort_keys=True))
         return 0
