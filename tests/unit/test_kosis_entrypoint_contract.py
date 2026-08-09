@@ -17,5 +17,10 @@ def test_kosis_discovery_entrypoints_and_optional_environment_contract() -> None
         '"alpha_cycle.kosis_semiconductor_source_discovery_cli:main"'
         in pyproject
     )
+    assert (
+        "alpha-cycle-kosis-semiconductor-history = "
+        '"alpha_cycle.kosis_semiconductor_history_cli:main"'
+        in pyproject
+    )
     assert "KOSIS_API_KEY=replace_with_local_secret" in env_example
     assert '"KOSIS_API_KEY"' not in runner
