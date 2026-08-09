@@ -10,30 +10,34 @@ import pytest
 from alpha_cycle.kosis_industry_inventory_cli import inspect_latest_inventory
 
 
-def _write_artifact(tmp_path: Path, *, scoring: bool = False) -> Path:
+def _write_artifact(
+    tmp_path: Path,
+    *,
+    scoring: bool = False,
+    schema_version: int = 2,
+) -> Path:
     artifact_directory = tmp_path / "쿠쿠" / "artifact"
     artifact_directory.mkdir(parents=True)
-    inventory = {
-        "classification_count": 3,
-        "classifications": [
+    if schema_version == 2:
+        items = [
             {
-                "classification_ids": ["A001"],
-                "classification_object_names": ["품목"],
-                "classification_names": ["석탄"],
+                "item_id": "T002",
+                "item_name": "출하량",
+                "unit_variant_count": 1,
+                "units": [{"unit_id": "IDX", "unit_name": "2020=100"}],
             },
             {
-                "classification_ids": ["S001"],
-                "classification_object_names": ["품목"],
-                "classification_names": ["반도체"],
+                "item_id": "T001",
+                "item_name": "생산량",
+                "unit_variant_count": 2,
+                "units": [
+                    {"unit_id": "U001", "unit_name": "개"},
+                    {"unit_id": "U002", "unit_name": "천개"},
+                ],
             },
-            {
-                "classification_ids": ["S002"],
-                "classification_object_names": ["품목"],
-                "classification_names": ["D램"],
-            },
-        ],
-        "item_count": 2,
-        "items": [
+        ]
+    else:
+        items = [
             {
                 "item_id": "T002",
                 "item_name": "출하량",
@@ -46,7 +50,29 @@ def _write_artifact(tmp_path: Path, *, scoring: bool = False) -> Path:
                 "unit_id": "U001",
                 "unit_name": "개",
             },
+        ]
+    inventory = {
+        "inventory_schema_version": schema_version,
+        "classification_count": 3,
+        "classifications": [
+            {
+                "classification_ids": ["A001"],
+                "classification_object_names": ["품목"],
+                "classification_names": ["석탄"],
+            },
+            {
+                "classification_ids": ["S001"],
+                "classification_object_names": ["산업별"],
+                "classification_names": ["반도체 제조업"],
+            },
+            {
+                "classification_ids": ["S002"],
+                "classification_object_names": ["품목"],
+                "classification_names": ["D램"],
+            },
         ],
+        "item_count": 2,
+        "items": items,
         "period_count": 1,
         "periods": ["202606"],
         "source_change_dates": ["20260731"],
@@ -61,7 +87,8 @@ def _write_artifact(tmp_path: Path, *, scoring: bool = False) -> Path:
         "artifact_directory": str(artifact_directory.resolve()),
         "status": "parameter_data_captured",
         "org_id": "101",
-        "table_id": "DT_1F02012",
+        "table_id": "DT_TEST",
+        "table_name": "테스트 표",
         "periods": ["202606"],
         "revision_sensitive": True,
         "historical_vintage_certified": False,
@@ -85,16 +112,39 @@ def test_inspect_latest_inventory_returns_items_and_semiconductor_matches(
 
     assert result["status"] == "inventory_inspected"
     assert result["artifact_id"] == "artifact-123"
+    assert result["table_name"] == "테스트 표"
+    assert result["inventory_schema_version"] == 2
+    assert result["legacy_single_unit_summary"] is False
     assert result["item_count"] == 2
     assert result["classification_count"] == 3
     assert result["matched_classification_count"] == 2
     items = result["items"]
     assert isinstance(items, list)
     assert [row["item_id"] for row in items] == ["T001", "T002"]
+    assert items[0]["unit_variant_count"] == 2
+    assert items[0]["units"] == [
+        {"unit_id": "U001", "unit_name": "개"},
+        {"unit_id": "U002", "unit_name": "천개"},
+    ]
     matched = result["matched_classifications"]
     assert isinstance(matched, list)
     assert [row["classification_ids"] for row in matched] == [["S001"], ["S002"]]
     assert result["decision_score_enabled"] is False
+
+
+def test_inspect_latest_inventory_reads_legacy_single_unit_artifact(
+    tmp_path: Path,
+) -> None:
+    pointer_path = _write_artifact(tmp_path, schema_version=1)
+
+    result = inspect_latest_inventory(pointer_path=pointer_path)
+
+    assert result["inventory_schema_version"] == 1
+    assert result["legacy_single_unit_summary"] is True
+    items = result["items"]
+    assert isinstance(items, list)
+    assert items[0]["unit_variant_count"] == 1
+    assert items[0]["units"] == [{"unit_id": "U001", "unit_name": "개"}]
 
 
 def test_inspect_latest_inventory_supports_custom_match_terms(tmp_path: Path) -> None:
