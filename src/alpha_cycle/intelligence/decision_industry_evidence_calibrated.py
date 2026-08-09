@@ -70,11 +70,10 @@ def build_investment_decision_snapshot(
         now=now,
     )
     explicit_pointer = semiconductor_history_pointer is not None
-    pointer = (
-        Path(semiconductor_history_pointer)
-        if explicit_pointer
-        else DEFAULT_SEMICONDUCTOR_HISTORY_POINTER
-    )
+    if semiconductor_history_pointer is not None:
+        pointer = Path(semiconductor_history_pointer)
+    else:
+        pointer = DEFAULT_SEMICONDUCTOR_HISTORY_POINTER
     if not pointer.is_file():
         if explicit_pointer:
             reason = "semiconductor_industry_evidence_pointer_missing"
