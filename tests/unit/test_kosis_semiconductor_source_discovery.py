@@ -6,6 +6,7 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from alpha_cycle.kosis_semiconductor_source_discovery_cli import (
     CAPACITY_UTILIZATION_TABLE_NAME,
@@ -90,6 +91,7 @@ def _parameter_row(
 def test_discovery_verifies_both_semiconductor_source_inventories(tmp_path: Path) -> None:
     index_id = "DT_INDEX"
     capacity_id = "DT_CAPACITY"
+    capacity_response_title = "제조업 생산능력 및 가동률지수"
     transport = FakeTransport(
         [
             _json_response([_search_row(table_id=index_id, table_name=INDUSTRY_INDEX_TABLE_NAME)]),
@@ -124,13 +126,13 @@ def test_discovery_verifies_both_semiconductor_source_inventories(tmp_path: Path
                 [
                     _parameter_row(
                         table_id=capacity_id,
-                        table_name=CAPACITY_UTILIZATION_TABLE_NAME,
+                        table_name=capacity_response_title,
                         item_id="T40",
                         item_name="생산능력지수",
                     ),
                     _parameter_row(
                         table_id=capacity_id,
-                        table_name=CAPACITY_UTILIZATION_TABLE_NAME,
+                        table_name=capacity_response_title,
                         item_id="T41",
                         item_name="가동률지수",
                     ),
@@ -160,10 +162,22 @@ def test_discovery_verifies_both_semiconductor_source_inventories(tmp_path: Path
     assert [target["table_id"] for target in targets] == [index_id, capacity_id]
     assert all(target["status"] == "inventory_verified" for target in targets)
     assert all(target["semiconductor_classification_count"] == 1 for target in targets)
+    assert targets[0]["probe_object_codes"] == ["ALL", "ALL"]
+    assert targets[1]["probe_object_codes"] == ["ALL"]
+    assert targets[0]["parameter_title_matches_metadata"] is True
+    assert targets[1]["parameter_title_matches_metadata"] is False
+    assert targets[1]["parameter_response_titles"] == [capacity_response_title]
+
     assert len(transport.urls) == 6
     assert sum("statisticsSearch.do" in url for url in transport.urls) == 2
     assert sum("statisticsData.do" in url for url in transport.urls) == 2
     assert sum("statisticsParameterData.do" in url for url in transport.urls) == 2
+    index_params = parse_qs(urlparse(transport.urls[2]).query)
+    capacity_params = parse_qs(urlparse(transport.urls[5]).query)
+    assert index_params["objL1"] == ["ALL"]
+    assert index_params["objL2"] == ["ALL"]
+    assert capacity_params["objL1"] == ["ALL"]
+    assert "objL2" not in capacity_params
     assert (tmp_path / "latest_kosis_semiconductor_source_discovery.json").is_file()
 
 
@@ -195,7 +209,7 @@ def test_discovery_stays_incomplete_without_semiconductor_classification(
                 [
                     _parameter_row(
                         table_id=capacity_id,
-                        table_name=CAPACITY_UTILIZATION_TABLE_NAME,
+                        table_name="제조업 생산능력 및 가동률지수",
                         item_id="T41",
                         item_name="가동률지수",
                     )
@@ -222,6 +236,64 @@ def test_discovery_stays_incomplete_without_semiconductor_classification(
     assert targets[0]["status"] == "no_semiconductor_classification"
     assert targets[1]["status"] == "inventory_verified"
     assert pointer["industry_cycle_certified"] is False
+
+
+def test_discovery_rejects_inconsistent_parameter_titles(tmp_path: Path) -> None:
+    index_id = "DT_INDEX"
+    capacity_id = "DT_CAPACITY"
+    transport = FakeTransport(
+        [
+            _json_response([_search_row(table_id=index_id, table_name=INDUSTRY_INDEX_TABLE_NAME)]),
+            _json_response([{"TBL_NM": INDUSTRY_INDEX_TABLE_NAME}]),
+            _json_response(
+                [
+                    _parameter_row(
+                        table_id=index_id,
+                        table_name=INDUSTRY_INDEX_TABLE_NAME,
+                        item_id="T10",
+                        item_name="생산지수",
+                    ),
+                    _parameter_row(
+                        table_id=index_id,
+                        table_name="다른 제목",
+                        item_id="T20",
+                        item_name="출하지수",
+                    ),
+                ]
+            ),
+            _json_response(
+                [_search_row(table_id=capacity_id, table_name=CAPACITY_UTILIZATION_TABLE_NAME)]
+            ),
+            _json_response([{"TBL_NM": CAPACITY_UTILIZATION_TABLE_NAME}]),
+            _json_response(
+                [
+                    _parameter_row(
+                        table_id=capacity_id,
+                        table_name=CAPACITY_UTILIZATION_TABLE_NAME,
+                        item_id="T41",
+                        item_name="가동률지수",
+                    )
+                ]
+            ),
+        ]
+    )
+    client = KosisReadOnlyClient(
+        KosisCredentials(api_key="secret-key"),
+        transport=transport,
+        max_retries=0,
+        sleep=lambda _: None,
+    )
+
+    pointer = discover_semiconductor_sources(
+        client=client,
+        output_root=tmp_path,
+        now=datetime(2026, 8, 9, 12, 0, tzinfo=UTC),
+    )
+
+    targets = pointer["targets"]
+    assert isinstance(targets, list)
+    assert targets[0]["status"] == "parameter_title_inconsistent"
+    assert pointer["status"] == "semiconductor_source_discovery_incomplete"
 
 
 def test_discovery_pointer_is_ascii_safe(tmp_path: Path) -> None:
