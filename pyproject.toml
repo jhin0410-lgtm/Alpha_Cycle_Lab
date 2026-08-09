@@ -31,6 +31,7 @@ alpha-cycle-decision = "alpha_cycle.decision_cli:main"
 alpha-cycle-kosis-discovery = "alpha_cycle.kosis_industry_discovery_cli:main"
 alpha-cycle-kosis-inventory = "alpha_cycle.kosis_industry_inventory_cli:main"
 alpha-cycle-kosis-parameters = "alpha_cycle.kosis_industry_parameter_cli:main"
+alpha-cycle-kosis-semiconductor-history = "alpha_cycle.kosis_semiconductor_history_cli:main"
 alpha-cycle-kosis-semiconductor-sources = "alpha_cycle.kosis_semiconductor_source_discovery_cli:main"
 alpha-cycle-live = "alpha_cycle.live_pipeline_provenance_cli:main"
 alpha-cycle-resume = "alpha_cycle.resume_pipeline_provenance_cli:main"
@@ -61,6 +62,7 @@ select = ["E", "F", "I", "B", "UP"]
 "src/alpha_cycle/intelligence/outcomes.py" = ["E501"]
 "src/alpha_cycle/intelligence/technical_evidence_policy.py" = ["E501"]
 "src/alpha_cycle/intelligence/valuation.py" = ["E501"]
+"src/alpha_cycle/kosis_semiconductor_history_cli.py" = ["E501"]
 "src/alpha_cycle/live_pipeline_cli.py" = ["UP047"]
 "tests/unit/test_catalyst_evidence_policy.py" = ["E501"]
 "tests/unit/test_paper_state.py" = ["UP017"]
@@ -100,3 +102,7 @@ disable_error_code = ["no-redef"]
 [[tool.mypy.overrides]]
 module = "alpha_cycle.market_consistency_cli"
 disable_error_code = ["no-redef"]
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.kosis_semiconductor_history_cli"
+disable_error_code = ["operator"]
