@@ -7,6 +7,14 @@ from alpha_cycle.providers.ecos import (
     EcosSeriesSpec,
     load_ecos_series_config,
 )
+from alpha_cycle.providers.kosis import (
+    DEFAULT_INDUSTRY_SEARCH,
+    DEFAULT_KOSIS_ORG_ID,
+    KosisCredentials,
+    KosisReadOnlyClient,
+    KosisTableCandidate,
+    KosisTableIdentity,
+)
 from alpha_cycle.providers.opendart import (
     CorpCode,
     CorpCodeArchiveDiagnostics,
@@ -35,6 +43,8 @@ __all__ = [
     "CandleBatch",
     "CorpCode",
     "CorpCodeArchiveDiagnostics",
+    "DEFAULT_INDUSTRY_SEARCH",
+    "DEFAULT_KOSIS_ORG_ID",
     "DisclosureBatch",
     "EcosBatch",
     "EcosCredentials",
@@ -42,6 +52,10 @@ __all__ = [
     "EcosSeriesSpec",
     "FinancialBatch",
     "FinancialPeriodPayload",
+    "KosisCredentials",
+    "KosisReadOnlyClient",
+    "KosisTableCandidate",
+    "KosisTableIdentity",
     "MarketPrice",
     "OpenDartCredentials",
     "OpenDartReadOnlyClient",
