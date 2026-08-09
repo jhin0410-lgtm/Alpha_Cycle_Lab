@@ -31,10 +31,10 @@ def _canonical_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def _write_json(path: Path, value: object) -> None:
+def _write_json(path: Path, value: object, *, ensure_ascii: bool = False) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True),
+        json.dumps(value, ensure_ascii=ensure_ascii, indent=2, sort_keys=True),
         encoding="utf-8",
     )
     temporary.replace(path)
@@ -121,7 +121,9 @@ def discover(
         "decision_score_enabled": False,
     }
     output_root.mkdir(parents=True, exist_ok=True)
-    _write_json(output_root / LATEST_POINTER_NAME, pointer)
+    # Keep the latest pointer ASCII-only so Windows PowerShell 5.1 can read paths
+    # containing Korean characters without relying on its legacy default encoding.
+    _write_json(output_root / LATEST_POINTER_NAME, pointer, ensure_ascii=True)
     return pointer
 
 
