@@ -29,6 +29,7 @@ dev = [
 alpha-cycle = "alpha_cycle.cli:main"
 alpha-cycle-decision = "alpha_cycle.decision_cli:main"
 alpha-cycle-kosis-discovery = "alpha_cycle.kosis_industry_discovery_cli:main"
+alpha-cycle-kosis-inventory = "alpha_cycle.kosis_industry_inventory_cli:main"
 alpha-cycle-kosis-parameters = "alpha_cycle.kosis_industry_parameter_cli:main"
 alpha-cycle-live = "alpha_cycle.live_pipeline_provenance_cli:main"
 alpha-cycle-resume = "alpha_cycle.resume_pipeline_provenance_cli:main"
