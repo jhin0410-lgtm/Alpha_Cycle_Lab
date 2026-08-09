@@ -32,11 +32,20 @@ SEMICONDUCTOR_TERMS = ("반도체 제조업", "반도체")
 class SourceTarget:
     role: str
     table_name: str
+    probe_object_codes: tuple[str, ...]
 
 
 TARGETS = (
-    SourceTarget("industry_production_shipment_inventory", INDUSTRY_INDEX_TABLE_NAME),
-    SourceTarget("capacity_utilization", CAPACITY_UTILIZATION_TABLE_NAME),
+    SourceTarget(
+        "industry_production_shipment_inventory",
+        INDUSTRY_INDEX_TABLE_NAME,
+        ("ALL", "ALL"),
+    ),
+    SourceTarget(
+        "capacity_utilization",
+        CAPACITY_UTILIZATION_TABLE_NAME,
+        ("ALL",),
+    ),
 )
 
 
@@ -109,6 +118,9 @@ def _discover_target(
         "exact_match_count": len(exact),
         "table_id": None,
         "metadata_title_verified": False,
+        "probe_object_codes": list(target.probe_object_codes),
+        "parameter_response_titles": [],
+        "parameter_title_matches_metadata": False,
         "parameter_probe_row_count": 0,
         "parameter_probe_periods": [],
         "item_count": 0,
@@ -138,7 +150,7 @@ def _discover_target(
     query = KosisParameterQuery(
         org_id=candidate.org_id,
         table_id=candidate.table_id,
-        object_codes=("ALL",),
+        object_codes=target.probe_object_codes,
         item_id="ALL",
         period=DEFAULT_KOSIS_PERIOD,
         latest_count=1,
@@ -159,14 +171,15 @@ def _discover_target(
             None,
         )
 
-    titles = {row.table_name for row in rows}
-    if titles != {target.table_name}:
+    titles = sorted({row.table_name for row in rows})
+    if len(titles) != 1:
         return (
             {
                 **base,
                 "table_id": candidate.table_id,
                 "metadata_title_verified": True,
-                "status": "parameter_title_mismatch",
+                "parameter_response_titles": titles,
+                "status": "parameter_title_inconsistent",
             },
             raw_search,
             raw_meta,
@@ -181,6 +194,8 @@ def _discover_target(
         **base,
         "table_id": candidate.table_id,
         "metadata_title_verified": True,
+        "parameter_response_titles": titles,
+        "parameter_title_matches_metadata": titles[0] == target.table_name,
         "parameter_probe_row_count": len(rows),
         "parameter_probe_periods": periods,
         "item_count": inventory["item_count"],
