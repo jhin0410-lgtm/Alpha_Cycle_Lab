@@ -1,4 +1,4 @@
-"""Immutable expectation evidence without pretending single-broker data is consensus."""
+"""Immutable KIS estimate-perform evidence without premature consensus semantics."""
 
 from __future__ import annotations
 
@@ -94,7 +94,7 @@ class ExpectationIntelligenceSnapshot:
 
 
 class ExpectationIntelligenceCollector:
-    """Collect KIS broker-estimate evidence while keeping consensus disabled."""
+    """Collect KIS estimate-perform evidence while keeping semantics unresolved."""
 
     def __init__(self, client: KisResearchReadOnlyClient) -> None:
         self.client = client
