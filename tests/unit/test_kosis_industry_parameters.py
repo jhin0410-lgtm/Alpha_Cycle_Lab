@@ -204,6 +204,29 @@ def test_capture_writes_revision_sensitive_non_scoring_artifact(tmp_path: Path) 
     assert (tmp_path / "latest_kosis_industry_parameters.json").is_file()
 
 
+def test_parameter_latest_pointer_is_ascii_safe(tmp_path: Path) -> None:
+    output_root = tmp_path / "쿠쿠"
+    transport = FakeTransport([_json_response([_parameter_row()])])
+    client = KosisReadOnlyClient(
+        KosisCredentials(api_key="secret-key"),
+        transport=transport,
+        max_retries=0,
+        sleep=lambda _: None,
+    )
+
+    pointer = capture_parameter_data(
+        client=client,
+        query=KosisParameterQuery(),
+        output_root=output_root,
+        now=datetime(2026, 8, 9, 11, 0, tzinfo=UTC),
+    )
+
+    pointer_bytes = (output_root / "latest_kosis_industry_parameters.json").read_bytes()
+    assert pointer_bytes.isascii()
+    decoded = json.loads(pointer_bytes.decode("ascii"))
+    assert decoded["artifact_directory"] == pointer["artifact_directory"]
+
+
 def test_capture_rejects_unverified_table_title(tmp_path: Path) -> None:
     transport = FakeTransport(
         [_json_response([_parameter_row(table_name="다른 통계표")])]
