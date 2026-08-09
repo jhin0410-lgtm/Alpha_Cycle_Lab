@@ -102,3 +102,7 @@ disable_error_code = ["no-redef"]
 [[tool.mypy.overrides]]
 module = "alpha_cycle.market_consistency_cli"
 disable_error_code = ["no-redef"]
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.kosis_semiconductor_history_cli"
+disable_error_code = ["operator"]
