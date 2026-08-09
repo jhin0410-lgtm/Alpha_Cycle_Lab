@@ -166,7 +166,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(pointer, ensure_ascii=False, sort_keys=True))
         return 0 if pointer["status"] == "table_identity_verified" else 3
     except (ValueError, OSError, TypeError) as exc:
-        print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        error_payload = json.dumps(
+            {"status": "failed", "error": str(exc)},
+            ensure_ascii=False,
+        )
+        print(error_payload, file=sys.stderr)
         return 2
 
 
