@@ -75,15 +75,18 @@ The inventory/shipment ratio is a ratio between two `2020=100` indexes. It is **
 
 ## Heuristic phase labels
 
-The phase label is intentionally simple and auditable:
+The phase label is intentionally simple and auditable. Diagnostics schema v2 adds a fixed `±1.0 percentage-point` deadband around the shipment-minus-inventory YoY spread so near-equal growth does not flip between inventory-control and inventory-build labels because of tiny revisions or rounding differences.
 
 - shipments non-negative YoY + inventory negative YoY → `recovery_destocking`
-- shipments and inventory non-negative, shipments growing faster → `expansion_inventory_controlled`
-- shipments and inventory non-negative, inventory growing at least as fast → `expansion_inventory_build`
+- shipments and inventory non-negative, shipment-minus-inventory spread `> +1.0%p` → `expansion_inventory_controlled`
+- shipments and inventory non-negative, spread within `[-1.0%p, +1.0%p]` → `expansion_inventory_balanced`
+- shipments and inventory non-negative, spread `< -1.0%p` → `expansion_inventory_build`
 - shipments and inventory both negative → `contraction_destocking`
 - shipments negative + inventory non-negative → `demand_slowdown_inventory_build`
 
-This is a diagnostic description, not a validated economic regime model.
+The deadband is a fixed descriptive stability guard. It is not estimated from stock returns, optimized against future outcomes, or presented as an economically validated threshold. Existing diagnostics schema v1 artifacts remain readable; new captures publish schema v2 diagnostics.
+
+This is a diagnostic description, not a validated economic regime model. Capacity, utilization, and seasonally adjusted momentum remain visible supporting diagnostics but do not silently override the shipment/inventory phase label.
 
 ## Trust boundary
 

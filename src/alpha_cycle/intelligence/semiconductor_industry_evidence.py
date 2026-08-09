@@ -23,6 +23,7 @@ from alpha_cycle.intelligence.semiconductor_cycle_proxy import SemiconductorCycl
 SOURCE_SCOPE = "kosis_semiconductor_industry_evidence"
 DEFAULT_MAX_PERIOD_AGE_MONTHS = 4
 _EXPECTED_SERIES_COUNT = 9
+_SUPPORTED_DIAGNOSTIC_SCHEMA_VERSIONS = frozenset({1, 2})
 _METRIC_KEYS = (
     "production_yoy_pct",
     "shipment_yoy_pct",
@@ -41,6 +42,7 @@ _EXPANSION_PHASES = frozenset(
     {
         "recovery_destocking",
         "expansion_inventory_controlled",
+        "expansion_inventory_balanced",
         "expansion_inventory_build",
     }
 )
@@ -260,6 +262,12 @@ def load_semiconductor_industry_evidence(
     series = manifest.get("series")
     if not isinstance(series, list) or len(series) != _EXPECTED_SERIES_COUNT:
         raise ValueError("KOSIS semiconductor manifest must bind all nine series")
+    diagnostic_schema = diagnostics.get("schema_version")
+    if diagnostic_schema not in _SUPPORTED_DIAGNOSTIC_SCHEMA_VERSIONS:
+        raise ValueError(
+            "KOSIS diagnostics schema version is unsupported: "
+            f"{diagnostic_schema!r}"
+        )
     if diagnostics.get("status") != "heuristic_diagnostics_available":
         raise ValueError("KOSIS diagnostics have unexpected status")
     for key in (

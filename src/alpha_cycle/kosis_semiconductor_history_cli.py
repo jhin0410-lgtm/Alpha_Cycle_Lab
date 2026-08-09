@@ -22,6 +22,7 @@ CAPACITY_TABLE_ID = "DT_1F32001"
 CAPACITY_TABLE_NAME = "제조업 생산능력 및 가동률지수(2020=100)"
 DEFAULT_MONTHS = 180
 MAX_MONTHS = 600
+HEURISTIC_SPREAD_DEADBAND_PP = 1.0
 DEFAULT_OUTPUT_ROOT = Path(
     "data/private/live-research/kosis-semiconductor-history"
 )
@@ -212,10 +213,13 @@ def _heuristic_phase(shipment_yoy: float | None, inventory_yoy: float | None) ->
         return None
     if shipment_yoy >= 0 and inventory_yoy < 0:
         return "recovery_destocking"
-    if shipment_yoy >= 0 and inventory_yoy >= 0 and shipment_yoy > inventory_yoy:
-        return "expansion_inventory_controlled"
     if shipment_yoy >= 0 and inventory_yoy >= 0:
-        return "expansion_inventory_build"
+        spread = shipment_yoy - inventory_yoy
+        if spread > HEURISTIC_SPREAD_DEADBAND_PP:
+            return "expansion_inventory_controlled"
+        if spread < -HEURISTIC_SPREAD_DEADBAND_PP:
+            return "expansion_inventory_build"
+        return "expansion_inventory_balanced"
     if shipment_yoy < 0 and inventory_yoy < 0:
         return "contraction_destocking"
     return "demand_slowdown_inventory_build"
@@ -393,7 +397,7 @@ def build_semiconductor_diagnostics(
 
     latest = monthly[-1] if monthly else None
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "heuristic_diagnostics_available" if latest is not None else "insufficient_history",
         "methodology": {
             "raw_yoy": "12-month percent change on original indexes",
@@ -407,7 +411,12 @@ def build_semiconductor_diagnostics(
             ),
             "heuristic_phase": (
                 "transparent sign-and-spread diagnostic based only on shipment and inventory YoY; "
+                "a fixed spread deadband prevents near-equal growth from flipping inventory labels; "
                 "not a certified industry-cycle regime"
+            ),
+            "heuristic_phase_spread_deadband_pp": HEURISTIC_SPREAD_DEADBAND_PP,
+            "heuristic_phase_spread_deadband_basis": (
+                "fixed descriptive stability guard; not estimated from returns or fitted to outcomes"
             ),
         },
         "diagnostic_month_count": len(monthly),
