@@ -13,6 +13,7 @@ import pytest
 from alpha_cycle.kosis_semiconductor_history_cli import (
     CAPACITY_TABLE_ID,
     CAPACITY_TABLE_NAME,
+    HEURISTIC_SPREAD_DEADBAND_PP,
     INDEX_TABLE_ID,
     INDEX_TABLE_NAME,
     SERIES_SPECS,
@@ -185,8 +186,14 @@ def test_capture_semiconductor_history_uses_verified_bindings_and_stays_non_scor
     assert pointer["decision_score_enabled"] is False
 
     artifact_directory = Path(str(pointer["artifact_directory"]))
-    diagnostics = json.loads((artifact_directory / "diagnostics.json").read_text(encoding="utf-8"))
+    diagnostics = json.loads(
+        (artifact_directory / "diagnostics.json").read_text(encoding="utf-8")
+    )
     latest = diagnostics["latest"]
+    assert diagnostics["schema_version"] == 2
+    assert diagnostics["methodology"]["heuristic_phase_spread_deadband_pp"] == pytest.approx(
+        HEURISTIC_SPREAD_DEADBAND_PP
+    )
     assert latest["production_yoy_pct"] == pytest.approx(12.0)
     assert latest["shipment_yoy_pct"] == pytest.approx(15.0)
     assert latest["inventory_yoy_pct"] == pytest.approx(5.0)
@@ -203,8 +210,14 @@ def test_capture_semiconductor_history_uses_verified_bindings_and_stays_non_scor
     assert all(query["newEstPrdCnt"] == ["13"] for query in parsed)
     index_queries = [query for query in parsed if query["tblId"] == [INDEX_TABLE_ID]]
     capacity_queries = [query for query in parsed if query["tblId"] == [CAPACITY_TABLE_ID]]
-    assert all(query["objL1"] == ["00"] and query["objL2"] == ["C261"] for query in index_queries)
-    assert all(query["objL1"] == ["C261"] and "objL2" not in query for query in capacity_queries)
+    assert all(
+        query["objL1"] == ["00"] and query["objL2"] == ["C261"]
+        for query in index_queries
+    )
+    assert all(
+        query["objL1"] == ["C261"] and "objL2" not in query
+        for query in capacity_queries
+    )
 
     pointer_bytes = (tmp_path / "latest_kosis_semiconductor_history.json").read_bytes()
     assert pointer_bytes.isascii()
@@ -226,6 +239,36 @@ def test_build_semiconductor_diagnostics_labels_recovery_destocking() -> None:
     assert latest["inventory_yoy_pct"] == pytest.approx(-5.0)
     assert diagnostics["industry_cycle_certified"] is False
     assert diagnostics["decision_score_enabled"] is False
+
+
+def test_build_semiconductor_diagnostics_uses_deadband_for_near_equal_growth() -> None:
+    values = {
+        "shipment_raw": {"202506": 100.0, "202606": 103.11},
+        "inventory_raw": {"202506": 100.0, "202606": 103.02},
+        "production_raw": {"202506": 100.0, "202606": 102.25},
+    }
+
+    diagnostics = build_semiconductor_diagnostics(values)
+
+    latest = diagnostics["latest"]
+    assert isinstance(latest, dict)
+    assert latest["shipment_minus_inventory_yoy_pp"] == pytest.approx(0.09)
+    assert latest["heuristic_phase"] == "expansion_inventory_balanced"
+
+
+def test_build_semiconductor_diagnostics_keeps_material_inventory_build_signal() -> None:
+    values = {
+        "shipment_raw": {"202506": 100.0, "202606": 103.0},
+        "inventory_raw": {"202506": 100.0, "202606": 105.0},
+        "production_raw": {"202506": 100.0, "202606": 103.5},
+    }
+
+    diagnostics = build_semiconductor_diagnostics(values)
+
+    latest = diagnostics["latest"]
+    assert isinstance(latest, dict)
+    assert latest["shipment_minus_inventory_yoy_pp"] == pytest.approx(-2.0)
+    assert latest["heuristic_phase"] == "expansion_inventory_build"
 
 
 def test_capture_semiconductor_history_rejects_classification_drift(tmp_path: Path) -> None:
@@ -250,7 +293,9 @@ def test_capture_semiconductor_history_rejects_classification_drift(tmp_path: Pa
         )
 
 
-def test_capture_semiconductor_history_requires_at_least_thirteen_months(tmp_path: Path) -> None:
+def test_capture_semiconductor_history_requires_at_least_thirteen_months(
+    tmp_path: Path,
+) -> None:
     client = KosisReadOnlyClient(
         KosisCredentials(api_key="secret-key"),
         transport=FakeTransport([]),
