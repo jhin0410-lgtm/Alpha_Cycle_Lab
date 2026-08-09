@@ -15,6 +15,8 @@ from pathlib import Path
 from typing import cast
 from zoneinfo import ZoneInfo
 
+import pandas as pd
+
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_evidence_calibrated import (
     build_investment_decision_snapshot as _build_calibrated_snapshot,
@@ -33,6 +35,11 @@ KOREA_TZ = ZoneInfo("Asia/Seoul")
 DEFAULT_SEMICONDUCTOR_HISTORY_POINTER = Path(
     "data/private/live-research/kosis-semiconductor-history/"
     "latest_kosis_semiconductor_history.json"
+)
+_GENERIC_INDUSTRY_GAP = "산업 가격·재고·공급·설비투자 사이클 데이터 미연결"
+_RESIDUAL_INDUSTRY_GAP = (
+    "메모리 가격·글로벌 공급·산업 Capex 사이클 데이터 미연결 "
+    "(KOSIS 생산·출하·재고·생산능력·가동률 연결됨)"
 )
 
 
@@ -62,6 +69,102 @@ def _kosis_capture_date_in_korea(pointer_path: Path) -> date:
     if captured_at.tzinfo is None or captured_at.utcoffset() is None:
         raise ValueError("KOSIS semiconductor manifest captured_at must be timezone-aware")
     return captured_at.astimezone(KOREA_TZ).date()
+
+
+def _decode_gap_list(value: object) -> list[str] | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed: object = json.loads(value)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, list):
+        return None
+    return [str(item) for item in parsed if str(item).strip()]
+
+
+def _reconcile_industry_evidence_gaps(scorecards: pd.DataFrame) -> pd.DataFrame:
+    """Narrow the generic industry-data gap after verified KOSIS evidence is attached."""
+
+    required = {"ticker", "industry_evidence_available", "evidence_gaps"}
+    if not required.issubset(scorecards.columns):
+        return scorecards.copy()
+    result = scorecards.copy()
+    reconciled: list[object] = []
+    for available, raw in zip(
+        result["industry_evidence_available"].astype(bool).tolist(),
+        result["evidence_gaps"].tolist(),
+        strict=True,
+    ):
+        gaps = _decode_gap_list(raw)
+        if not available or gaps is None:
+            reconciled.append(raw)
+            continue
+        updated = [
+            _RESIDUAL_INDUSTRY_GAP if gap == _GENERIC_INDUSTRY_GAP else gap
+            for gap in gaps
+        ]
+        reconciled.append(
+            json.dumps(list(dict.fromkeys(updated)), ensure_ascii=False)
+        )
+    result["evidence_gaps"] = pd.Series(reconciled, index=result.index, dtype="object")
+    return result
+
+
+def _sync_record_evidence_gaps(
+    records: pd.DataFrame,
+    scorecards: pd.DataFrame,
+) -> pd.DataFrame:
+    """Keep compact decision records aligned with reconciled scorecard gaps."""
+
+    if "evidence_gaps" not in records.columns or "evidence_gaps" not in scorecards.columns:
+        return records.copy()
+    supplement = scorecards.loc[:, ["ticker", "evidence_gaps"]].copy()
+    supplement["ticker"] = supplement["ticker"].astype("string").str.zfill(6)
+    if supplement["ticker"].duplicated().any():
+        raise ValueError("Industry evidence scorecards contain duplicate tickers")
+    result = records.copy()
+    result["ticker"] = result["ticker"].astype("string").str.zfill(6)
+    result = result.drop(columns=["evidence_gaps"]).merge(
+        supplement,
+        on="ticker",
+        how="left",
+        validate="one_to_one",
+    )
+    return result
+
+
+def _reconcile_industry_gap_report(
+    report: str,
+    applicable_tickers: set[str],
+) -> str:
+    """Replace only the stale generic gap inside applicable execution playbooks."""
+
+    normalized = {str(ticker).zfill(6) for ticker in applicable_tickers}
+    lines: list[str] = []
+    in_playbook = False
+    current_ticker: str | None = None
+    for line in report.splitlines():
+        if line == "## 실행 플레이북":
+            in_playbook = True
+            current_ticker = None
+        elif line.startswith("## ") and in_playbook:
+            in_playbook = False
+            current_ticker = None
+        elif in_playbook and line.startswith("### "):
+            candidate = line.removeprefix("### ").strip()
+            current_ticker = candidate.zfill(6) if candidate.isdigit() else None
+
+        if (
+            in_playbook
+            and current_ticker in normalized
+            and line.strip() == f"- {_GENERIC_INDUSTRY_GAP}"
+        ):
+            indent = line[: len(line) - len(line.lstrip())]
+            lines.append(f"{indent}- {_RESIDUAL_INDUSTRY_GAP}")
+        else:
+            lines.append(line)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _unavailable_report(report: str, reason: str) -> str:
@@ -146,11 +249,20 @@ def build_investment_decision_snapshot(
         proxy,
         bridge,
     )
-    decision_records = attach_semiconductor_industry_to_records(
+    scorecards = _reconcile_industry_evidence_gaps(scorecards)
+    synchronized_records = _sync_record_evidence_gaps(
         snapshot.decision_records,
         scorecards,
     )
-    report = append_semiconductor_industry_evidence_report(snapshot.report_markdown, bridge)
+    decision_records = attach_semiconductor_industry_to_records(
+        synchronized_records,
+        scorecards,
+    )
+    report = _reconcile_industry_gap_report(
+        snapshot.report_markdown,
+        set(proxy.expected_tickers),
+    )
+    report = append_semiconductor_industry_evidence_report(report, bridge)
     warnings = tuple(
         dict.fromkeys(
             (
