@@ -48,6 +48,36 @@ def _string_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _normalize_item(row: Mapping[str, object]) -> dict[str, object]:
+    units_raw = row.get("units")
+    units: list[dict[str, str]] = []
+    if isinstance(units_raw, list):
+        for unit in units_raw:
+            if not isinstance(unit, dict):
+                continue
+            unit_map = cast(Mapping[str, object], unit)
+            units.append(
+                {
+                    "unit_id": str(unit_map.get("unit_id", "")).strip(),
+                    "unit_name": str(unit_map.get("unit_name", "")).strip(),
+                }
+            )
+    else:
+        units.append(
+            {
+                "unit_id": str(row.get("unit_id", "")).strip(),
+                "unit_name": str(row.get("unit_name", "")).strip(),
+            }
+        )
+    units.sort(key=lambda value: (value["unit_id"], value["unit_name"]))
+    return {
+        "item_id": str(row.get("item_id", "")).strip(),
+        "item_name": str(row.get("item_name", "")).strip(),
+        "unit_variant_count": len(units),
+        "units": units,
+    }
+
+
 def inspect_latest_inventory(
     *,
     pointer_path: Path = DEFAULT_POINTER,
@@ -93,26 +123,22 @@ def inspect_latest_inventory(
                 }
             )
 
-    normalized_items = [
-        {
-            "item_id": str(row.get("item_id", "")).strip(),
-            "item_name": str(row.get("item_name", "")).strip(),
-            "unit_id": str(row.get("unit_id", "")).strip(),
-            "unit_name": str(row.get("unit_name", "")).strip(),
-        }
-        for row in items
-    ]
-    normalized_items.sort(key=lambda row: (str(row["item_id"]), str(row["unit_id"])))
+    normalized_items = [_normalize_item(row) for row in items]
+    normalized_items.sort(key=lambda row: str(row["item_id"]))
     matched.sort(
         key=lambda row: tuple(str(value) for value in cast(list[str], row["classification_ids"]))
     )
+    inventory_schema_version = int(inventory.get("inventory_schema_version", 1))
 
     return {
         "status": "inventory_inspected",
         "artifact_id": str(pointer.get("artifact_id", "")).strip(),
         "org_id": str(pointer.get("org_id", "")).strip(),
         "table_id": str(pointer.get("table_id", "")).strip(),
+        "table_name": str(pointer.get("table_name", "")).strip(),
         "periods": _string_list(pointer.get("periods")),
+        "inventory_schema_version": inventory_schema_version,
+        "legacy_single_unit_summary": inventory_schema_version < 2,
         "item_count": len(normalized_items),
         "classification_count": len(classifications),
         "match_terms": list(normalized_terms),
@@ -130,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-kosis-inventory",
         description=(
-            "Inspect the latest captured KOSIS industry parameter inventory without "
+            "Inspect the latest captured KOSIS parameter inventory without "
             "making another network request"
         ),
     )
