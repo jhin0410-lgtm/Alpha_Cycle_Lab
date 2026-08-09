@@ -48,6 +48,20 @@ def _string_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _inventory_schema_version(value: object) -> int:
+    if value is None:
+        return 1
+    if isinstance(value, bool) or not isinstance(value, (int, str)):
+        raise ValueError("KOSIS inventory_schema_version must be an integer")
+    try:
+        version = int(value)
+    except ValueError as exc:
+        raise ValueError("KOSIS inventory_schema_version must be an integer") from exc
+    if version <= 0:
+        raise ValueError("KOSIS inventory_schema_version must be positive")
+    return version
+
+
 def _normalize_item(row: Mapping[str, object]) -> dict[str, object]:
     units_raw = row.get("units")
     units: list[dict[str, str]] = []
@@ -128,7 +142,9 @@ def inspect_latest_inventory(
     matched.sort(
         key=lambda row: tuple(str(value) for value in cast(list[str], row["classification_ids"]))
     )
-    inventory_schema_version = int(inventory.get("inventory_schema_version", 1))
+    inventory_schema_version = _inventory_schema_version(
+        inventory.get("inventory_schema_version")
+    )
 
     return {
         "status": "inventory_inspected",
