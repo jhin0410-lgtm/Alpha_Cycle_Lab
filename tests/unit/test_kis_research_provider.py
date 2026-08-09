@@ -1,4 +1,4 @@
-"""Tests for the KIS single-broker research estimate provider."""
+"""Tests for the semantically-unclassified KIS estimate-perform provider."""
 
 from __future__ import annotations
 
