@@ -1,4 +1,4 @@
-"""Collect immutable KIS broker-research estimate evidence."""
+"""Collect immutable KIS estimate-perform evidence without assigning consensus semantics."""
 
 from __future__ import annotations
 
@@ -28,7 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-kis-expectations",
         description=(
-            "Collect KIS single-broker research estimates without enabling account or order APIs"
+            "Collect raw KIS estimate-perform evidence without enabling account/order APIs or "
+            "assuming single-broker or consensus semantics"
         ),
     )
     parser.add_argument(
@@ -68,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             "source_scope": snapshot.source_scope,
             "symbols": list(snapshot.symbols),
             "semantic_status": "raw_structure_only",
+            "provider_semantics_certified": False,
             "consensus_certified": False,
             "revision_certified": False,
             "account_api_enabled": False,
@@ -75,8 +77,8 @@ def main(argv: list[str] | None = None) -> int:
             "balance_api_enabled": False,
             "order_api_enabled": False,
             "next_action": (
-                "Inspect structure.csv and raw_estimate_perform.json before assigning "
-                "financial semantics or computing revisions."
+                "Run python -m alpha_cycle.kis_expectation_inventory_cli and inspect the "
+                "public field/label inventory before assigning financial semantics or revisions."
             ),
         }
         print(json.dumps(payload, ensure_ascii=False, sort_keys=True))
@@ -86,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": "blocked",
             "reason": "kis_expectation_evidence_unavailable",
             "error": str(exc),
+            "provider_semantics_certified": False,
             "consensus_certified": False,
             "revision_certified": False,
             "account_api_enabled": False,
