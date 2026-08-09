@@ -92,6 +92,7 @@ def test_search_tables_uses_official_integrated_search_contract() -> None:
     assert transport.urls[0].startswith("https://kosis.kr/openapi/statisticsSearch.do?")
     assert "searchNm=" in transport.urls[0]
     assert "orgId=101" in transport.urls[0]
+    assert "jsonVD=Y" in transport.urls[0]
 
 
 def test_discover_writes_verified_non_scoring_identity(tmp_path: Path) -> None:
@@ -120,6 +121,8 @@ def test_discover_writes_verified_non_scoring_identity(tmp_path: Path) -> None:
     assert pointer["selected_table_id"] == "DT_TEST_TABLE"
     assert pointer["industry_cycle_certified"] is False
     assert pointer["decision_score_enabled"] is False
+    assert len(transport.urls) == 2
+    assert all("jsonVD=Y" in url for url in transport.urls)
     manifest_path = Path(str(pointer["manifest_path"]))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["metadata_title_verified"] is True
