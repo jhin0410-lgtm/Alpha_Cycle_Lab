@@ -157,6 +157,7 @@ class KosisReadOnlyClient(RetryingReadOnlyClient):
             "resultCount": str(result_count),
             "format": "json",
             "content": "json",
+            "jsonVD": "Y",
         }
         if org_id is not None:
             cleaned_org = org_id.strip()
@@ -188,6 +189,7 @@ class KosisReadOnlyClient(RetryingReadOnlyClient):
                     "tblId": clean_table,
                     "format": "json",
                     "content": "json",
+                    "jsonVD": "Y",
                 },
             )
         )
