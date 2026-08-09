@@ -1,4 +1,4 @@
-"""Tests for fail-closed single-broker expectation snapshots."""
+"""Tests for fail-closed semantically-unclassified KIS expectation snapshots."""
 
 from __future__ import annotations
 
@@ -11,7 +11,10 @@ from alpha_cycle.intelligence.expectations import (
     ExpectationIntelligenceCollector,
     write_expectation_intelligence_snapshot,
 )
-from alpha_cycle.providers.kis_research import KisEstimatePerformEvidence
+from alpha_cycle.providers.kis_research import (
+    KIS_RESEARCH_SOURCE_SCOPE,
+    KisEstimatePerformEvidence,
+)
 
 NOW = datetime(2026, 8, 7, 21, 0, tzinfo=ZoneInfo("Asia/Seoul"))
 
@@ -29,7 +32,7 @@ def _record(symbol: str, *, minute: int) -> KisEstimatePerformEvidence:
         retrieved_at=NOW + timedelta(minutes=minute),
         endpoint="/uapi/domestic-stock/v1/quotations/estimate-perform",
         tr_id="HHKST668300C0",
-        source_scope="single_broker_research_estimate",
+        source_scope=KIS_RESEARCH_SOURCE_SCOPE,
         raw_response_sha256=("a" if symbol == "000660" else "b") * 64,
         raw_payload=payload,
     )
@@ -47,7 +50,7 @@ def test_snapshot_never_certifies_consensus_or_revision(tmp_path: Path) -> None:
     )
 
     assert snapshot.symbols == ("000660", "005930")
-    assert snapshot.source_scope == "single_broker_research_estimate"
+    assert snapshot.source_scope == KIS_RESEARCH_SOURCE_SCOPE
     payload = snapshot.payload_without_id()
     assert payload["consensus_certified"] is False
     assert payload["revision_certified"] is False
@@ -58,7 +61,7 @@ def test_snapshot_never_certifies_consensus_or_revision(tmp_path: Path) -> None:
     destination = files[0].parent
     manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["snapshot_id"] == snapshot.snapshot_id
-    assert manifest["source_scope"] == "single_broker_research_estimate"
+    assert manifest["source_scope"] == KIS_RESEARCH_SOURCE_SCOPE
     assert manifest["consensus_certified"] is False
     assert manifest["revision_certified"] is False
     assert manifest["account_api_enabled"] is False
