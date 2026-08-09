@@ -21,10 +21,12 @@ from alpha_cycle.intelligence import (
     write_valuation_evidence_snapshot,
 )
 from alpha_cycle.live_pipeline_cli import (
+    DEFAULT_INVESTOR_FLOW_POINTER,
     DEFAULT_MARKET_SYMBOLS,
     DEFAULT_OUTPUT_ROOT,
     PipelineStageError,
     _default_security_mappings,
+    _flow_status,
     _run_stage,
     _write_status,
 )
@@ -247,12 +249,18 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
     exposures = load_company_exposures(
         company_config if company_config.is_file() else None
     )
+    flow_pointer = (
+        DEFAULT_INVESTOR_FLOW_POINTER
+        if DEFAULT_INVESTOR_FLOW_POINTER.is_file()
+        else None
+    )
     decision_snapshot = _run_stage(
         "decision",
         lambda: build_investment_decision_snapshot(
             pair.research_directory,
             pair.market_directory,
             valuation_snapshot=valuation_directory,
+            investor_flow_pointer=flow_pointer,
             exposures=exposures,
             policy=DecisionPolicy(),
         ),
@@ -313,6 +321,7 @@ def _execute(args: argparse.Namespace) -> dict[str, object]:
             str(key): int(value)
             for key, value in scorecards["decision_state"].value_counts().items()
         },
+        **_flow_status(scorecards),
         "warnings": warnings,
         "order_api_enabled": False,
     }
