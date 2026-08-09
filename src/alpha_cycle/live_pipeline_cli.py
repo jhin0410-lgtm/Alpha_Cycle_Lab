@@ -430,12 +430,23 @@ def main(argv: list[str] | None = None) -> int:
             "error": str(exc.cause),
             "public_ip": public_ip,
             "next_action": (
-                "Register public_ip in the TossInvest Open API client IP allowlist, "
-                "then rerun the same command."
+                "Run .\\scripts\\run_live_pipeline.cmd so the supported Windows "
+                "orchestrator can collect fresh adjusted Kiwoom read-only market "
+                "evidence and retry in explicit Kiwoom-primary mode. Alternatively, "
+                "register public_ip in the TossInvest allowlist and rerun the direct "
+                "TossInvest command."
                 if allowlist
                 else "Review the stage error and rerun the same command after correction."
             ),
-            "rerun_command": "python -m alpha_cycle.live_pipeline_cli",
+            "rerun_command": (
+                ".\\scripts\\run_live_pipeline.cmd"
+                if allowlist
+                else "python -m alpha_cycle.live_pipeline_cli"
+            ),
+            "direct_rerun_command": "python -m alpha_cycle.live_pipeline_cli",
+            "fallback_mode": (
+                "orchestrated_kiwoom_primary_readonly" if allowlist else None
+            ),
             "order_api_enabled": False,
         }
         status_path = _write_status(args.output, payload)
