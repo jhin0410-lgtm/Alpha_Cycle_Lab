@@ -1,7 +1,10 @@
-"""Read-only Korea Investment OpenAPI adapter for broker research estimates.
+"""Read-only Korea Investment OpenAPI adapter for raw estimate-perform evidence.
 
 This module intentionally exposes research/quotation data only. It contains no
-account number, holdings, balance, order, or execution methods.
+account number, holdings, balance, order, or execution methods. The provider response
+is kept semantically unclassified until its live field layout and provenance are
+verified; the endpoint name alone does not establish multi-broker consensus or a
+single-broker analyst estimate.
 """
 
 from __future__ import annotations
@@ -29,13 +32,13 @@ KIS_REST_BASE_URL = "https://openapi.koreainvestment.com:9443"
 KIS_TOKEN_ENDPOINT = "/oauth2/tokenP"
 KIS_ESTIMATE_PERFORM_ENDPOINT = "/uapi/domestic-stock/v1/quotations/estimate-perform"
 KIS_ESTIMATE_PERFORM_TR_ID = "HHKST668300C0"
-KIS_RESEARCH_SOURCE_SCOPE = "single_broker_research_estimate"
+KIS_RESEARCH_SOURCE_SCOPE = "kis_estimate_perform_raw_unclassified"
 KOREA_TZ = ZoneInfo("Asia/Seoul")
 _RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 class KisResearchTransport(Protocol):
-    """Injectable HTTP boundary used by the KIS research adapter."""
+    """Injectable HTTP boundary used by the KIS estimate-perform adapter."""
 
     def get(
         self,
@@ -155,7 +158,7 @@ class _AccessToken:
 
 
 class KisResearchReadOnlyClient:
-    """Fetch KIS broker-research estimates without account or order access."""
+    """Fetch KIS estimate-perform evidence without account or order access."""
 
     def __init__(
         self,
@@ -212,7 +215,6 @@ class KisResearchReadOnlyClient:
         expires_in = payload.get("expires_in")
         if isinstance(expires_in, int) and not isinstance(expires_in, bool) and expires_in > 0:
             return now + timedelta(seconds=expires_in)
-        # Conservative in-memory fallback. The token is still used only for read-only research.
         return now + timedelta(minutes=30)
 
     def _issue_access_token(self) -> _AccessToken:
@@ -271,7 +273,7 @@ class KisResearchReadOnlyClient:
         }
 
     def estimate_perform(self, symbol: object) -> KisEstimatePerformEvidence:
-        """Fetch the official KIS single-broker estimate payload for one stock."""
+        """Fetch the official KIS estimate-perform payload for one stock."""
 
         normalized = self._symbol(symbol)
         url = (
