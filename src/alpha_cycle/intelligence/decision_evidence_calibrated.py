@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -65,6 +66,10 @@ from alpha_cycle.intelligence.technical_evidence_policy import (
 from alpha_cycle.intelligence.valuation import append_valuation_report
 
 _INVESTOR_FLOW_GAP = "기관·외국인 수급 데이터 미연결"
+_SESSION_MISMATCH_RE = re.compile(
+    r"^market_session_mismatch:(?P<ticker>\d{6}):"
+    r"flow=(?P<flow>\d{4}-\d{2}-\d{2}):market=(?P<market>\d{4}-\d{2}-\d{2})$"
+)
 
 
 def _price_lookup(market_context: pd.DataFrame) -> dict[str, object]:
@@ -72,21 +77,63 @@ def _price_lookup(market_context: pd.DataFrame) -> dict[str, object]:
     return {str(key).zfill(6): value for key, value in raw.items()}
 
 
+def _lagged_flow_observation_date(evidence: InvestorFlowEvidence) -> date | None:
+    """Return a safe prior-session flow date for a pure market-session lag.
+
+    This intentionally does not certify the evidence for the current market session.
+    It only distinguishes connected prior-session observations from a fully missing
+    investor-flow source.
+    """
+
+    if evidence.evidence_verified or not evidence.field_mapping_verified:
+        return None
+    match = _SESSION_MISMATCH_RE.fullmatch(evidence.reason)
+    if match is None:
+        return None
+    try:
+        flow_date = date.fromisoformat(match.group("flow"))
+        market_date = date.fromisoformat(match.group("market"))
+    except ValueError:
+        return None
+    if flow_date >= market_date:
+        return None
+    complete = [
+        row
+        for row in evidence.windows
+        if row.window == 20 and row.observations >= 20 and row.latest_date
+    ]
+    if not complete:
+        return None
+    latest_dates: set[date] = set()
+    for row in complete:
+        try:
+            latest_dates.add(datetime.strptime(row.latest_date, "%Y%m%d").date())
+        except ValueError:
+            return None
+    if latest_dates != {flow_date}:
+        return None
+    return flow_date
+
+
 def _reconcile_investor_flow_evidence_gaps(
     scorecards: pd.DataFrame,
     evidence: InvestorFlowEvidence,
 ) -> pd.DataFrame:
-    """Remove only the stale flow-data gap after ticker-level live verification."""
+    """Reconcile missing-flow wording without overstating same-session verification."""
 
-    if not evidence.evidence_verified or "evidence_gaps" not in scorecards.columns:
+    if "evidence_gaps" not in scorecards.columns:
         return scorecards
 
-    verified_tickers = {
+    complete_tickers = {
         row.ticker
         for row in evidence.windows
         if row.window == 20 and row.observations >= 20
     }
-    if not verified_tickers:
+    if not complete_tickers:
+        return scorecards
+
+    lagged_date = _lagged_flow_observation_date(evidence)
+    if not evidence.evidence_verified and lagged_date is None:
         return scorecards
 
     result = scorecards.copy()
@@ -96,7 +143,8 @@ def _reconcile_investor_flow_evidence_gaps(
         result["evidence_gaps"].tolist(),
         strict=True,
     ):
-        if str(ticker).zfill(6) not in verified_tickers or not isinstance(raw, str):
+        normalized_ticker = str(ticker).zfill(6)
+        if normalized_ticker not in complete_tickers or not isinstance(raw, str):
             reconciled.append(raw)
             continue
         try:
@@ -107,12 +155,24 @@ def _reconcile_investor_flow_evidence_gaps(
         if not isinstance(parsed, list):
             reconciled.append(raw)
             continue
-        filtered = [
-            str(item)
-            for item in parsed
-            if str(item).strip() and str(item).strip() != _INVESTOR_FLOW_GAP
-        ]
-        reconciled.append(json.dumps(filtered, ensure_ascii=False))
+
+        replacement = None
+        if lagged_date is not None:
+            replacement = (
+                "기관·외국인 동일세션 수급 미확인 "
+                f"(Kiwoom 직전 관측 수급 연결됨: {lagged_date.isoformat()}, 비점수)"
+            )
+        updated: list[str] = []
+        for item in parsed:
+            text = str(item).strip()
+            if not text:
+                continue
+            if text == _INVESTOR_FLOW_GAP:
+                if replacement is not None:
+                    updated.append(replacement)
+                continue
+            updated.append(text)
+        reconciled.append(json.dumps(list(dict.fromkeys(updated)), ensure_ascii=False))
     result["evidence_gaps"] = pd.Series(reconciled, index=result.index, dtype="object")
     return result
 
@@ -221,17 +281,26 @@ def _load_flow_evidence(
 
 
 def _flow_warnings(evidence: InvestorFlowEvidence | None) -> list[str]:
-    if evidence is None or not evidence.evidence_verified:
+    if evidence is None:
         return []
-    states = []
-    for ticker in sorted({row.ticker for row in evidence.windows}):
-        row = evidence.window(ticker, 20)
-        if row is not None:
-            states.append(f"{ticker}={row.descriptive_state}")
-    result = [f"investor_flow_evidence_verified:{evidence.snapshot_id[:12]}"]
-    if states:
-        result.append("investor_flow_20d:" + ",".join(states))
-    return result
+    if evidence.evidence_verified:
+        states = []
+        for ticker in sorted({row.ticker for row in evidence.windows}):
+            row = evidence.window(ticker, 20)
+            if row is not None:
+                states.append(f"{ticker}={row.descriptive_state}")
+        result = [f"investor_flow_evidence_verified:{evidence.snapshot_id[:12]}"]
+        if states:
+            result.append("investor_flow_20d:" + ",".join(states))
+        return result
+
+    lagged_date = _lagged_flow_observation_date(evidence)
+    if lagged_date is not None:
+        return [
+            f"investor_flow_prior_session_available:{lagged_date.isoformat()}",
+            "investor_flow_prior_session_non_scoring",
+        ]
+    return []
 
 
 def build_investment_decision_snapshot(
