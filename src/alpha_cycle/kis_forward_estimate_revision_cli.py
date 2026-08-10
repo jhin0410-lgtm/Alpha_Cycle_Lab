@@ -17,6 +17,9 @@ from typing import cast
 import pandas as pd
 
 from alpha_cycle.intelligence.kis_forward_estimates import read_json_object
+from alpha_cycle.intelligence.kis_forward_forecast_trust import (
+    require_forward_numeric_evidence_eligible,
+)
 
 DEFAULT_FORWARD_ROOT = Path("data/private/live-research/kis-forward-estimates")
 DEFAULT_OUTPUT_ROOT = Path("data/private/live-research/kis-forward-estimate-changes")
@@ -466,6 +469,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
+        require_forward_numeric_evidence_eligible()
         payload = run_revision_tracker(
             forward_root=args.forward_root,
             output_root=args.output,
