@@ -146,7 +146,7 @@ def test_writer_rejects_adjusted_history_rows(tmp_path: Path) -> None:
             exporter=_exporter(),
         )
 
-    assert not tmp_path.exists()
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_bootstrap_and_windows_launcher_are_isolated_from_primary_export() -> None:
