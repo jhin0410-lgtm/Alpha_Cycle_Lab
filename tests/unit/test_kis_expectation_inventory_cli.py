@@ -11,13 +11,13 @@ from alpha_cycle.providers.kis_research import KIS_RESEARCH_SOURCE_SCOPE
 
 def _write_snapshot(tmp_path: Path, *, sensitive: bool = False) -> Path:
     root = tmp_path / "expectation-intelligence"
-    directory = root / "20260809T130000000000Z__abcdef123456"
+    directory = root / "20260810T043313144358Z__abcdef123456"
     directory.mkdir(parents=True)
     snapshot_id = "a" * 64
     manifest = {
         "schema_version": 1,
         "snapshot_id": snapshot_id,
-        "captured_at": "2026-08-09T22:00:00+09:00",
+        "captured_at": "2026-08-10T13:33:13+09:00",
         "provider": "korea_investment_openapi",
         "source_scope": KIS_RESEARCH_SOURCE_SCOPE,
         "symbols": ["000660", "005930"],
@@ -33,20 +33,76 @@ def _write_snapshot(tmp_path: Path, *, sensitive: bool = False) -> Path:
         json.dumps(manifest, ensure_ascii=False),
         encoding="utf-8",
     )
+    periods = ["2023.12", "2024.12", "2025.12", "2026.12E", "2027.12E"]
     payload = {
-        symbol: {
+        "000660": {
             "rt_cd": "0",
-            "output1": {"sht_cd": symbol, "item_kor_nm": "회사"},
+            "output1": {
+                "sht_cd": "000660",
+                "item_kor_nm": "SK하이닉스",
+                "capital": "1",
+                "estdate": "2",
+                "forn_item_lmtrt": "3",
+                "name1": "x",
+                "name2": "y",
+                "rcmd_name": "z",
+            },
             "output2": [
-                {"data1": "매출액", "data2": "__ESTIMATE_A__", "data3": "__ESTIMATE_B__"},
-                {"data1": "영업이익", "data2": "__ESTIMATE_C__", "data3": "__ESTIMATE_D__"},
+                {
+                    "data1": "327657.123456",
+                    "data2": "2",
+                    "data3": "3",
+                    "data4": "4",
+                    "data5": "5",
+                }
+                for _ in range(6)
             ],
             "output3": [
-                {"data1": "EPS", "data2": "__ESTIMATE_E__", "data3": "__ESTIMATE_F__"}
+                {
+                    "data1": "59434.654321",
+                    "data2": "2",
+                    "data3": "3",
+                    "data4": "4",
+                    "data5": "5",
+                }
+                for _ in range(3)
             ],
-            "output4": [{"dt": "202512"}, {"dt": "202612E"}],
-        }
-        for symbol in ("000660", "005930")
+            "output4": [{"dt": period} for period in periods],
+        },
+        "005930": {
+            "rt_cd": "0",
+            "output1": {
+                "sht_cd": "005930",
+                "item_kor_nm": "삼성전자",
+                "capital": "1",
+                "estdate": "2",
+                "forn_item_lmtrt": "3",
+                "name1": "x",
+                "name2": "y",
+                "rcmd_name": "z",
+            },
+            "output2": [
+                {
+                    "data1": "2589355.246810",
+                    "data2": "2",
+                    "data3": "3",
+                    "data4": "4",
+                    "data5": "5",
+                }
+                for _ in range(6)
+            ],
+            "output3": [
+                {
+                    "data1": "452335.135790",
+                    "data2": "2",
+                    "data3": "3",
+                    "data4": "4",
+                    "data5": "5",
+                }
+                for _ in range(8)
+            ],
+            "output4": [{"dt": period} for period in periods],
+        },
     }
     if sensitive:
         payload["000660"]["output1"]["access_token"] = "should-not-exist"
@@ -57,38 +113,64 @@ def _write_snapshot(tmp_path: Path, *, sensitive: bool = False) -> Path:
     return root
 
 
-def test_inspector_reports_keys_labels_and_periods_without_numeric_estimates(
-    tmp_path: Path,
-) -> None:
+def test_inspector_reports_live_shape_without_any_data_values(tmp_path: Path) -> None:
     root = _write_snapshot(tmp_path)
 
     result = inspect_expectation_snapshot(root)
 
     assert result["status"] == "expectation_inventory_inspected"
     assert result["source_scope"] == KIS_RESEARCH_SOURCE_SCOPE
+    assert result["provider_semantics_certified"] is False
     assert result["consensus_certified"] is False
     assert result["revision_certified"] is False
     assert result["decision_score_enabled"] is False
-    outputs = result["outputs"]
-    assert isinstance(outputs, dict)
-    hynix = outputs["000660"]
+    assert result["numeric_values_exposed"] is False
+
+    inventory = result["symbol_inventory"]
+    assert isinstance(inventory, dict)
+    hynix = inventory["000660"]
+    samsung = inventory["005930"]
     assert isinstance(hynix, dict)
-    output2 = hynix["output2"]
-    output4 = hynix["output4"]
-    assert output2["row_count"] == 2
-    assert output2["keys"] == ["data1", "data2", "data3"]
-    assert output2["data1_labels"] == ["매출액", "영업이익"]
-    assert set(output2) == {
-        "shape",
-        "row_count",
-        "keys",
-        "data1_labels",
-        "period_labels",
-    }
+    assert isinstance(samsung, dict)
+    assert hynix["period_axis"] == [
+        "2023.12",
+        "2024.12",
+        "2025.12",
+        "2026.12E",
+        "2027.12E",
+    ]
+    assert hynix["period_axis_count"] == 5
+
+    hynix_outputs = hynix["outputs"]
+    samsung_outputs = samsung["outputs"]
+    assert hynix_outputs["output2"]["row_count"] == 6
+    assert hynix_outputs["output3"]["row_count"] == 3
+    assert samsung_outputs["output3"]["row_count"] == 8
+    assert hynix_outputs["output2"]["data_value_fields"] == [
+        "data1",
+        "data2",
+        "data3",
+        "data4",
+        "data5",
+    ]
+    assert hynix_outputs["output2"]["data_value_field_count"] == 5
+    assert hynix_outputs["output2"]["numeric_values_exposed"] is False
+
+    observations = hynix["matrix_observations"]
+    assert observations["output2"]["period_axis_cardinality_matches"] is True
+    assert observations["output3"]["period_axis_cardinality_matches"] is True
+    assert observations["output2"]["column_period_alignment_certified"] is False
+    assert observations["output2"]["row_semantics_certified"] is False
+    assert observations["output2"]["financial_metric_semantics_certified"] is False
+
     rendered = json.dumps(result, ensure_ascii=False)
-    assert "__ESTIMATE_A__" not in rendered
-    assert "__ESTIMATE_F__" not in rendered
-    assert output4["period_labels"] == ["202512", "202612E"]
+    for private_value in (
+        "327657.123456",
+        "59434.654321",
+        "2589355.246810",
+        "452335.135790",
+    ):
+        assert private_value not in rendered
 
 
 def test_inspector_fails_closed_on_sensitive_looking_response_key(tmp_path: Path) -> None:
