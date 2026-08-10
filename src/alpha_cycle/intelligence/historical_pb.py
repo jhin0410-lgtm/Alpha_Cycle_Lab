@@ -380,12 +380,12 @@ def build_historical_pb_evidence(
         drop=True
     )
     summaries: list[dict[str, object]] = []
-    for ticker, group in series.groupby("ticker", sort=True):
+    for group_ticker, group in series.groupby("ticker", sort=True):
         values = pd.to_numeric(group["pb"], errors="raise")
         latest = float(values.iloc[-1])
         summaries.append(
             {
-                "ticker": str(ticker),
+                "ticker": str(group_ticker),
                 "observation_count": len(group),
                 "first_date": group["date"].iloc[0],
                 "last_date": group["date"].iloc[-1],
