@@ -26,6 +26,8 @@ from alpha_cycle.intelligence.valuation import CompanySecurityMapping
 
 MIN_ONE_YEAR_OBSERVATIONS = 252
 MIN_TWO_YEAR_OBSERVATIONS = 504
+_ECONOMIC_SECURITY_CLASSES = frozenset({"common", "preferred", "other"})
+_UNRESOLVED_SHARE_MARKER = "unresolved_missing_economic_share_count"
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,19 @@ def _security_symbol(
     return None, "unmapped"
 
 
+def _unresolved_economic_security_names(report_rows: pd.DataFrame) -> list[str]:
+    if "normalization_warning" not in report_rows.columns:
+        return []
+    economic = report_rows["security_class"].astype("string").isin(
+        _ECONOMIC_SECURITY_CLASSES
+    )
+    warnings = report_rows["normalization_warning"].astype("string").fillna("")
+    unresolved = economic & warnings.str.contains(_UNRESOLVED_SHARE_MARKER, regex=False)
+    return sorted(
+        set(report_rows.loc[unresolved, "security_name"].astype(str).tolist())
+    )
+
+
 def _market_cap_for_date(
     *,
     ticker: str,
@@ -236,9 +251,16 @@ def _market_cap_for_date(
     price_lookup: Mapping[tuple[str, date], float],
     mappings: Mapping[str, CompanySecurityMapping],
 ) -> tuple[float | None, list[dict[str, object]], str | None]:
+    unresolved_names = _unresolved_economic_security_names(report_rows)
+    if unresolved_names:
+        return (
+            None,
+            [],
+            "unresolved_share_count:" + "|".join(unresolved_names),
+        )
     issued = pd.to_numeric(report_rows["issued_shares"], errors="coerce")
     classes = report_rows.loc[
-        report_rows["security_class"].isin(["common", "preferred", "other"])
+        report_rows["security_class"].isin(_ECONOMIC_SECURITY_CLASSES)
         & issued.gt(0)
     ].copy()
     if classes.empty:
