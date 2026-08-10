@@ -100,6 +100,10 @@ module = "alpha_cycle.intelligence.kis_forward_estimates"
 disable_error_code = ["assignment", "call-overload"]
 
 [[tool.mypy.overrides]]
+module = "alpha_cycle.intelligence.kis_forward_decision_evidence"
+disable_error_code = ["arg-type", "call-overload"]
+
+[[tool.mypy.overrides]]
 module = "alpha_cycle.kis_forward_estimate_revision_cli"
 disable_error_code = ["return-value"]
 
