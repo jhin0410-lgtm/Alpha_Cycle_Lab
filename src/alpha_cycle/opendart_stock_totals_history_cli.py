@@ -13,11 +13,11 @@ import hashlib
 import json
 import shutil
 import sys
-from collections.abc import Mapping, Protocol
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import pandas as pd
 
