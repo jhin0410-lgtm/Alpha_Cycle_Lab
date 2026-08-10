@@ -56,24 +56,48 @@ Each immutable content-addressed snapshot contains:
 
 ## Local structure inspection
 
-After a live capture, inspect the newest snapshot without printing numeric estimate values:
+After a live capture, inspect the newest snapshot without printing any `dataN` estimate values:
 
 ```powershell
 python -m alpha_cycle.kis_expectation_inventory_cli
 ```
 
-The inspector validates that consensus/revision/account/order flags remain false, rejects sensitive-looking response keys, and prints only:
+The inspector validates that consensus/revision/account/order flags remain false, rejects sensitive-looking response keys, and prints only structural information:
 
 - symbol
 - output shape and row count
 - field names
-- public `data1` row labels
-- public `dt` period labels
+- `dataN` field names and field count, but never their values
+- `output4.dt` period labels
+- whether the number of `dataN` fields merely matches the number of period labels
 
-This is enough to bind the real response structure without exposing credentials or prematurely assigning the `data2`-`data5` columns to financial periods.
+A matching field/period count is only a structural observation. It does **not** certify that `data1` maps to the first `dt`, nor does it assign any output row to revenue, operating profit, EPS, valuation, recommendation, or another financial concept.
+
+## Live structure observation — 2026-08-10
+
+A real read-only capture for `000660` and `005930` established the following shape:
+
+- both symbols: `output1` is one object
+- both symbols: `output2` is an array with 6 rows and fields `data1` through `data5`
+- `000660`: `output3` has 3 rows with fields `data1` through `data5`
+- `005930`: `output3` has 8 rows with fields `data1` through `data5`
+- both symbols: `output4` contains 5 `dt` rows: `2023.12`, `2024.12`, `2025.12`, `2026.12E`, `2027.12E`
+
+The differing `output3` row counts across issuers are an additional reason not to assume a fixed row-to-financial-metric mapping.
+
+## Official sample boundary
+
+The Korea Investment official Open Trading API sample for this endpoint is:
+
+```text
+examples_llm/domestic_stock/estimate_perform/estimate_perform.py
+examples_llm/domestic_stock/estimate_perform/chk_estimate_perform.py
+```
+
+The official checker currently maps `data1` through `data5` only to generic `DATA1` through `DATA5`. It explicitly maps `dt` to `결산년월`. Therefore the official sample supports the endpoint identity, four-output structure, generic DATA fields, and the period label meaning, but it does not provide authoritative financial semantics for each DATA row/column.
 
 ## Why semantic parsing is deferred
 
-The official sample exposes four output blocks, while the current API response contract uses provider-defined fields such as `data1`-`data5`. Before assigning financial meanings, Alpha Cycle Lab first captures a real provider response, its SHA-256, output shapes, row labels, and `output4.dt` period labels. This prevents an unsupported field interpretation from becoming an investment signal.
+The live response and the official sample both show provider-defined `data1`-`data5` fields without authoritative financial labels. Before assigning financial meanings, Alpha Cycle Lab preserves the raw payload and content hash while exposing only a value-free structural inventory. This prevents an unsupported field interpretation from becoming an investment signal.
 
-The next semantic layer may be added only after the live response structure is validated against authoritative provider semantics. Estimate revisions additionally require at least two independently timestamped snapshots for the same provider/symbol/period/field; one snapshot can never create a revision.
+The next semantic layer may be added only after authoritative provider semantics are found or an independently verifiable contract can bind the rows and columns. Estimate revisions additionally require at least two independently timestamped snapshots for the same provider/symbol/period/field; one snapshot can never create a revision.
