@@ -13,7 +13,7 @@ from typing import cast
 
 import pandas as pd
 
-from alpha_cycle.intelligence.historical_pb import build_historical_pb_evidence
+from alpha_cycle.intelligence.historical_pb_resilient import build_historical_pb_evidence
 from alpha_cycle.intelligence.valuation import load_security_mappings
 
 DEFAULT_LIVE_ROOT = Path("data/private/live-research")
