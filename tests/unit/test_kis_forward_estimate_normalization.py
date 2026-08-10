@@ -212,7 +212,7 @@ def test_binding_rejects_crosschecks_from_different_expectation_snapshots(
         )
 
 
-def test_cli_writes_private_forward_artifact_without_consensus_or_revision_claims(
+def test_cli_blocks_private_forward_artifact_until_forecast_semantics_are_certified(
     tmp_path: Path,
 ) -> None:
     general_pointer, owner_pointer = _crosscheck_pointers(tmp_path)
@@ -220,25 +220,13 @@ def test_cli_writes_private_forward_artifact_without_consensus_or_revision_claim
     _expectation_snapshot(expectation_root)
     output_root = tmp_path / "forward"
 
-    pointer = run_normalization(
-        expectation_root=expectation_root,
-        general_crosscheck_pointer=general_pointer,
-        owner_crosscheck_pointer=owner_pointer,
-        output_root=output_root,
-        now=datetime(2026, 8, 10, 6, 0, tzinfo=UTC),
-    )
+    with pytest.raises(ValueError, match="KIS forward numeric evidence is blocked"):
+        run_normalization(
+            expectation_root=expectation_root,
+            general_crosscheck_pointer=general_pointer,
+            owner_crosscheck_pointer=owner_pointer,
+            output_root=output_root,
+            now=datetime(2026, 8, 10, 6, 0, tzinfo=UTC),
+        )
 
-    assert pointer["status"] == "forward_estimate_levels_normalized"
-    assert pointer["source_expectation_snapshot_id"] == SOURCE_EXPECTATION_ID
-    assert pointer["historical_semantic_crosscheck_verified"] is True
-    assert pointer["forward_values_normalized"] is True
-    assert pointer["estimate_snapshot_change_available"] is False
-    assert pointer["provider_semantics_certified"] is False
-    assert pointer["consensus_certified"] is False
-    assert pointer["revision_certified"] is False
-    assert pointer["decision_score_enabled"] is False
-    manifest = json.loads(Path(str(pointer["manifest_path"])).read_text(encoding="utf-8"))
-    assert manifest["point_in_time_backtest_eligible"] is False
-    frame = pd.read_csv(Path(str(pointer["forward_estimates_path"])))
-    assert len(frame) == 12
-    assert set(frame["period_label"]) == {"2026.12E", "2027.12E"}
+    assert not output_root.exists()
