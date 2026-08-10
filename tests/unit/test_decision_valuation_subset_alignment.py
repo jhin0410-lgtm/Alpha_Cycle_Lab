@@ -11,10 +11,10 @@ from alpha_cycle.intelligence.decision_resilient import (
 )
 
 
-def test_intelligence_export_uses_forward_estimate_calibrated_decision_builder() -> None:
+def test_intelligence_export_uses_historical_pb_calibrated_decision_builder() -> None:
     assert (
         intelligence.build_investment_decision_snapshot.__module__
-        == "alpha_cycle.intelligence.decision_forward_estimate_calibrated"
+        == "alpha_cycle.intelligence.decision_historical_pb_calibrated"
     )
 
 
