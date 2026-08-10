@@ -23,10 +23,10 @@ import pandas as pd
 
 from alpha_cycle.providers.opendart import CorpCode, OpenDartCredentials
 from alpha_cycle.providers.opendart_valuation import (
-    OpenDartValuationClient,
     StockTotalsBatch,
     _candidate_periods,
 )
+from alpha_cycle.providers.opendart_valuation_resilient import OpenDartValuationClient
 
 DEFAULT_LIVE_ROOT = Path("data/private/live-research")
 DEFAULT_OUTPUT_ROOT = DEFAULT_LIVE_ROOT / "opendart-stock-totals-history"
