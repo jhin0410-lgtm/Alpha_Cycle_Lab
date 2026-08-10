@@ -15,8 +15,8 @@ from datetime import date
 
 import pandas as pd
 
+from alpha_cycle.intelligence.historical_pb import HistoricalPbEvidence
 from alpha_cycle.intelligence.historical_pb import (
-    HistoricalPbEvidence,
     build_historical_pb_evidence as _build_historical_pb_evidence,
 )
 from alpha_cycle.intelligence.valuation import CompanySecurityMapping
