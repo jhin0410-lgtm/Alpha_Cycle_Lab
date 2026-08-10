@@ -1,10 +1,14 @@
-"""Market, research, valuation, and investment decision intelligence snapshots."""
+"""Market, research, valuation, and investment decision intelligence snapshots.
+
+The final package decision wrapper delegates through decision_industry_evidence_calibrated
+before attaching optional non-scoring KIS forward estimate evidence.
+"""
 
 from alpha_cycle.intelligence.decision import (
     InvestmentDecisionSnapshot,
     write_investment_decision_snapshot,
 )
-from alpha_cycle.intelligence.decision_industry_evidence_calibrated import (
+from alpha_cycle.intelligence.decision_forward_estimate_calibrated import (
     build_investment_decision_snapshot,
 )
 from alpha_cycle.intelligence.decision_provenance import (
