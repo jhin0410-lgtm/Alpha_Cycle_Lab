@@ -51,33 +51,28 @@ class CandidateFit:
     metric: str
     scale: float
     year_to_field: tuple[tuple[int, str], ...]
-    observation_count: int
-    issuer_count: int
     mean_relative_error: float
     max_relative_error: float
     second_best_mean_relative_error: float | None
     positional_mapping: bool
     unique_fit: bool
-    historical_actual_crosscheck_verified: bool
+    verified: bool
 
     def as_dict(self) -> dict[str, object]:
         return {
             "output_name": self.output_name,
-            "row_index": self.row_index,
             "row_number_1_based": self.row_index + 1,
             "metric": self.metric,
             "scale_to_krw": self.scale,
             "year_to_field": {str(year): field for year, field in self.year_to_field},
-            "observation_count": self.observation_count,
-            "issuer_count": self.issuer_count,
+            "observation_count": len(EXPECTED_SYMBOLS) * len(self.year_to_field),
+            "issuer_count": len(EXPECTED_SYMBOLS),
             "mean_relative_error": self.mean_relative_error,
             "max_relative_error": self.max_relative_error,
             "second_best_mean_relative_error": self.second_best_mean_relative_error,
             "positional_mapping": self.positional_mapping,
             "unique_fit": self.unique_fit,
-            "historical_actual_crosscheck_verified": (
-                self.historical_actual_crosscheck_verified
-            ),
+            "historical_actual_crosscheck_verified": self.verified,
             "provider_semantics_certified": False,
             "consensus_certified": False,
             "revision_certified": False,
@@ -157,17 +152,6 @@ def _symbols(value: object, *, label: str) -> tuple[str, ...]:
     return symbols
 
 
-def _data_fields(rows: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-    fields: list[tuple[int, str]] = []
-    keys = {str(key) for row in rows for key in row}
-    for key in keys:
-        match = _DATA_FIELD.fullmatch(key)
-        if match is not None:
-            fields.append((int(match.group(1)), key))
-    fields.sort()
-    return tuple(key for _, key in fields)
-
-
 def _rows(value: object, *, label: str) -> tuple[Mapping[str, object], ...]:
     if not isinstance(value, list):
         raise ValueError(f"{label} must be an array")
@@ -179,6 +163,16 @@ def _rows(value: object, *, label: str) -> tuple[Mapping[str, object], ...]:
     return tuple(rows)
 
 
+def _data_fields(rows: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    fields: list[tuple[int, str]] = []
+    for key in {str(key) for row in rows for key in row}:
+        match = _DATA_FIELD.fullmatch(key)
+        if match is not None:
+            fields.append((int(match.group(1)), key))
+    fields.sort()
+    return tuple(key for _, key in fields)
+
+
 def _period_axis(payload: Mapping[str, object], *, symbol: str) -> PeriodAxis:
     rows = _rows(payload.get("output4"), label=f"{symbol}.output4")
     labels: list[str] = []
@@ -186,11 +180,11 @@ def _period_axis(payload: Mapping[str, object], *, symbol: str) -> PeriodAxis:
         if set(str(key) for key in row) != {"dt"}:
             raise ValueError(f"{symbol}.output4 must contain only dt")
         label = str(row.get("dt", "")).strip()
-        if not label or _PERIOD.fullmatch(label) is None:
+        if _PERIOD.fullmatch(label) is None:
             raise ValueError(f"Unsupported KIS period label for {symbol}: {label!r}")
         labels.append(label)
-    if len(labels) != len(set(labels)):
-        raise ValueError(f"KIS period labels contain duplicates for {symbol}")
+    if not labels or len(labels) != len(set(labels)):
+        raise ValueError(f"KIS period labels must be unique and non-empty for {symbol}")
 
     actual_years: list[int] = []
     actual_fields: list[str] = []
@@ -199,13 +193,12 @@ def _period_axis(payload: Mapping[str, object], *, symbol: str) -> PeriodAxis:
     for index, label in enumerate(labels, start=1):
         match = _PERIOD.fullmatch(label)
         assert match is not None
-        year = int(match.group(1))
         field = f"data{index}"
         if match.group(3):
             forecast_labels.append(label)
             forecast_fields.append(field)
         else:
-            actual_years.append(year)
+            actual_years.append(int(match.group(1)))
             actual_fields.append(field)
     if len(actual_years) < 3:
         raise ValueError(f"KIS semantic crosscheck needs at least three actual years: {symbol}")
@@ -245,6 +238,7 @@ def _load_expectation(
     if not set(EXPECTED_SYMBOLS).issubset(symbols):
         raise ValueError("KIS expectation snapshot is missing a required semiconductor issuer")
     _snapshot_id(manifest, label="KIS expectation")
+
     raw = _read_object(
         directory / "raw_estimate_perform.json",
         label="KIS raw estimate-perform",
@@ -266,6 +260,15 @@ def _load_expectation(
     return directory, manifest, payloads, axes[0]
 
 
+def _history_years(manifest: Mapping[str, object]) -> int:
+    value = manifest.get("history_years")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("Valuation history_years must be an integer")
+    if value < 3:
+        raise ValueError("Valuation snapshot must contain at least three history years")
+    return value
+
+
 def _load_valuation(
     root: Path,
 ) -> tuple[Path, dict[str, object], pd.DataFrame]:
@@ -275,8 +278,7 @@ def _load_valuation(
         label="valuation",
     )
     _snapshot_id(manifest, label="valuation")
-    if int(manifest.get("history_years", 0)) < 3:
-        raise ValueError("Valuation snapshot must contain at least three history years")
+    _history_years(manifest)
     symbols = _symbols(manifest.get("symbols"), label="valuation")
     if not set(EXPECTED_SYMBOLS).issubset(symbols):
         raise ValueError("Valuation snapshot is missing a required semiconductor issuer")
@@ -284,50 +286,75 @@ def _load_valuation(
         directory / "financial_history.csv",
         dtype={"ticker": "string"},
     )
-    required = {
-        "ticker",
-        "business_year",
-        "period_label",
-        *TARGET_METRICS,
-    }
+    required = {"ticker", "business_year", "period_label"}
+    for metric in TARGET_METRICS:
+        required.update({metric, f"{metric}_prior_same"})
     missing = required - set(history.columns)
     if missing:
         raise ValueError(f"Valuation financial history is missing columns: {sorted(missing)}")
     history["ticker"] = history["ticker"].astype("string").str.zfill(6)
-    history["business_year"] = pd.to_numeric(history["business_year"], errors="raise").astype(int)
+    history["business_year"] = pd.to_numeric(
+        history["business_year"], errors="raise"
+    ).astype(int)
     return directory, manifest, history
+
+
+def _finite(value: object) -> float | None:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return None
+    result = float(numeric)
+    return result if math.isfinite(result) else None
+
+
+def _fy_row(history: pd.DataFrame, symbol: str, year: int) -> Mapping[str, object] | None:
+    rows = history.loc[
+        (history["ticker"] == symbol)
+        & (history["business_year"] == year)
+        & history["period_label"].astype(str).eq("FY")
+    ]
+    if rows.empty:
+        return None
+    if len(rows) != 1:
+        raise ValueError(f"Valuation history has duplicate FY rows for {symbol} {year}")
+    return cast(Mapping[str, object], rows.iloc[0].to_dict())
 
 
 def _actual_lookup(
     history: pd.DataFrame,
     *,
     years: Sequence[int],
-) -> dict[tuple[str, int, str], float]:
-    annual = history.loc[
-        history["ticker"].isin(EXPECTED_SYMBOLS)
-        & history["period_label"].astype(str).eq("FY")
-        & history["business_year"].isin(tuple(years))
-    ].copy()
-    result: dict[tuple[str, int, str], float] = {}
+) -> tuple[dict[tuple[str, int, str], float], dict[str, object]]:
+    values: dict[tuple[str, int, str], float] = {}
+    basis: dict[str, object] = {}
     for symbol in EXPECTED_SYMBOLS:
+        symbol_basis: dict[str, object] = {}
         for year in years:
-            rows = annual.loc[
-                (annual["ticker"] == symbol)
-                & (annual["business_year"] == int(year))
-            ]
-            if len(rows) != 1:
-                raise ValueError(
-                    f"Valuation history requires exactly one FY row for {symbol} {year}"
-                )
-            row = rows.iloc[0]
+            current = _fy_row(history, symbol, int(year))
+            following = _fy_row(history, symbol, int(year) + 1)
+            metric_basis: dict[str, str] = {}
             for metric in TARGET_METRICS:
-                value = pd.to_numeric(pd.Series([row[metric]]), errors="coerce").iloc[0]
-                if pd.isna(value) or not math.isfinite(float(value)):
+                comparative = (
+                    _finite(following.get(f"{metric}_prior_same"))
+                    if following is not None
+                    else None
+                )
+                direct = _finite(current.get(metric)) if current is not None else None
+                if comparative is not None:
+                    selected = comparative
+                    source = f"{year + 1}_FY_prior_same"
+                elif direct is not None:
+                    selected = direct
+                    source = f"{year}_FY_current"
+                else:
                     raise ValueError(
-                        f"Valuation history is missing {metric} for {symbol} {year}"
+                        f"Valuation history cannot resolve {metric} for {symbol} {year}"
                     )
-                result[(symbol, int(year), metric)] = float(value)
-    return result
+                values[(symbol, int(year), metric)] = selected
+                metric_basis[metric] = source
+            symbol_basis[str(year)] = metric_basis
+        basis[symbol] = symbol_basis
+    return values, basis
 
 
 def _number(value: object) -> float | None:
@@ -358,7 +385,7 @@ def _fit_errors(
     output_name: str,
     row_index: int,
     metric: str,
-    year_to_field: Sequence[tuple[int, str]],
+    mapping: Sequence[tuple[int, str]],
     scale: float,
 ) -> tuple[float, ...] | None:
     errors: list[float] = []
@@ -367,57 +394,13 @@ def _fit_errors(
         if row_index >= len(rows):
             return None
         row = rows[row_index]
-        for year, field in year_to_field:
+        for year, field in mapping:
             kis_value = _number(row.get(field))
             reference = actuals.get((symbol, year, metric))
             if kis_value is None or reference is None:
                 return None
             errors.append(_relative_error(kis_value * scale, reference))
     return tuple(errors)
-
-
-def _candidate_fits(
-    payloads: Mapping[str, Mapping[str, object]],
-    actuals: Mapping[tuple[str, int, str], float],
-    axis: PeriodAxis,
-    *,
-    output_name: str,
-    row_index: int,
-    metric: str,
-) -> list[tuple[float, float, float, tuple[tuple[int, str], ...]]]:
-    shared_fields: tuple[str, ...] | None = None
-    for symbol in EXPECTED_SYMBOLS:
-        rows = _rows(payloads[symbol].get(output_name), label=f"{symbol}.{output_name}")
-        if row_index >= len(rows):
-            return []
-        fields = _data_fields(rows)
-        if shared_fields is None:
-            shared_fields = fields
-        elif fields != shared_fields:
-            raise ValueError(f"KIS DATA fields differ across issuers for {output_name}")
-    assert shared_fields is not None
-    years = axis.actual_years
-    if len(shared_fields) < len(years):
-        return []
-
-    fits: list[tuple[float, float, float, tuple[tuple[int, str], ...]]] = []
-    for field_permutation in itertools.permutations(shared_fields, len(years)):
-        mapping = tuple(zip(years, field_permutation, strict=True))
-        for scale in SCALE_CANDIDATES:
-            errors = _fit_errors(
-                payloads,
-                actuals,
-                output_name=output_name,
-                row_index=row_index,
-                metric=metric,
-                year_to_field=mapping,
-                scale=scale,
-            )
-            if errors is None:
-                continue
-            mean_error = sum(errors) / len(errors)
-            fits.append((max(errors), mean_error, scale, mapping))
-    return sorted(fits, key=lambda item: (item[0], item[1], item[2], item[3]))
 
 
 def _best_candidate(
@@ -429,25 +412,49 @@ def _best_candidate(
     row_index: int,
     metric: str,
 ) -> CandidateFit | None:
-    fits = _candidate_fits(
-        payloads,
-        actuals,
-        axis,
-        output_name=output_name,
-        row_index=row_index,
-        metric=metric,
-    )
+    shared_fields: tuple[str, ...] | None = None
+    for symbol in EXPECTED_SYMBOLS:
+        rows = _rows(payloads[symbol].get(output_name), label=f"{symbol}.{output_name}")
+        if row_index >= len(rows):
+            return None
+        fields = _data_fields(rows)
+        if shared_fields is None:
+            shared_fields = fields
+        elif fields != shared_fields:
+            raise ValueError(f"KIS DATA fields differ across issuers for {output_name}")
+    assert shared_fields is not None
+    if len(shared_fields) != len(axis.labels):
+        raise ValueError(
+            f"KIS DATA-field count does not match period-axis count for {output_name}"
+        )
+    if len(shared_fields) < len(axis.actual_years):
+        return None
+
+    fits: list[tuple[float, float, float, tuple[tuple[int, str], ...]]] = []
+    for field_permutation in itertools.permutations(shared_fields, len(axis.actual_years)):
+        mapping = tuple(zip(axis.actual_years, field_permutation, strict=True))
+        for scale in SCALE_CANDIDATES:
+            errors = _fit_errors(
+                payloads,
+                actuals,
+                output_name=output_name,
+                row_index=row_index,
+                metric=metric,
+                mapping=mapping,
+                scale=scale,
+            )
+            if errors is None:
+                continue
+            fits.append((max(errors), sum(errors) / len(errors), scale, mapping))
     if not fits:
         return None
+    fits.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
     best_max, best_mean, best_scale, best_mapping = fits[0]
     second_mean = fits[1][1] if len(fits) > 1 else None
     positional = best_mapping == tuple(
         zip(axis.actual_years, axis.actual_fields_positional, strict=True)
     )
-    unique_fit = (
-        second_mean is None
-        or second_mean >= MIN_SECOND_BEST_MEAN_ERROR
-    )
+    unique_fit = second_mean is None or second_mean >= MIN_SECOND_BEST_MEAN_ERROR
     verified = best_max <= MAX_RELATIVE_ERROR and positional and unique_fit
     return CandidateFit(
         output_name=output_name,
@@ -455,8 +462,6 @@ def _best_candidate(
         metric=metric,
         scale=best_scale,
         year_to_field=best_mapping,
-        observation_count=len(EXPECTED_SYMBOLS) * len(axis.actual_years),
-        issuer_count=len(EXPECTED_SYMBOLS),
         mean_relative_error=round(best_mean, 8),
         max_relative_error=round(best_max, 8),
         second_best_mean_relative_error=(
@@ -464,7 +469,7 @@ def _best_candidate(
         ),
         positional_mapping=positional,
         unique_fit=unique_fit,
-        historical_actual_crosscheck_verified=verified,
+        verified=verified,
     )
 
 
@@ -490,73 +495,26 @@ def _discover_candidates(
                     row_index=row_index,
                     metric=metric,
                 )
-                if candidate is None:
-                    continue
-                all_candidates.append(candidate)
-                if candidate.historical_actual_crosscheck_verified:
-                    verified.append(candidate)
-    verified.sort(key=lambda item: (item.metric, item.max_relative_error, item.output_name, item.row_index))
-    all_candidates.sort(
-        key=lambda item: (item.metric, item.max_relative_error, item.output_name, item.row_index)
-    )
-    return all_candidates, verified
+                if candidate is not None:
+                    all_candidates.append(candidate)
+                    if candidate.verified:
+                        verified.append(candidate)
+    key = lambda item: (item.metric, item.max_relative_error, item.output_name, item.row_index)
+    return sorted(all_candidates, key=key), sorted(verified, key=key)
 
 
-def _metric_summary(verified: Sequence[CandidateFit]) -> dict[str, object]:
-    result: dict[str, object] = {}
+def _metric_results(
+    verified: Sequence[CandidateFit],
+    axis: PeriodAxis,
+) -> tuple[dict[str, object], int]:
+    results: dict[str, object] = {}
+    unique_count = 0
     for metric in TARGET_METRICS:
         matches = [item for item in verified if item.metric == metric]
         if len(matches) == 1:
+            unique_count += 1
             match = matches[0]
-            result[metric] = {
-                "status": "unique_historical_actual_match",
-                "output_name": match.output_name,
-                "row_number_1_based": match.row_index + 1,
-                "scale_to_krw": match.scale,
-                "year_to_field": {
-                    str(year): field for year, field in match.year_to_field
-                },
-                "max_relative_error": match.max_relative_error,
-                "forecast_fields_positional": list(axis_forecast_fields(match)),
-                "forecast_values_published": False,
-            }
-        elif not matches:
-            result[metric] = {"status": "no_verified_match"}
-        else:
-            result[metric] = {
-                "status": "ambiguous_multiple_verified_matches",
-                "match_count": len(matches),
-            }
-    return result
-
-
-def axis_forecast_fields(candidate: CandidateFit) -> tuple[str, ...]:
-    del candidate
-    return ()
-
-
-def run_crosscheck(
-    *,
-    expectation_root: Path,
-    valuation_root: Path,
-    output_root: Path,
-    now: datetime,
-) -> dict[str, object]:
-    if now.tzinfo is None or now.utcoffset() is None:
-        raise ValueError("Crosscheck clock must be timezone-aware")
-    expectation_dir, expectation_manifest, payloads, axis = _load_expectation(expectation_root)
-    valuation_dir, valuation_manifest, history = _load_valuation(valuation_root)
-    actuals = _actual_lookup(history, years=axis.actual_years)
-    all_candidates, verified = _discover_candidates(payloads, actuals, axis)
-
-    per_metric: dict[str, object] = {}
-    unique_verified_count = 0
-    for metric in TARGET_METRICS:
-        matches = [item for item in verified if item.metric == metric]
-        if len(matches) == 1:
-            unique_verified_count += 1
-            match = matches[0]
-            per_metric[metric] = {
+            results[metric] = {
                 "status": "unique_historical_actual_match",
                 "output_name": match.output_name,
                 "row_number_1_based": match.row_index + 1,
@@ -571,18 +529,37 @@ def run_crosscheck(
                 "forecast_values_published": False,
             }
         elif not matches:
-            per_metric[metric] = {"status": "no_verified_match"}
+            results[metric] = {"status": "no_verified_match"}
         else:
-            per_metric[metric] = {
+            results[metric] = {
                 "status": "ambiguous_multiple_verified_matches",
                 "match_count": len(matches),
             }
+    return results, unique_count
 
+
+def run_crosscheck(
+    *,
+    expectation_root: Path,
+    valuation_root: Path,
+    output_root: Path,
+    now: datetime,
+) -> dict[str, object]:
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("Crosscheck clock must be timezone-aware")
+    expectation_dir, expectation_manifest, payloads, axis = _load_expectation(
+        expectation_root
+    )
+    valuation_dir, valuation_manifest, history = _load_valuation(valuation_root)
+    actuals, actual_basis = _actual_lookup(history, years=axis.actual_years)
+    all_candidates, verified = _discover_candidates(payloads, actuals, axis)
+    metric_results, unique_count = _metric_results(verified, axis)
     status = (
         "historical_actual_crosscheck_complete"
-        if unique_verified_count == len(TARGET_METRICS)
+        if unique_count == len(TARGET_METRICS)
         else "historical_actual_crosscheck_partial"
     )
+
     captured_at = now.astimezone(UTC)
     payload_without_id: dict[str, object] = {
         "schema_version": 1,
@@ -596,16 +573,16 @@ def run_crosscheck(
         "expectation_directory": str(expectation_dir.resolve()),
         "valuation_directory": str(valuation_dir.resolve()),
         "symbols": list(EXPECTED_SYMBOLS),
-        "actual_period_labels": [
-            label for label in axis.labels if not label.endswith("E")
-        ],
+        "actual_period_labels": [label for label in axis.labels if not label.endswith("E")],
         "forecast_period_labels": list(axis.forecast_labels),
         "positional_actual_fields": list(axis.actual_fields_positional),
         "positional_forecast_fields": list(axis.forecast_fields_positional),
+        "actual_reference_policy": "prefer_following_fy_prior_same_then_direct_fy",
+        "actual_reference_basis": actual_basis,
         "max_relative_error_threshold": MAX_RELATIVE_ERROR,
         "minimum_second_best_mean_error": MIN_SECOND_BEST_MEAN_ERROR,
         "scale_candidates_to_krw": list(SCALE_CANDIDATES),
-        "metric_results": per_metric,
+        "metric_results": metric_results,
         "verified_candidates": [item.as_dict() for item in verified],
         "candidate_count_evaluated": len(all_candidates),
         "verified_candidate_count": len(verified),
@@ -645,8 +622,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-kis-expectation-semantic-crosscheck",
         description=(
-            "Cross-check semantically-unclassified KIS DATA rows against existing "
-            "OpenDART valuation-history actuals without publishing forecast values or scores"
+            "Cross-check unclassified KIS DATA rows against local OpenDART valuation-history "
+            "actuals without publishing forecast values or changing decision scores"
         ),
     )
     parser.add_argument("--expectation-root", type=Path, default=DEFAULT_EXPECTATION_ROOT)
