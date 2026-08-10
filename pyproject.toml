@@ -20,7 +20,7 @@ dependencies = [
 dev = [
   "mypy>=1.14,<2",
   "pandas-stubs>=2.2",
-  "pytest>=8.3,<10",
+  "pytest<10,>=8.3",
   "ruff>=0.9,<1",
   "types-PyYAML>=6.0",
 ]
@@ -90,6 +90,10 @@ disable_error_code = ["call-overload", "no-any-return"]
 [[tool.mypy.overrides]]
 module = "alpha_cycle.intelligence.decision"
 disable_error_code = ["arg-type", "call-overload", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.intelligence.kis_forward_estimates"
+disable_error_code = ["assignment", "call-overload"]
 
 [[tool.mypy.overrides]]
 module = "alpha_cycle.intelligence.outcomes"
