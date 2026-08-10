@@ -18,6 +18,8 @@ from alpha_cycle.kis_expectation_semantic_crosscheck_cli import (
     DEFAULT_VALUATION_ROOT,
     EXPECTED_SYMBOLS,
     OUTPUT_NAMES,
+    CandidateFit,
+    PeriodAxis,
     _best_candidate,
     _load_expectation,
     _load_valuation,
@@ -223,9 +225,9 @@ def _owner_actuals(
 def _discover_owner_matches(
     payloads: Mapping[str, Mapping[str, object]],
     actuals: Mapping[tuple[str, int, str], float],
-    axis: object,
-) -> list[object]:
-    matches: list[object] = []
+    axis: PeriodAxis,
+) -> list[CandidateFit]:
+    matches: list[CandidateFit] = []
     for output_name in OUTPUT_NAMES:
         shared_row_count = min(
             len(_rows(payloads[symbol].get(output_name), label=f"{symbol}.{output_name}"))
