@@ -28,6 +28,7 @@ dev = [
 [project.scripts]
 alpha-cycle = "alpha_cycle.cli:main"
 alpha-cycle-decision = "alpha_cycle.decision_cli:main"
+alpha-cycle-kis-expectation-crosscheck = "alpha_cycle.kis_expectation_semantic_crosscheck_cli:main"
 alpha-cycle-kosis-discovery = "alpha_cycle.kosis_industry_discovery_cli:main"
 alpha-cycle-kosis-inventory = "alpha_cycle.kosis_industry_inventory_cli:main"
 alpha-cycle-kosis-parameters = "alpha_cycle.kosis_industry_parameter_cli:main"
