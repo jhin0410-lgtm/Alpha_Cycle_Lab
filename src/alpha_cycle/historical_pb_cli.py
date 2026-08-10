@@ -86,14 +86,31 @@ def _load_price_history(pointer_path: Path) -> tuple[str, pd.DataFrame]:
         "order_api_enabled",
     ):
         _strict_false(pointer, key, label="Kiwoom valuation-history pointer")
-    snapshot_id = _sha256(pointer.get("snapshot_id"), "Kiwoom valuation-history snapshot_id")
-    manifest_path = _path_from_pointer(pointer, "manifest_path", label="Kiwoom valuation-history")
+    snapshot_id = _sha256(
+        pointer.get("snapshot_id"),
+        "Kiwoom valuation-history snapshot_id",
+    )
+    manifest_path = _path_from_pointer(
+        pointer,
+        "manifest_path",
+        label="Kiwoom valuation-history",
+    )
     manifest = _read_json(manifest_path)
-    if _sha256(manifest.get("snapshot_id"), "Kiwoom valuation-history manifest snapshot_id") != snapshot_id:
+    manifest_snapshot_id = _sha256(
+        manifest.get("snapshot_id"),
+        "Kiwoom valuation-history manifest snapshot_id",
+    )
+    if manifest_snapshot_id != snapshot_id:
         raise ValueError("Kiwoom valuation-history pointer/manifest snapshot mismatch")
-    if manifest.get("source_scope") != "kiwoom_opt10081_unadjusted_historical_valuation_prices":
+    if (
+        manifest.get("source_scope")
+        != "kiwoom_opt10081_unadjusted_historical_valuation_prices"
+    ):
         raise ValueError("Kiwoom valuation-history source scope is invalid")
-    if manifest.get("price_basis") != "unadjusted" or manifest.get("adjusted_prices") is not False:
+    if (
+        manifest.get("price_basis") != "unadjusted"
+        or manifest.get("adjusted_prices") is not False
+    ):
         raise ValueError("Kiwoom valuation-history manifest is not unadjusted")
     directory = manifest_path.parent
     bars_name = str(manifest.get("daily_bars_file", "")).strip()
@@ -121,19 +138,44 @@ def _load_share_history(pointer_path: Path) -> tuple[str, str, date, pd.DataFram
         "order_api_enabled",
     ):
         _strict_false(pointer, key, label="OpenDART stock-total history pointer")
-    artifact_id = _sha256(pointer.get("artifact_id"), "OpenDART stock-total history artifact_id")
-    research_id = _sha256(pointer.get("research_snapshot_id"), "stock-total research_snapshot_id")
+    artifact_id = _sha256(
+        pointer.get("artifact_id"),
+        "OpenDART stock-total history artifact_id",
+    )
+    research_id = _sha256(
+        pointer.get("research_snapshot_id"),
+        "stock-total research_snapshot_id",
+    )
     evaluation_date = date.fromisoformat(str(pointer.get("evaluation_date", "")))
-    frame_path = _path_from_pointer(pointer, "stock_totals_history_path", label="OpenDART stock-total history")
-    manifest_path = _path_from_pointer(pointer, "manifest_path", label="OpenDART stock-total history")
+    frame_path = _path_from_pointer(
+        pointer,
+        "stock_totals_history_path",
+        label="OpenDART stock-total history",
+    )
+    manifest_path = _path_from_pointer(
+        pointer,
+        "manifest_path",
+        label="OpenDART stock-total history",
+    )
     if frame_path.parent != manifest_path.parent:
         raise ValueError("OpenDART stock-total history files cross artifact boundaries")
     manifest = _read_json(manifest_path)
-    if _sha256(manifest.get("artifact_id"), "OpenDART stock-total manifest artifact_id") != artifact_id:
+    manifest_artifact_id = _sha256(
+        manifest.get("artifact_id"),
+        "OpenDART stock-total manifest artifact_id",
+    )
+    if manifest_artifact_id != artifact_id:
         raise ValueError("OpenDART stock-total pointer/manifest artifact mismatch")
-    if _sha256(manifest.get("research_snapshot_id"), "OpenDART stock-total manifest research id") != research_id:
+    manifest_research_id = _sha256(
+        manifest.get("research_snapshot_id"),
+        "OpenDART stock-total manifest research id",
+    )
+    if manifest_research_id != research_id:
         raise ValueError("OpenDART stock-total research lineage mismatch")
-    frame = pd.read_csv(frame_path, dtype={"ticker": "string", "report_code": "string"})
+    frame = pd.read_csv(
+        frame_path,
+        dtype={"ticker": "string", "report_code": "string"},
+    )
     return artifact_id, research_id, evaluation_date, frame
 
 
@@ -153,7 +195,10 @@ def _load_financial_history(
 ) -> tuple[str, str, date, tuple[str, ...], pd.DataFrame]:
     manifest = _read_json(valuation_directory / "manifest.json")
     valuation_id = _sha256(manifest.get("snapshot_id"), "valuation snapshot_id")
-    research_id = _sha256(manifest.get("research_snapshot_id"), "valuation research_snapshot_id")
+    research_id = _sha256(
+        manifest.get("research_snapshot_id"),
+        "valuation research_snapshot_id",
+    )
     evaluation_date = date.fromisoformat(str(manifest.get("evaluation_date", "")))
     raw_symbols = manifest.get("symbols", [])
     if not isinstance(raw_symbols, list) or not raw_symbols:
@@ -186,7 +231,13 @@ def _records(frame: pd.DataFrame) -> list[dict[str, object]]:
 def _write_json(path: Path, payload: object) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False),
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            allow_nan=False,
+        ),
         encoding="utf-8",
     )
     temporary.replace(path)
@@ -204,14 +255,20 @@ def run_historical_pb(
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("historical P/B clock must be timezone-aware")
     price_id, prices = _load_price_history(price_pointer)
-    share_id, share_research_id, share_date, shares = _load_share_history(share_pointer)
+    share_id, share_research_id, share_date, shares = _load_share_history(
+        share_pointer
+    )
     valuation_id, valuation_research_id, valuation_date, symbols, financials = (
         _load_financial_history(valuation_directory)
     )
     if share_research_id != valuation_research_id:
-        raise ValueError("stock-total history and valuation snapshot use different research evidence")
+        raise ValueError(
+            "stock-total history and valuation snapshot use different research evidence"
+        )
     if share_date != valuation_date:
-        raise ValueError("stock-total history and valuation snapshot use different evaluation dates")
+        raise ValueError(
+            "stock-total history and valuation snapshot use different evaluation dates"
+        )
     mappings = load_security_mappings(security_config)
     evidence = build_historical_pb_evidence(
         prices,
@@ -224,7 +281,8 @@ def run_historical_pb(
     if observed != symbols:
         missing = sorted(set(symbols) - set(observed))
         raise ValueError(
-            "historical P/B did not produce every valuation symbol; missing=" + ",".join(missing)
+            "historical P/B did not produce every valuation symbol; missing="
+            + ",".join(missing)
         )
 
     payload_without_id: dict[str, object] = {
@@ -316,7 +374,10 @@ def run_historical_pb(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-historical-pb",
-        description="Build non-scoring historical P/B evidence from unadjusted prices and observable OpenDART inputs",
+        description=(
+            "Build non-scoring historical P/B evidence from unadjusted prices "
+            "and observable OpenDART inputs"
+        ),
     )
     parser.add_argument("--live-root", type=Path, default=DEFAULT_LIVE_ROOT)
     parser.add_argument("--price-pointer", type=Path, default=DEFAULT_PRICE_POINTER)
@@ -331,7 +392,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     try:
         args = parser.parse_args(argv)
-        valuation_directory = args.valuation_directory or _latest_valuation_directory(args.live_root)
+        valuation_directory = (
+            args.valuation_directory
+            or _latest_valuation_directory(args.live_root)
+        )
         security_config: Path | None = args.security_config
         if security_config is not None and not security_config.is_file():
             raise ValueError(f"Security config does not exist: {security_config}")
