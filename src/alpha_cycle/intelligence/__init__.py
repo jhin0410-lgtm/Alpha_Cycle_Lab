@@ -1,7 +1,8 @@
 """Market, research, valuation, and investment decision intelligence snapshots.
 
-The final package decision wrapper delegates through the existing calibrated decision
-chain before attaching optional non-scoring own-history P/B evidence.
+The final package decision wrapper preserves the existing chain through
+``decision_industry_evidence_calibrated`` and ``decision_forward_estimate_calibrated``
+before attaching optional non-scoring own-history P/B evidence.
 """
 
 from alpha_cycle.intelligence.decision import (
