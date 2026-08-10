@@ -51,7 +51,20 @@ def _ticker(value: object) -> str:
 def _date_series(frame: pd.DataFrame, column: str) -> pd.Series:
     if column not in frame.columns:
         raise ValueError(f"historical P/B input is missing {column}")
-    values = pd.to_datetime(frame[column], errors="raise")
+    text = frame[column].astype("string").str.strip()
+    if text.isna().any() or text.eq("").any():
+        raise ValueError(f"historical P/B input has blank {column}")
+    compact = text.str.fullmatch(r"[0-9]{8}", na=False)
+    normalized = text.copy()
+    if compact.any():
+        normalized.loc[compact] = (
+            text.loc[compact].str.slice(0, 4)
+            + "-"
+            + text.loc[compact].str.slice(4, 6)
+            + "-"
+            + text.loc[compact].str.slice(6, 8)
+        )
+    values = pd.to_datetime(normalized, errors="raise")
     if getattr(values.dt, "tz", None) is not None:
         values = values.dt.tz_localize(None)
     return values.dt.date
