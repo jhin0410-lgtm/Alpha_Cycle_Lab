@@ -20,6 +20,10 @@ from alpha_cycle.intelligence.kis_forward_decision_evidence import (
     reconcile_expectation_evidence_gaps,
     sync_record_forward_fields,
 )
+from alpha_cycle.intelligence.kis_forward_forecast_trust import (
+    FORWARD_BLOCK_REASON,
+    FORWARD_NUMERIC_EVIDENCE_ELIGIBLE,
+)
 
 KOREA_TZ = ZoneInfo("Asia/Seoul")
 DEFAULT_KIS_FORWARD_POINTER = Path(
@@ -36,6 +40,8 @@ def _unavailable_report(report: str, reason: str) -> str:
         report.rstrip()
         + "\n\n## KIS forward 실적 추정 증거 (사용 불가)\n\n"
         + f"- 상태: `{reason}`\n"
+        + "- 역사 실적 row/scale 교차검증은 유지되지만 forecast DATA 열의 기간 대응과 "
+        + "forecast 열 단위 연속성이 별도로 인증되지 않았습니다.\n"
         + "- 기존 의사결정 점수는 변경하지 않습니다.\n"
     )
 
@@ -54,7 +60,7 @@ def build_investment_decision_snapshot(
     policy: DecisionPolicy | None = None,
     now: datetime | None = None,
 ) -> InvestmentDecisionSnapshot:
-    """Build existing calibrated decisions, then attach KIS forward evidence if available."""
+    """Build existing calibrated decisions, then attach KIS forward evidence if qualified."""
 
     snapshot = _build_industry_snapshot(
         research_snapshot,
@@ -67,8 +73,24 @@ def build_investment_decision_snapshot(
         policy=policy,
         now=now,
     )
+
+    # The existing private forward artifacts were created after historical row/scale
+    # crosschecks, but before forecast-column period and scale continuity were certified.
+    # Quarantine them at the final decision boundary regardless of local pointer presence.
+    if not FORWARD_NUMERIC_EVIDENCE_ELIGIBLE:
+        warning = f"kis_forward_evidence_blocked:{FORWARD_BLOCK_REASON}"
+        return replace(
+            snapshot,
+            warnings=tuple(dict.fromkeys((*snapshot.warnings, warning))),
+            report_markdown=_unavailable_report(snapshot.report_markdown, FORWARD_BLOCK_REASON),
+        )
+
     explicit_forward = kis_forward_pointer is not None
-    forward_pointer = Path(kis_forward_pointer) if kis_forward_pointer is not None else DEFAULT_KIS_FORWARD_POINTER
+    forward_pointer = (
+        Path(kis_forward_pointer)
+        if kis_forward_pointer is not None
+        else DEFAULT_KIS_FORWARD_POINTER
+    )
     if not forward_pointer.is_file():
         if explicit_forward:
             reason = "kis_forward_evidence_pointer_missing"
