@@ -1,4 +1,4 @@
-"""Normalize forward KIS estimate levels from historically crosschecked row bindings."""
+"""Normalize KIS forward levels only after forecast-column semantics are certified."""
 
 from __future__ import annotations
 
@@ -16,6 +16,9 @@ from alpha_cycle.intelligence.kis_forward_estimates import (
     build_semantic_binding,
     latest_expectation_snapshot,
     normalize_forward_estimates,
+)
+from alpha_cycle.intelligence.kis_forward_forecast_trust import (
+    require_forward_numeric_evidence_eligible,
 )
 
 DEFAULT_EXPECTATION_ROOT = Path("data/private/live-research/expectation-intelligence")
@@ -83,6 +86,10 @@ def run_normalization(
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("Forward normalization clock must be timezone-aware")
 
+    # Historical row/scale matches do not certify forecast DATA-column semantics.
+    # Keep the existing normalizer behind an explicit fail-closed qualification gate.
+    require_forward_numeric_evidence_eligible()
+
     binding = build_semantic_binding(
         general_crosscheck_pointer=general_crosscheck_pointer,
         owner_crosscheck_pointer=owner_crosscheck_pointer,
@@ -117,6 +124,8 @@ def run_normalization(
         "forward_estimates": forward_records,
         "forward_summary": summary_records,
         "historical_semantic_crosscheck_verified": True,
+        "forward_column_period_alignment_certified": True,
+        "forward_scale_continuity_certified": True,
         "forward_values_normalized": True,
         "estimate_snapshot_change_available": False,
         "provider_semantics_certified": False,
@@ -177,6 +186,8 @@ def run_normalization(
         "symbols": artifact["symbols"],
         "forecast_period_labels": artifact["forecast_period_labels"],
         "historical_semantic_crosscheck_verified": True,
+        "forward_column_period_alignment_certified": True,
+        "forward_scale_continuity_certified": True,
         "forward_values_normalized": True,
         "estimate_snapshot_change_available": False,
         "provider_semantics_certified": False,
@@ -192,8 +203,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-kis-forward-estimates",
         description=(
-            "Normalize KIS 2026E/2027E-style forward levels only from historically "
-            "crosschecked row/scale bindings; do not claim consensus provenance or score them."
+            "Normalize KIS forward levels only after historical row/scale semantics, forecast "
+            "DATA-column-to-period alignment, and forecast scale continuity are all certified."
         ),
     )
     parser.add_argument("--expectation-root", type=Path, default=DEFAULT_EXPECTATION_ROOT)
