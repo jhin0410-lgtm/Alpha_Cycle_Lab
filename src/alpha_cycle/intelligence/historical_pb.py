@@ -2,10 +2,10 @@
 
 Historical market capitalization is reconstructed from *unadjusted* Kiwoom
 closes and the latest OpenDART issued-share report that was available by each
-price date.  Book equity is likewise selected only from financial periods whose
+price date. Book equity is likewise selected only from financial periods whose
 availability date is on or before the price date.
 
-The output is observational evidence only.  It does not produce target prices,
+The output is observational evidence only. It does not produce target prices,
 fair value, or a decision score, and it is not historical-vintage/backtest
 certified because OpenDART's current API is not treated as a complete filing
 vintage store.
@@ -131,7 +131,10 @@ def _normalize_shares(shares: pd.DataFrame, evaluation_date: date) -> pd.DataFra
     ).reset_index(drop=True)
 
 
-def _normalize_financials(financials: pd.DataFrame, evaluation_date: date) -> pd.DataFrame:
+def _normalize_financials(
+    financials: pd.DataFrame,
+    evaluation_date: date,
+) -> pd.DataFrame:
     required = {"ticker", "period_end", "available_date", "equity"}
     missing = required - set(financials.columns)
     if missing:
@@ -161,7 +164,11 @@ def _normalize_financials(financials: pd.DataFrame, evaluation_date: date) -> pd
     ).reset_index(drop=True)
 
 
-def _latest_report_group(shares: pd.DataFrame, ticker: str, as_of: date) -> pd.DataFrame:
+def _latest_report_group(
+    shares: pd.DataFrame,
+    ticker: str,
+    as_of: date,
+) -> pd.DataFrame:
     eligible = shares.loc[
         (shares["ticker"] == ticker)
         & (shares["period_end"] <= as_of)
@@ -182,7 +189,11 @@ def _latest_report_group(shares: pd.DataFrame, ticker: str, as_of: date) -> pd.D
     ].copy()
 
 
-def _latest_equity(financials: pd.DataFrame, ticker: str, as_of: date) -> Mapping[str, object] | None:
+def _latest_equity(
+    financials: pd.DataFrame,
+    ticker: str,
+    as_of: date,
+) -> Mapping[str, object] | None:
     eligible = financials.loc[
         (financials["ticker"] == ticker)
         & (financials["period_end"] <= as_of)
@@ -307,7 +318,9 @@ def build_historical_pb_evidence(
         for as_of in candidate_dates:
             report_rows = _latest_report_group(normalized_shares, ticker, as_of)
             if report_rows.empty:
-                skipped["share_report_unavailable"] = skipped.get("share_report_unavailable", 0) + 1
+                skipped["share_report_unavailable"] = (
+                    skipped.get("share_report_unavailable", 0) + 1
+                )
                 continue
             equity_row = _latest_equity(normalized_financials, ticker, as_of)
             if equity_row is None:
@@ -345,19 +358,27 @@ def build_historical_pb_evidence(
                     "share_available_date": share_available_date,
                     "equity_period_end": equity_period_end,
                     "equity_available_date": equity_available_date,
-                    "security_values_json": json.dumps(parts, ensure_ascii=False, sort_keys=True),
+                    "security_values_json": json.dumps(
+                        parts,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    ),
                     "price_basis": "unadjusted",
                     "decision_score_enabled": False,
                 }
             )
         if skipped:
-            summary = ",".join(f"{key}={value}" for key, value in sorted(skipped.items()))
+            summary = ",".join(
+                f"{key}={value}" for key, value in sorted(skipped.items())
+            )
             warnings.append(f"{ticker}: historical P/B skipped dates: {summary}")
 
     series = pd.DataFrame(observations)
     if series.empty:
         raise ValueError("No historical P/B observations survived source/date validation")
-    series = series.sort_values(["ticker", "date"], kind="stable").reset_index(drop=True)
+    series = series.sort_values(["ticker", "date"], kind="stable").reset_index(
+        drop=True
+    )
     summaries: list[dict[str, object]] = []
     for ticker, group in series.groupby("ticker", sort=True):
         values = pd.to_numeric(group["pb"], errors="raise")
@@ -369,7 +390,8 @@ def build_historical_pb_evidence(
                 "first_date": group["date"].iloc[0],
                 "last_date": group["date"].iloc[-1],
                 "history_span_calendar_days": (
-                    cast(date, group["date"].iloc[-1]) - cast(date, group["date"].iloc[0])
+                    cast(date, group["date"].iloc[-1])
+                    - cast(date, group["date"].iloc[0])
                 ).days,
                 "latest_pb": latest,
                 "pb_min": float(values.min()),
@@ -384,7 +406,11 @@ def build_historical_pb_evidence(
                 "point_in_time_backtest_eligible": False,
             }
         )
-    summary_frame = pd.DataFrame(summaries).sort_values("ticker", kind="stable").reset_index(drop=True)
+    summary_frame = (
+        pd.DataFrame(summaries)
+        .sort_values("ticker", kind="stable")
+        .reset_index(drop=True)
+    )
     return HistoricalPbEvidence(
         evaluation_date=evaluation_date,
         series=series,

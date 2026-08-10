@@ -148,8 +148,12 @@ def test_pb_uses_only_share_and_equity_reports_available_by_each_price_date() ->
         security_mappings=_mappings(),
     )
 
-    samsung = evidence.series.loc[evidence.series["ticker"] == "005930"].reset_index(drop=True)
-    hynix = evidence.series.loc[evidence.series["ticker"] == "000660"].reset_index(drop=True)
+    samsung = evidence.series.loc[
+        evidence.series["ticker"] == "005930"
+    ].reset_index(drop=True)
+    hynix = evidence.series.loc[
+        evidence.series["ticker"] == "000660"
+    ].reset_index(drop=True)
     assert samsung["date"].tolist() == [
         date(2026, 3, 10),
         date(2026, 5, 14),
@@ -205,4 +209,7 @@ def test_pb_requires_explicit_mapping_for_non_common_share_classes() -> None:
     )
 
     assert set(evidence.summary["ticker"]) == {"000660"}
-    assert any("005930" in warning and "unmapped_security" in warning for warning in evidence.warnings)
+    assert any(
+        "005930" in warning and "unmapped_security" in warning
+        for warning in evidence.warnings
+    )
