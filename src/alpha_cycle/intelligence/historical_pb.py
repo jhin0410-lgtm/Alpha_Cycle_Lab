@@ -59,7 +59,7 @@ def _number(value: object) -> float | None:
     if value is None or value is pd.NA:
         return None
     try:
-        number = float(value)
+        number = float(str(value))
     except (TypeError, ValueError):
         return None
     return number if np.isfinite(number) else None
@@ -368,10 +368,10 @@ def build_historical_pb_evidence(
                 }
             )
         if skipped:
-            summary = ",".join(
+            skip_summary = ",".join(
                 f"{key}={value}" for key, value in sorted(skipped.items())
             )
-            warnings.append(f"{ticker}: historical P/B skipped dates: {summary}")
+            warnings.append(f"{ticker}: historical P/B skipped dates: {skip_summary}")
 
     series = pd.DataFrame(observations)
     if series.empty:
