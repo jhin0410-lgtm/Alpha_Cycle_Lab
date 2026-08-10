@@ -30,6 +30,7 @@ alpha-cycle = "alpha_cycle.cli:main"
 alpha-cycle-decision = "alpha_cycle.decision_cli:main"
 alpha-cycle-kis-expectation-crosscheck = "alpha_cycle.kis_expectation_semantic_crosscheck_cli:main"
 alpha-cycle-kis-forward-estimates = "alpha_cycle.kis_forward_estimate_cli:main"
+alpha-cycle-kis-forward-estimate-revisions = "alpha_cycle.kis_forward_estimate_revision_cli:main"
 alpha-cycle-kosis-discovery = "alpha_cycle.kosis_industry_discovery_cli:main"
 alpha-cycle-kosis-inventory = "alpha_cycle.kosis_industry_inventory_cli:main"
 alpha-cycle-kosis-parameters = "alpha_cycle.kosis_industry_parameter_cli:main"
@@ -66,6 +67,7 @@ select = ["E", "F", "I", "B", "UP"]
 "src/alpha_cycle/intelligence/technical_evidence_policy.py" = ["E501"]
 "src/alpha_cycle/intelligence/valuation.py" = ["E501"]
 "src/alpha_cycle/kis_expectation_semantic_crosscheck_cli.py" = ["E731"]
+"src/alpha_cycle/kis_forward_estimate_revision_cli.py" = ["E501", "F401"]
 "src/alpha_cycle/kosis_semiconductor_history_cli.py" = ["E501"]
 "src/alpha_cycle/live_pipeline_cli.py" = ["UP047"]
 "tests/unit/test_catalyst_evidence_policy.py" = ["E501"]
@@ -94,6 +96,10 @@ disable_error_code = ["arg-type", "call-overload", "union-attr"]
 [[tool.mypy.overrides]]
 module = "alpha_cycle.intelligence.kis_forward_estimates"
 disable_error_code = ["assignment", "call-overload"]
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.kis_forward_estimate_revision_cli"
+disable_error_code = ["return-value"]
 
 [[tool.mypy.overrides]]
 module = "alpha_cycle.intelligence.outcomes"
