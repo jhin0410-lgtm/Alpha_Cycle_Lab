@@ -226,8 +226,14 @@ def append_historical_pb_report(
         "",
         f"- evaluation date: `{evidence.evaluation_date.isoformat()}`",
         f"- artifact: `{evidence.artifact_id[:12]}`",
-        "- 현재 가격은 unadjusted Kiwoom 가격과 해당 시점에 관측 가능한 OpenDART 주식수·자본으로 재구성했습니다.",
-        "- historical vintage / PIT backtest 인증은 없으며 fair value·목표가·의사결정 점수에는 사용하지 않습니다.",
+        (
+            "- 현재 가격은 unadjusted Kiwoom 가격과 해당 시점에 관측 가능한 "
+            "OpenDART 주식수·자본으로 재구성했습니다."
+        ),
+        (
+            "- historical vintage / PIT backtest 인증은 없으며 fair value·목표가·"
+            "의사결정 점수에는 사용하지 않습니다."
+        ),
         "",
         "| 종목 | 현재 P/B | P25 | 중앙값 | P75 | 역사 percentile | 관측치 | 상태 |",
         "|---|---:|---:|---:|---:|---:|---:|---|",
