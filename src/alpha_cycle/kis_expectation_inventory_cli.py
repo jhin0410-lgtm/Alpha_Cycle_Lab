@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -23,6 +24,7 @@ _FORBIDDEN_KEY_PARTS = (
     "cano",
     "acnt",
 )
+_DATA_FIELD_PATTERN = re.compile(r"^data([1-9][0-9]*)$", re.IGNORECASE)
 
 
 def _read_object(path: Path, *, label: str) -> dict[str, object]:
@@ -111,15 +113,47 @@ def _public_descriptors(rows: list[Mapping[str, object]], key: str) -> list[str]
     return values
 
 
+def _data_fields(keys: list[str]) -> list[str]:
+    indexed: list[tuple[int, str]] = []
+    for key in keys:
+        match = _DATA_FIELD_PATTERN.fullmatch(key)
+        if match is not None:
+            indexed.append((int(match.group(1)), key))
+    indexed.sort()
+    return [key for _, key in indexed]
+
+
 def _output_inventory(value: object, *, output_name: str) -> dict[str, object]:
     shape, rows = _rows(value, output_name=output_name)
     keys = sorted({str(key) for row in rows for key in row})
+    data_fields = _data_fields(keys)
+    periods = _public_descriptors(rows, "dt")
     return {
         "shape": shape,
         "row_count": len(rows),
         "keys": keys,
-        "data1_labels": _public_descriptors(rows, "data1"),
-        "period_labels": _public_descriptors(rows, "dt"),
+        "data_value_fields": data_fields,
+        "data_value_field_count": len(data_fields),
+        "period_labels": periods,
+        "period_label_count": len(periods),
+        "numeric_values_exposed": False,
+    }
+
+
+def _matrix_observation(
+    output: Mapping[str, object],
+    *,
+    period_count: int,
+) -> dict[str, object]:
+    field_count_raw = output.get("data_value_field_count")
+    field_count = field_count_raw if isinstance(field_count_raw, int) else 0
+    return {
+        "data_value_field_count": field_count,
+        "period_axis_count": period_count,
+        "period_axis_cardinality_matches": field_count > 0 and field_count == period_count,
+        "column_period_alignment_certified": False,
+        "row_semantics_certified": False,
+        "financial_metric_semantics_certified": False,
     }
 
 
@@ -159,7 +193,7 @@ def inspect_expectation_snapshot(root: Path) -> dict[str, object]:
         if not isinstance(payload_raw, dict):
             raise ValueError(f"Raw KIS payload for {symbol} must be an object")
         payload = cast(Mapping[str, object], payload_raw)
-        outputs: dict[str, object] = {}
+        outputs: dict[str, dict[str, object]] = {}
         for output_name in ("output1", "output2", "output3", "output4"):
             if output_name not in payload:
                 raise ValueError(f"Raw KIS payload for {symbol} is missing {output_name}")
@@ -167,7 +201,24 @@ def inspect_expectation_snapshot(root: Path) -> dict[str, object]:
                 payload[output_name],
                 output_name=f"{symbol}.{output_name}",
             )
-        symbol_inventory[symbol] = outputs
+
+        period_labels_raw = outputs["output4"].get("period_labels")
+        period_labels = (
+            [str(value) for value in period_labels_raw]
+            if isinstance(period_labels_raw, list)
+            else []
+        )
+        period_count = len(period_labels)
+        matrices = {
+            output_name: _matrix_observation(outputs[output_name], period_count=period_count)
+            for output_name in ("output2", "output3")
+        }
+        symbol_inventory[symbol] = {
+            "outputs": outputs,
+            "period_axis": period_labels,
+            "period_axis_count": period_count,
+            "matrix_observations": matrices,
+        }
 
     return {
         "status": "expectation_inventory_inspected",
@@ -177,11 +228,13 @@ def inspect_expectation_snapshot(root: Path) -> dict[str, object]:
         "provider": manifest.get("provider"),
         "source_scope": manifest.get("source_scope"),
         "semantic_status": manifest.get("semantic_status"),
+        "provider_semantics_certified": False,
         "consensus_certified": False,
         "revision_certified": False,
         "decision_score_enabled": False,
+        "numeric_values_exposed": False,
         "symbols": list(symbols),
-        "outputs": symbol_inventory,
+        "symbol_inventory": symbol_inventory,
     }
 
 
@@ -189,8 +242,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-kis-expectation-inventory",
         description=(
-            "Inspect field names, row counts, public data1 labels, and period labels in the "
-            "latest local KIS estimate-perform snapshot without assigning financial semantics"
+            "Inspect output shapes, field names, DATA-field counts, and period labels in the "
+            "latest local KIS estimate-perform snapshot without printing estimate values or "
+            "assigning financial semantics"
         ),
     )
     parser.add_argument("--root", type=Path, default=DEFAULT_OUTPUT_ROOT)
