@@ -123,7 +123,7 @@ def test_forward_evidence_is_non_scoring_and_narrows_gap_only_for_applicable_tic
     hynix = reconciled.loc[reconciled["ticker"].astype(str).eq("000660")].iloc[0]
     naver = reconciled.loc[reconciled["ticker"].astype(str).eq("035420")].iloc[0]
     assert bool(hynix["kis_forward_evidence_available"]) is True
-    assert hynix["kis_forward_decision_score_enabled"] is False
+    assert bool(hynix["kis_forward_decision_score_enabled"]) is False
     assert "KIS forward 실적 추정 level 연결됨" in hynix["evidence_gaps"]
     assert "시장 컨센서스 출처" in hynix["evidence_gaps"]
     assert bool(naver["kis_forward_evidence_available"]) is False
