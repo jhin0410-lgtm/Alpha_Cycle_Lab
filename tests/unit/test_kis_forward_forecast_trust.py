@@ -6,9 +6,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from alpha_cycle.intelligence import decision_forward_estimate_calibrated as decision_wrapper
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_scoring import DecisionPolicy
-from alpha_cycle.intelligence import decision_forward_estimate_calibrated as decision_wrapper
 from alpha_cycle.intelligence.kis_forward_forecast_trust import (
     FORECAST_COLUMN_PERIOD_ALIGNMENT_CERTIFIED,
     FORECAST_SCALE_CONTINUITY_CERTIFIED,
@@ -62,9 +62,15 @@ def test_forward_normalization_blocks_before_reading_local_artifacts(tmp_path: P
         )
 
 
-def test_decision_wrapper_quarantines_existing_forward_pointer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_decision_wrapper_quarantines_existing_forward_pointer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     base = _empty_snapshot()
-    monkeypatch.setattr(decision_wrapper, "_build_industry_snapshot", lambda *args, **kwargs: base)
+    monkeypatch.setattr(
+        decision_wrapper,
+        "_build_industry_snapshot",
+        lambda *args, **kwargs: base,
+    )
 
     result = decision_wrapper.build_investment_decision_snapshot(
         "unused-research",
