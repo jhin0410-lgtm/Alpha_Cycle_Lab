@@ -4,7 +4,6 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from alpha_cycle.intelligence.kis_forward_estimates import (
