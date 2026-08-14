@@ -8,6 +8,7 @@ import pytest
 
 from alpha_cycle.intelligence.semiconductor_baseline_allocation import (
     BaselineAllocationMethod,
+    build_direct_amount_revenue_reference,
     build_direct_share_revenue_allocation,
     reconcile_company_revenue,
     validate_baseline_allocation_method,
@@ -49,22 +50,24 @@ def _method_raw(
     method_label: str,
     *,
     output_metric: str = "revenue",
+    method_kind: str = "direct_share_allocation",
     method_status: str = "observationally_calibrated",
     method_version_frozen: bool = True,
+    evidence_label: str | None = None,
 ) -> dict[str, object]:
     return {
         "ticker": "000660",
         "block_id": block_id,
         "baseline_requirement_id": baseline_requirement_id,
         "output_metric": output_metric,
-        "method_id": f"{method_label}_direct_share",
+        "method_id": f"{method_label}_{method_kind}",
         "method_version": "1.0",
-        "method_kind": "direct_share_allocation",
+        "method_kind": method_kind,
         "method_status": method_status,
         "method_version_frozen": method_version_frozen,
-        "supporting_evidence_ids": [_id(f"{method_label}_method_evidence")],
-        "rationale": "Allocate reported company revenue using a source-bounded product share.",
-        "invalidation_condition": "Invalidate if share semantics or accounting scope changes.",
+        "supporting_evidence_ids": [_id(evidence_label or f"{method_label}_method_evidence")],
+        "rationale": "Use only source-bounded revenue evidence for a registered model block.",
+        "invalidation_condition": "Invalidate if source semantics or accounting scope changes.",
     }
 
 
@@ -73,10 +76,9 @@ def _verified_ids() -> set[str]:
         _id("company_revenue"),
         _id("dram_share"),
         _id("nand_share"),
-        _id("other_share"),
+        _id("other_amount"),
         _id("dram_method_evidence"),
         _id("nand_method_evidence"),
-        _id("other_method_evidence"),
     }
 
 
@@ -118,12 +120,15 @@ def _ready_methods() -> tuple[BaselineAllocationMethod, BaselineAllocationMethod
     return dram, nand
 
 
-def _other_method() -> BaselineAllocationMethod:
+def _other_amount_method() -> BaselineAllocationMethod:
     return validate_baseline_allocation_method(
         _method_raw(
             "other_products_services",
             "other_products_services_revenue_bridge",
             "other",
+            method_kind="direct_amount_reference",
+            method_status="source_mapped",
+            evidence_label="other_amount",
         ),
         verified_evidence_ids=_verified_ids(),
     )
@@ -243,6 +248,52 @@ def test_v1_refuses_profitability_and_non_additive_hbm_allocation() -> None:
         )
 
 
+def test_direct_other_amount_reference_preserves_source_boundary_without_residual() -> None:
+    other = validate_source_bound_allocation_input(
+        _input_raw(
+            "other_products_services_revenue",
+            10.0,
+            "KRW_trillion",
+            "other_amount",
+        ),
+        verified_evidence_ids=_verified_ids(),
+    )
+    reference = build_direct_amount_revenue_reference(
+        amount_input=other,
+        method=_other_amount_method(),
+    )
+    assert reference.block_id == "other_products_services"
+    assert reference.value == pytest.approx(10.0)
+    assert reference.allocation_ready is True
+    assert reference.source_fact is False
+    assert reference.derived_not_source_fact is True
+    assert reference.residual_derivation_used is False
+    assert reference.source_input_ids == (other.input_id,)
+    assert reference.source_evidence_ids == (other.source_evidence_id,)
+
+
+def test_direct_other_amount_reference_rejects_wrong_semantic_or_share_unit() -> None:
+    wrong_semantic = validate_source_bound_allocation_input(
+        _input_raw("other_products_services_revenue_share", 10.0, "percent", "other_amount"),
+        verified_evidence_ids=_verified_ids(),
+    )
+    with pytest.raises(ValueError, match="semantic is outside"):
+        build_direct_amount_revenue_reference(
+            amount_input=wrong_semantic,
+            method=_other_amount_method(),
+        )
+
+    wrong_unit = validate_source_bound_allocation_input(
+        _input_raw("other_products_services_revenue", 10.0, "percent", "other_amount"),
+        verified_evidence_ids=_verified_ids(),
+    )
+    with pytest.raises(ValueError, match="must use an amount unit"):
+        build_direct_amount_revenue_reference(
+            amount_input=wrong_unit,
+            method=_other_amount_method(),
+        )
+
+
 def test_dram_and_nand_only_never_certify_company_revenue_without_other_block() -> None:
     company, dram_share, nand_share = _ready_inputs()
     dram_method, nand_method = _ready_methods()
@@ -293,8 +344,13 @@ def test_all_three_explicit_revenue_blocks_can_reconcile_company_total() -> None
         _input_raw("nand_revenue_share", 30.0, "percent", "nand_share"),
         verified_evidence_ids=verified,
     )
-    other_share = validate_source_bound_allocation_input(
-        _input_raw("other_products_services_revenue_share", 10.0, "percent", "other_share"),
+    other_amount = validate_source_bound_allocation_input(
+        _input_raw(
+            "other_products_services_revenue",
+            10.0,
+            "KRW_trillion",
+            "other_amount",
+        ),
         verified_evidence_ids=verified,
     )
     dram_method, nand_method = _ready_methods()
@@ -309,10 +365,9 @@ def test_all_three_explicit_revenue_blocks_can_reconcile_company_total() -> None
             share_input=nand_share,
             method=nand_method,
         ),
-        build_direct_share_revenue_allocation(
-            total_input=company,
-            share_input=other_share,
-            method=_other_method(),
+        build_direct_amount_revenue_reference(
+            amount_input=other_amount,
+            method=_other_amount_method(),
         ),
     )
     reconciliation = reconcile_company_revenue(
