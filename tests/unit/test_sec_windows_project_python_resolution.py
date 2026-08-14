@@ -10,6 +10,7 @@ import pytest
     [
         "capture_sec_product_mix_calibration.ps1",
         "scout_sec_post_earnings_product_mix.ps1",
+        "inventory_sec_post_earnings_all_forms.ps1",
     ],
 )
 def test_sec_windows_scripts_prefer_project_venv_and_preflight_dependencies(
