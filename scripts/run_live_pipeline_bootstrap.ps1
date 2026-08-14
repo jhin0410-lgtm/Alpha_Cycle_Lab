@@ -13,6 +13,7 @@ $Pipeline = Join-Path $ScriptDirectory "run_live_pipeline_orchestrator.ps1"
 $MacroLiquidityRefresh = Join-Path $ScriptDirectory "refresh_macro_liquidity.ps1"
 $OfficialIrRefresh = Join-Path $ScriptDirectory "refresh_official_semiconductor_ir.ps1"
 $ProvisionalEarningsRefresh = Join-Path $ScriptDirectory "refresh_opendart_provisional_earnings.ps1"
+$SecCompanyActualRefresh = Join-Path $ScriptDirectory "refresh_sec_company_actual.ps1"
 $SourceRoot = Join-Path $RepositoryRoot "src"
 
 $ProjectPython = & $Resolver
@@ -35,5 +36,6 @@ Set-Location $RepositoryRoot
 & $MacroLiquidityRefresh @PipelineArguments
 & $OfficialIrRefresh @PipelineArguments
 & $ProvisionalEarningsRefresh @PipelineArguments
+& $SecCompanyActualRefresh @PipelineArguments
 & $Pipeline @PipelineArguments
 exit $LASTEXITCODE

@@ -1,0 +1,25 @@
+schema_version: 1
+issuers:
+  "000660":
+    issuer_name: SK hynix
+    filings:
+      skhynix_000660_2026q2_sec_6k_actual:
+        source_id: sec_edgar
+        cik: "0002120882"
+        form: 6-K
+        filing_date: 2026-07-29
+        expected_accession_number: "0001193125-26-321989"
+        expected_primary_document: d115239d6k.htm
+        period_start: 2026-04-01
+        period_end: 2026-06-30
+        parser_id: skhynix_sec_6k_2026q2_provisional_v1
+        company_level_actual: true
+        provisional: true
+        audited: false
+        product_baseline_eligible: false
+        required_identity_anchors:
+          - Preliminary Results of Operations
+          - "Basis: Consolidated"
+          - Current Period
+          - Second quarter
+          - Investor Relations, SK hynix

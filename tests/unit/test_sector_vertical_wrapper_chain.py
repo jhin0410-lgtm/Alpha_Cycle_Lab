@@ -14,6 +14,9 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     expectation = Path(
         "src/alpha_cycle/intelligence/decision_expectation_gap_calibrated.py"
     ).read_text(encoding="utf-8")
+    crosscheck = Path(
+        "src/alpha_cycle/intelligence/decision_semiconductor_company_actual_crosscheck_calibrated.py"
+    ).read_text(encoding="utf-8")
     company_actual = Path(
         "src/alpha_cycle/intelligence/decision_semiconductor_company_actual_calibrated.py"
     ).read_text(encoding="utf-8")
@@ -59,6 +62,7 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
         "decision_semiconductor_accounting_identity_calibrated",
         "decision_semiconductor_baseline_allocation_calibrated",
         "decision_semiconductor_company_actual_calibrated",
+        "decision_semiconductor_company_actual_crosscheck_calibrated",
         "decision_expectation_gap_calibrated",
         "decision_catalyst_horizon_calibrated",
         "decision_scenario_expected_return_calibrated",
@@ -76,6 +80,7 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     assert "semiconductor_accounting_identity_pointer" in scenario
     assert "semiconductor_baseline_allocation_pointer" in scenario
     assert "opendart_provisional_earnings_pointer" in scenario
+    assert "sec_company_actual_pointer" in scenario
 
     assert "decision_expectation_gap_calibrated" in catalyst
     assert "_build_expectation_snapshot" in catalyst
@@ -84,13 +89,21 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     assert "semiconductor_accounting_identity_pointer" in catalyst
     assert "semiconductor_baseline_allocation_pointer" in catalyst
     assert "opendart_provisional_earnings_pointer" in catalyst
+    assert "sec_company_actual_pointer" in catalyst
 
-    assert "decision_semiconductor_company_actual_calibrated" in expectation
-    assert "_build_company_actual_snapshot" in expectation
+    assert "decision_semiconductor_company_actual_crosscheck_calibrated" in expectation
+    assert "_build_company_actual_crosscheck_snapshot" in expectation
     assert "build_expectation_gap_decision_evidence" in expectation
     assert "semiconductor_accounting_identity_pointer" in expectation
     assert "semiconductor_baseline_allocation_pointer" in expectation
     assert "opendart_provisional_earnings_pointer" in expectation
+    assert "sec_company_actual_pointer" in expectation
+
+    assert "decision_semiconductor_company_actual_calibrated" in crosscheck
+    assert "_build_company_actual_snapshot" in crosscheck
+    assert "load_sec_company_actual_decision_evidence" in crosscheck
+    assert "build_company_actual_crosscheck" in crosscheck
+    assert "company_actual_crosscheck_product_baseline_eligible" in crosscheck
 
     assert "decision_semiconductor_baseline_allocation_calibrated" in company_actual
     assert "_build_baseline_allocation_snapshot" in company_actual
