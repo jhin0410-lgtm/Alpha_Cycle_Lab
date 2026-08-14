@@ -86,6 +86,8 @@ def build_investment_decision_snapshot(
     semiconductor_forward_input_pointer: str | Path | None = None,
     semiconductor_operating_assumption_pointer: str | Path | None = None,
     semiconductor_baseline_reconciliation_pointer: str | Path | None = None,
+    semiconductor_accounting_identity_pointer: str | Path | None = None,
+    semiconductor_baseline_allocation_pointer: str | Path | None = None,
     catalyst_horizon_pointer: str | Path | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
@@ -110,6 +112,8 @@ def build_investment_decision_snapshot(
         semiconductor_baseline_reconciliation_pointer=(
             semiconductor_baseline_reconciliation_pointer
         ),
+        semiconductor_accounting_identity_pointer=semiconductor_accounting_identity_pointer,
+        semiconductor_baseline_allocation_pointer=semiconductor_baseline_allocation_pointer,
         benchmark=benchmark,
         exposures=exposures,
         policy=policy,
