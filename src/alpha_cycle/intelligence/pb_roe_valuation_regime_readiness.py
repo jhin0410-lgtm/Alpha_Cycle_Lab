@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from datetime import date
 from typing import cast
 
 import numpy as np
@@ -47,7 +48,7 @@ def _finite_float(value: object, field: str) -> float:
 def _json_value(value: object) -> object:
     if value is None or value is pd.NA or value is pd.NaT:
         return None
-    if isinstance(value, pd.Timestamp):
+    if isinstance(value, (pd.Timestamp, date)):
         return value.isoformat()
     if isinstance(value, np.generic):
         return _json_value(value.item())
@@ -162,15 +163,11 @@ def build_pb_roe_valuation_regime_evidence(
     financial_history: pd.DataFrame,
     historical_pb: HistoricalPbDecisionEvidence,
     *,
-    evaluation_date: object,
+    evaluation_date: date,
     valuation_snapshot_id: str,
 ) -> PbRoeValuationRegimeEvidence:
     """Build base regime evidence and apply the history-depth publication guard."""
 
-    from datetime import date
-
-    if not isinstance(evaluation_date, date):
-        raise TypeError("evaluation_date must be a date")
     base = _build_base_regime_evidence(
         financial_history,
         historical_pb,
