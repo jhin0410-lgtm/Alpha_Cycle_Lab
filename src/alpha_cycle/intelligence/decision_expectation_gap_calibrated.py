@@ -24,7 +24,11 @@ def _attach(scorecards: pd.DataFrame, evidence_rows: pd.DataFrame) -> pd.DataFra
     result = scorecards.copy()
     result["ticker"] = result["ticker"].astype("string").str.zfill(6)
     supplement = evidence_rows.rename(
-        columns={column: f"expectation_gap_{column}" for column in evidence_rows.columns if column != "ticker"}
+        columns={
+            column: f"expectation_gap_{column}"
+            for column in evidence_rows.columns
+            if column != "ticker"
+        }
     ).copy()
     supplement["ticker"] = supplement["ticker"].astype("string").str.zfill(6)
     return result.merge(supplement, on="ticker", how="left", validate="one_to_one")
