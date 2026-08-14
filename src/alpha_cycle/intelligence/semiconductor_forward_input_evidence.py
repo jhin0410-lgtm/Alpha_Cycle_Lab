@@ -4,7 +4,8 @@ This layer records which baseline metrics and forward drivers are supported for 
 issuer model block. Source identity is never caller-declared: every claim must bind
 to the existing semiconductor structural-source registry, which fixes role, domain,
 and primary-source status. Qualitative evidence may improve descriptive coverage but
-cannot become a numeric model input.
+cannot become a numeric model input. Expired forward claims remain archived evidence
+but cannot count toward current descriptive forward coverage.
 """
 
 from __future__ import annotations
@@ -321,6 +322,15 @@ def validate_forward_input_claim(
     )
 
 
+def _current_descriptive_forward_eligible(claim: SemiconductorForwardInputClaim) -> bool:
+    return bool(
+        claim.claim_type == "forward_driver"
+        and claim.period_start is not None
+        and claim.period_end is not None
+        and claim.period_end > claim.evaluation_date
+    )
+
+
 def _coverage(
     claims: tuple[SemiconductorForwardInputClaim, ...],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -332,9 +342,17 @@ def _coverage(
             baseline_seen = {
                 claim.metric_id for claim in block_claims if claim.claim_type == "baseline"
             }
-            driver_seen = {
-                claim.metric_id for claim in block_claims if claim.claim_type == "forward_driver"
-            }
+            current_driver_claims = [
+                claim for claim in block_claims if _current_descriptive_forward_eligible(claim)
+            ]
+            expired_driver_claims = [
+                claim
+                for claim in block_claims
+                if claim.claim_type == "forward_driver"
+                and claim.period_end is not None
+                and claim.period_end <= claim.evaluation_date
+            ]
+            driver_seen = {claim.metric_id for claim in current_driver_claims}
             numeric_baseline_seen = {
                 claim.metric_id
                 for claim in block_claims
@@ -360,6 +378,7 @@ def _coverage(
                     "numeric_baseline_count": len(required_baselines & numeric_baseline_seen),
                     "required_forward_driver_count": len(required_drivers),
                     "covered_forward_driver_count": len(required_drivers & driver_seen),
+                    "expired_forward_claim_count": len(expired_driver_claims),
                     "numeric_forward_driver_count": len(required_drivers & numeric_driver_seen),
                     "baseline_complete": descriptive_baseline_complete,
                     "numeric_baseline_complete": numeric_baseline_complete,
@@ -389,6 +408,9 @@ def _coverage(
                 ),
                 "numeric_input_ready_block_count": int(
                     group["numeric_model_input_ready"].astype(bool).sum()
+                ),
+                "expired_forward_claim_count": int(
+                    group["expired_forward_claim_count"].astype(int).sum()
                 ),
                 "all_descriptive_inputs_covered": bool(
                     group["baseline_complete"].astype(bool).all()
