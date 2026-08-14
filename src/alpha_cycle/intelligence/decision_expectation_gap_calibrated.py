@@ -1,4 +1,4 @@
-"""Attach provider-agnostic Expectation Gap v1 after derived-revenue allocation."""
+"""Attach provider-agnostic Expectation Gap v1 after verified company actuals."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import pandas as pd
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_scoring import CompanyExposure, DecisionPolicy
-from alpha_cycle.intelligence.decision_semiconductor_baseline_allocation_calibrated import (
-    build_investment_decision_snapshot as _build_baseline_allocation_snapshot,
+from alpha_cycle.intelligence.decision_semiconductor_company_actual_calibrated import (
+    build_investment_decision_snapshot as _build_company_actual_snapshot,
 )
 from alpha_cycle.intelligence.expectation_gap_decision_evidence import (
     append_expectation_gap_report,
@@ -79,6 +79,7 @@ def build_investment_decision_snapshot(
     semiconductor_baseline_reconciliation_pointer: str | Path | None = None,
     semiconductor_accounting_identity_pointer: str | Path | None = None,
     semiconductor_baseline_allocation_pointer: str | Path | None = None,
+    opendart_provisional_earnings_pointer: str | Path | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
     policy: DecisionPolicy | None = None,
@@ -86,7 +87,7 @@ def build_investment_decision_snapshot(
 ) -> InvestmentDecisionSnapshot:
     """Build existing chain, then attach expectation certification/readiness only."""
 
-    snapshot = _build_baseline_allocation_snapshot(
+    snapshot = _build_company_actual_snapshot(
         research_snapshot,
         market_snapshot,
         valuation_snapshot=valuation_snapshot,
@@ -104,6 +105,7 @@ def build_investment_decision_snapshot(
         ),
         semiconductor_accounting_identity_pointer=semiconductor_accounting_identity_pointer,
         semiconductor_baseline_allocation_pointer=semiconductor_baseline_allocation_pointer,
+        opendart_provisional_earnings_pointer=opendart_provisional_earnings_pointer,
         benchmark=benchmark,
         exposures=exposures,
         policy=policy,
