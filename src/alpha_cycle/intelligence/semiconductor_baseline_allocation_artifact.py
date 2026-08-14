@@ -2,14 +2,20 @@
 
 V1 deliberately has no production source resolver. A source-specific resolver must first
 prove the numeric inputs from an independently verified upstream artifact and separately
-prove the observational calibration supporting the allocation method. Persisted
+prove the observational calibration supporting direct-share methods. Persisted
 "verified" booleans are never enough to activate this layer.
+
+SK hynix company-revenue reconciliation may include a directly reported Other-products
+revenue amount. That value is never created as a residual. When issuer shares are rounded,
+a source resolver may request only a tightly capped reconciliation tolerance backed by the
+separate historical method-calibration artifact.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -22,6 +28,7 @@ from alpha_cycle.intelligence.semiconductor_baseline_allocation import (
     CompanyRevenueReconciliation,
     DerivedBaselineAllocation,
     SourceBoundAllocationInput,
+    build_direct_amount_revenue_reference,
     build_direct_share_revenue_allocation,
     reconcile_company_revenue,
     validate_baseline_allocation_method,
@@ -34,11 +41,16 @@ DEFAULT_BASELINE_ALLOCATION_POINTER = (
     DEFAULT_BASELINE_ALLOCATION_OUTPUT / "latest_semiconductor_baseline_allocation.json"
 )
 SK_HYNIX_TICKER = "000660"
-_REQUIRED_SEMANTICS = (
-    "reported_company_revenue",
-    "dram_revenue_share",
-    "nand_revenue_share",
+_CORE_REQUIRED_SEMANTICS = frozenset(
+    {
+        "reported_company_revenue",
+        "dram_revenue_share",
+        "nand_revenue_share",
+    }
 )
+_OPTIONAL_SEMANTICS = frozenset({"other_products_services_revenue"})
+_ALLOWED_SEMANTICS = _CORE_REQUIRED_SEMANTICS | _OPTIONAL_SEMANTICS
+_MAX_RECONCILIATION_RELATIVE_TOLERANCE = 0.001
 _REQUIRED_FALSE_FLAGS = (
     "source_fact",
     "residual_derivation_enabled",
@@ -78,6 +90,7 @@ class VerifiedAllocationSourceBundle:
     source_reference_id: str
     inputs: tuple[SourceBoundAllocationInput, ...]
     method_support_evidence_ids: tuple[str, ...]
+    reconciliation_relative_tolerance: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.resolver_id.strip() or self.ticker != SK_HYNIX_TICKER:
@@ -85,10 +98,15 @@ class VerifiedAllocationSourceBundle:
         if not _valid_sha(self.source_reference_id):
             raise ValueError("Allocation source reference must be SHA-256")
         by_semantic = {item.semantic_id: item for item in self.inputs}
-        if tuple(sorted(by_semantic)) != tuple(sorted(_REQUIRED_SEMANTICS)):
-            raise ValueError("Allocation source bundle must contain exact SK hynix v1 semantics")
         if len(by_semantic) != len(self.inputs):
             raise ValueError("Allocation source bundle contains duplicate semantics")
+        semantic_ids = set(by_semantic)
+        if not _CORE_REQUIRED_SEMANTICS.issubset(semantic_ids):
+            missing = ",".join(sorted(_CORE_REQUIRED_SEMANTICS - semantic_ids))
+            raise ValueError(f"Allocation source bundle is missing core semantics: {missing}")
+        if not semantic_ids.issubset(_ALLOWED_SEMANTICS):
+            unexpected = ",".join(sorted(semantic_ids - _ALLOWED_SEMANTICS))
+            raise ValueError(f"Allocation source bundle contains unsupported semantics: {unexpected}")
         if any(item.ticker != self.ticker for item in self.inputs):
             raise ValueError("Allocation source bundle cannot mix issuers")
         if any(not item.source_evidence_verified for item in self.inputs):
@@ -105,11 +123,20 @@ class VerifiedAllocationSourceBundle:
         input_evidence_ids = {item.source_evidence_id for item in self.inputs}
         if input_evidence_ids.intersection(self.method_support_evidence_ids):
             raise ValueError("Allocation method calibration evidence must be separate from inputs")
+        tolerance = self.reconciliation_relative_tolerance
+        if (
+            not math.isfinite(tolerance)
+            or tolerance < 0
+            or tolerance > _MAX_RECONCILIATION_RELATIVE_TOLERANCE
+        ):
+            raise ValueError("Allocation reconciliation relative tolerance exceeds v1 calibration")
+        if tolerance > 0 and "other_products_services_revenue" not in by_semantic:
+            raise ValueError("Rounded-share reconciliation tolerance requires explicit Other revenue")
 
 
 AllocationSourceResolver = Callable[[str | Path, date], VerifiedAllocationSourceBundle]
 # Intentionally empty. Activating 000660 requires a separate source-specific resolver PR
-# after exact official SK hynix 2Q26 source bytes/URL and numeric share semantics are verified.
+# after exact official SK hynix same-period source bytes and numeric share semantics are verified.
 # The resolver must also revalidate a distinct observational calibration artifact.
 ALLOCATION_SOURCE_RESOLVERS: dict[str, AllocationSourceResolver] = {}
 
@@ -120,6 +147,7 @@ class SemiconductorBaselineAllocationEvidence:
     resolver_id: str
     source_reference_id: str
     method_support_evidence_ids: tuple[str, ...]
+    reconciliation_relative_tolerance: float
     evaluation_date: date
     reconciliation: CompanyRevenueReconciliation
     allocations: tuple[DerivedBaselineAllocation, ...]
@@ -138,6 +166,8 @@ class SemiconductorBaselineAllocationEvidence:
             not _valid_sha(item) for item in self.method_support_evidence_ids
         ):
             raise ValueError("Baseline allocation method support IDs must be SHA-256")
+        if not 0 <= self.reconciliation_relative_tolerance <= _MAX_RECONCILIATION_RELATIVE_TOLERANCE:
+            raise ValueError("Baseline allocation reconciliation tolerance is invalid")
         if self.reconciliation.ticker != SK_HYNIX_TICKER:
             raise ValueError("Baseline allocation evidence v1 supports SK hynix only")
         if not self.allocations:
@@ -155,7 +185,7 @@ class SemiconductorBaselineAllocationEvidence:
             raise ValueError("Revenue allocation evidence cannot widen model/scoring gates")
 
 
-def _method_raw(
+def _share_method_raw(
     *,
     block_id: str,
     baseline_requirement_id: str,
@@ -174,12 +204,38 @@ def _method_raw(
         "method_version_frozen": True,
         "supporting_evidence_ids": list(supporting_evidence_ids),
         "rationale": (
-            "Allocate directly reported company revenue using a directly evidenced "
-            "issuer product-revenue share; no residual or profitability arithmetic."
+            "Allocate directly reported company revenue using a directly evidenced issuer "
+            "product-revenue share; no residual or profitability arithmetic."
         ),
         "invalidation_condition": (
-            "Invalidate if the issuer share definition, accounting scope, period, or "
-            "source semantics change."
+            "Invalidate if the issuer share definition, accounting scope, period, source "
+            "semantics, or historical method calibration changes."
+        ),
+    }
+
+
+def _direct_amount_method_raw(
+    *,
+    source_evidence_id: str,
+) -> dict[str, object]:
+    return {
+        "ticker": SK_HYNIX_TICKER,
+        "block_id": "other_products_services",
+        "baseline_requirement_id": "other_products_services_revenue_bridge",
+        "output_metric": "revenue",
+        "method_id": "skhynix_other_products_direct_amount_v1",
+        "method_version": "1.0",
+        "method_kind": "direct_amount_reference",
+        "method_status": "source_mapped",
+        "method_version_frozen": True,
+        "supporting_evidence_ids": [source_evidence_id],
+        "rationale": (
+            "Reference an explicitly reported Other-products revenue amount without deriving "
+            "a residual from DRAM/NAND shares."
+        ),
+        "invalidation_condition": (
+            "Invalidate if the Other-products accounting definition, period, unit, or source "
+            "semantics change."
         ),
     }
 
@@ -210,7 +266,7 @@ def build_skhynix_revenue_allocation_evidence(
     }
 
     dram_method: BaselineAllocationMethod = validate_baseline_allocation_method(
-        _method_raw(
+        _share_method_raw(
             block_id="dram_total",
             baseline_requirement_id="dram_revenue_or_company_memory_bridge",
             method_id="skhynix_dram_direct_share_v1",
@@ -223,7 +279,7 @@ def build_skhynix_revenue_allocation_evidence(
         verified_evidence_ids=verified_ids,
     )
     nand_method: BaselineAllocationMethod = validate_baseline_allocation_method(
-        _method_raw(
+        _share_method_raw(
             block_id="nand_and_solutions",
             baseline_requirement_id="nand_solution_revenue_bridge",
             method_id="skhynix_nand_direct_share_v1",
@@ -235,7 +291,7 @@ def build_skhynix_revenue_allocation_evidence(
         ),
         verified_evidence_ids=verified_ids,
     )
-    allocations = (
+    allocations_list = [
         build_direct_share_revenue_allocation(
             total_input=company,
             share_input=dram_share,
@@ -246,16 +302,35 @@ def build_skhynix_revenue_allocation_evidence(
             share_input=nand_share,
             method=nand_method,
         ),
+    ]
+    other = by_semantic.get("other_products_services_revenue")
+    if other is not None:
+        other_method = validate_baseline_allocation_method(
+            _direct_amount_method_raw(source_evidence_id=other.source_evidence_id),
+            verified_evidence_ids=verified_ids,
+        )
+        allocations_list.append(
+            build_direct_amount_revenue_reference(
+                amount_input=other,
+                method=other_method,
+            )
+        )
+    allocations = tuple(allocations_list)
+    absolute_tolerance = max(
+        1e-9,
+        abs(company.value) * bundle.reconciliation_relative_tolerance,
     )
     reconciliation = reconcile_company_revenue(
         ticker=SK_HYNIX_TICKER,
         allocations=allocations,
         reported_company_revenue=company,
+        absolute_tolerance=absolute_tolerance,
     )
     payload = {
         "resolver_id": resolver_id,
         "source_reference_id": bundle.source_reference_id,
         "method_support_evidence_ids": list(bundle.method_support_evidence_ids),
+        "reconciliation_relative_tolerance": bundle.reconciliation_relative_tolerance,
         "evaluation_date": evaluation_date.isoformat(),
         "input_ids": [item.input_id for item in bundle.inputs],
         "allocation_ids": [item.allocation_id for item in allocations],
@@ -273,6 +348,7 @@ def build_skhynix_revenue_allocation_evidence(
         resolver_id=resolver_id,
         source_reference_id=bundle.source_reference_id,
         method_support_evidence_ids=bundle.method_support_evidence_ids,
+        reconciliation_relative_tolerance=bundle.reconciliation_relative_tolerance,
         evaluation_date=evaluation_date,
         reconciliation=reconciliation,
         allocations=allocations,
@@ -288,6 +364,7 @@ def _allocation_payload(
         "resolver_id": evidence.resolver_id,
         "source_reference_id": evidence.source_reference_id,
         "method_support_evidence_ids": list(evidence.method_support_evidence_ids),
+        "reconciliation_relative_tolerance": evidence.reconciliation_relative_tolerance,
         "evaluation_date": evidence.evaluation_date.isoformat(),
         "ticker": item.ticker,
         "period_start": item.period_start.isoformat(),
