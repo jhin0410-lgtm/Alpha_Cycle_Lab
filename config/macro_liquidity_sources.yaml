@@ -1,0 +1,66 @@
+schema_version: 1
+sources:
+  us_real_yield_10y:
+    provider: fred
+    provider_owner: Federal Reserve Bank of St. Louis
+    underlying_source: Board of Governors of the Federal Reserve System (US)
+    series_id: DFII10
+    dimension: discount_rate
+    label: 10-Year Treasury Inflation-Indexed Constant Maturity Yield
+    frequency: daily
+    unit: percent
+    interpretation: higher_is_tighter_for_long_duration_valuation
+    primary_official_system: true
+    url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=DFII10
+
+  us_broad_dollar:
+    provider: fred
+    provider_owner: Federal Reserve Bank of St. Louis
+    underlying_source: Board of Governors of the Federal Reserve System (US)
+    series_id: DTWEXBGS
+    dimension: dollar
+    label: Nominal Broad U.S. Dollar Index
+    frequency: daily
+    unit: index_jan_2006_100
+    interpretation: higher_is_stronger_broad_dollar
+    primary_official_system: true
+    url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=DTWEXBGS
+
+  us_financial_conditions:
+    provider: fred
+    provider_owner: Federal Reserve Bank of St. Louis
+    underlying_source: Federal Reserve Bank of Chicago
+    series_id: NFCI
+    dimension: financial_conditions
+    label: Chicago Fed National Financial Conditions Index
+    frequency: weekly
+    unit: index
+    interpretation: positive_tighter_than_average_negative_looser_than_average
+    primary_official_system: true
+    url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=NFCI
+
+  fed_total_assets:
+    provider: fred
+    provider_owner: Federal Reserve Bank of St. Louis
+    underlying_source: Board of Governors of the Federal Reserve System (US)
+    series_id: WALCL
+    dimension: central_bank_balance_sheet
+    label: Federal Reserve Total Assets Wednesday Level
+    frequency: weekly
+    unit: millions_usd
+    interpretation: balance_sheet_component_not_standalone_liquidity_score
+    primary_official_system: true
+    url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=WALCL
+
+  fed_reserve_balances:
+    provider: fred
+    provider_owner: Federal Reserve Bank of St. Louis
+    underlying_source: Board of Governors of the Federal Reserve System (US)
+    series_id: WRESBAL
+    dimension: bank_reserves
+    label: Reserve Balances with Federal Reserve Banks Week Average
+    frequency: weekly
+    unit: millions_usd
+    interpretation: reserve_component_not_standalone_liquidity_score
+    primary_official_system: true
+    url: https://fred.stlouisfed.org/graph/fredgraph.csv?id=WRESBAL
