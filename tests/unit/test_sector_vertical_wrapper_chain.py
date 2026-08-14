@@ -14,6 +14,9 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     expectation = Path(
         "src/alpha_cycle/intelligence/decision_expectation_gap_calibrated.py"
     ).read_text(encoding="utf-8")
+    accounting = Path(
+        "src/alpha_cycle/intelligence/decision_semiconductor_accounting_identity_calibrated.py"
+    ).read_text(encoding="utf-8")
     baseline = Path(
         "src/alpha_cycle/intelligence/decision_semiconductor_baseline_reconciliation_calibrated.py"
     ).read_text(encoding="utf-8")
@@ -47,6 +50,7 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
         "decision_semiconductor_forward_input_calibrated",
         "decision_semiconductor_operating_assumption_calibrated",
         "decision_semiconductor_baseline_reconciliation_calibrated",
+        "decision_semiconductor_accounting_identity_calibrated",
         "decision_expectation_gap_calibrated",
         "decision_catalyst_horizon_calibrated",
         "decision_scenario_expected_return_calibrated",
@@ -67,9 +71,13 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     assert "load_catalyst_horizon_decision_evidence" in catalyst
     assert "semiconductor_baseline_reconciliation_pointer" in catalyst
 
-    assert "decision_semiconductor_baseline_reconciliation_calibrated" in expectation
-    assert "_build_baseline_snapshot" in expectation
+    assert "decision_semiconductor_accounting_identity_calibrated" in expectation
+    assert "_build_accounting_identity_snapshot" in expectation
     assert "build_expectation_gap_decision_evidence" in expectation
+
+    assert "decision_semiconductor_baseline_reconciliation_calibrated" in accounting
+    assert "_build_baseline_snapshot" in accounting
+    assert "load_semiconductor_accounting_identity_decision_evidence" in accounting
 
     assert "decision_semiconductor_operating_assumption_calibrated" in baseline
     assert "_build_operating_assumption_snapshot" in baseline
