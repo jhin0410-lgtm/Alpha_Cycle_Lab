@@ -31,8 +31,23 @@ def _pages() -> tuple[str, ...]:
     pages[0] = "Samsung Electronics 2Q 2026 Earnings Call"
     pages[6] = "Memory outlook: Scaled up HBM4 sales and robust AI/server memory demand."
     pages[7] = (
+        "S.LSI outlook: drive next-generation flagship SoC sales and custom SoC demand. "
         "Foundry outlook: Higher utilization, stronger advanced node demand. "
         "2nm Gen 2 mobile ramp-up and 4nm LPU/Base-Die ramps."
+    )
+    pages[8] = (
+        "SDC outlook: address new model demand in premium products; pursue revenue growth "
+        "by timely mass production of 8.6G IT OLED line."
+    )
+    pages[9] = (
+        "MX outlook: drive smartphone market-share growth through flagship-centric sales "
+        "acceleration; enhance premium mix; pursue efficiency initiatives to mitigate impact "
+        "of rising costs."
+    )
+    pages[10] = (
+        "VD outlook: capture seasonal demand through strengthened channel partnerships. "
+        "DA outlook: expand sales of AI-products. Harman outlook: address demand in "
+        "high-growth auto segments including central compute unit."
     )
     pages[12] = """
     Appendix 2: Results by Business Segment
@@ -85,7 +100,7 @@ def test_official_ir_artifact_archives_source_and_emits_downstream_packs(
         Path(str(result["forward_input_claim_pack_path"])).read_text(encoding="utf-8")
     )
     assert len(baseline_pack["facts"]) == 7
-    assert len(forward_pack["claims"]) == 3
+    assert len(forward_pack["claims"]) == 10
     assert all(row["source_document_path"] == str(source_path) for row in baseline_pack["facts"])
     assert all(row["source_document_path"] == str(source_path) for row in forward_pack["claims"])
 
@@ -126,6 +141,16 @@ def test_collector_forward_pack_is_source_byte_bound_and_non_numeric(
 ) -> None:
     result = _collect(tmp_path, monkeypatch)
     raw = json.loads(Path(str(result["forward_input_claim_pack_path"])).read_text(encoding="utf-8"))
+    claim_pairs = {
+        (str(row["block_id"]), str(row["metric_id"])) for row in raw["claims"]
+    }
+    assert ("dx", "component_cost") in claim_pairs
+    assert ("sdc", "oled_panel_volume") in claim_pairs
+    assert ("harman", "auto_end_demand") in claim_pairs
+    assert ("ds_memory", "dram_asp_change") not in claim_pairs
+    assert all(row["evidence_kind"] == "qualitative" for row in raw["claims"])
+    assert all(row["numeric_value"] is None for row in raw["claims"])
+
     output = tmp_path / "forward"
     capture_forward_input_evidence(
         raw["claims"],
