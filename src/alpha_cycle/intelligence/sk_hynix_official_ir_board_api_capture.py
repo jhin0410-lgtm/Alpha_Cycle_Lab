@@ -106,7 +106,11 @@ class OfficialIrApiTransportContract:
             raise ValueError("SK hynix API transport evidence ID must be SHA-256")
         if not _valid_sha(self.source_evidence_id) or not _valid_sha(self.component_evidence_id):
             raise ValueError("SK hynix API transport source IDs must be SHA-256")
-        if self.resolution_status not in {"resolved", "unresolved_no_literal", "unresolved_ambiguous"}:
+        if self.resolution_status not in {
+            "resolved",
+            "unresolved_no_literal",
+            "unresolved_ambiguous",
+        }:
             raise ValueError("SK hynix API transport resolution status is invalid")
         if (self.resolved_api_base is None) == (self.resolution_status == "resolved"):
             raise ValueError("SK hynix API transport resolution fields are inconsistent")
@@ -323,9 +327,7 @@ def build_api_transport_contract(
     }
     if component_bcodes != {_EXPECTED_BCODE}:
         raise ValueError("SK hynix Earnings Release bcode 105 contract is not uniquely verified")
-    if not any(
-        item.value.endswith("fileUrl2") for item in component.file_url_bindings
-    ):
+    if not any(item.value.endswith("fileUrl2") for item in component.file_url_bindings):
         raise ValueError("SK hynix Earnings Release fileUrl2 download binding is not verified")
 
     source_evidence_id, observed_date, sources = _load_verified_archived_sources(
@@ -709,11 +711,11 @@ def load_board_api_capture(
     if not isinstance(capture_obj, dict):
         raise ValueError("SK hynix board API capture report must be an object")
     report = {str(key): value for key, value in capture_obj.items()}
-    raw_params = report.get("request_params")
-    if not isinstance(raw_params, list):
+    expected_params = report.get("request_params")
+    if not isinstance(expected_params, list):
         raise ValueError("SK hynix board API request parameters are invalid")
     params: list[tuple[str, str]] = []
-    for item in raw_params:
+    for item in expected_params:
         if not isinstance(item, list) or len(item) != 2:
             raise ValueError("SK hynix board API request parameter row is invalid")
         params.append((str(item[0]), str(item[1])))
