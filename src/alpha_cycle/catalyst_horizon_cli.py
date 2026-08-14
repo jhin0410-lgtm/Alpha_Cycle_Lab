@@ -9,7 +9,10 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
-from alpha_cycle.intelligence.catalyst_horizon import build_catalyst_horizon_evidence
+from alpha_cycle.intelligence.catalyst_horizon import (
+    CatalystEvent,
+    build_catalyst_horizon_evidence,
+)
 
 DEFAULT_OUTPUT = Path("data/private/live-research/catalyst-horizon-evidence")
 
@@ -39,30 +42,29 @@ def _load_events(path: Path) -> list[dict[str, object]]:
     return result
 
 
-def _event_payload(event: object) -> dict[str, object]:
-    row = event
+def _event_payload(event: CatalystEvent) -> dict[str, object]:
     return {
-        "event_id": row.event_id,
-        "ticker": row.ticker,
-        "sector_id": row.sector_id,
-        "title": row.title,
-        "description": row.description,
-        "source_role": row.source_role,
-        "source_url": row.source_url,
-        "source_published_date": row.source_published_date.isoformat(),
-        "evaluation_date": row.evaluation_date.isoformat(),
-        "event_date": row.event_date.isoformat() if row.event_date else None,
-        "window_start": row.window_start.isoformat() if row.window_start else None,
-        "window_end": row.window_end.isoformat() if row.window_end else None,
-        "timing_status": row.timing_status,
-        "horizon_days": row.horizon_days,
-        "horizon_bucket": row.horizon_bucket,
-        "prerequisite_status": row.prerequisite_status,
-        "prerequisite": row.prerequisite,
-        "market_pricing_status": row.market_pricing_status,
-        "surprise_potential": row.surprise_potential,
-        "binary_event": row.binary_event,
-        "thesis_invalidation_if_failed": row.thesis_invalidation_if_failed,
+        "event_id": event.event_id,
+        "ticker": event.ticker,
+        "sector_id": event.sector_id,
+        "title": event.title,
+        "description": event.description,
+        "source_role": event.source_role,
+        "source_url": event.source_url,
+        "source_published_date": event.source_published_date.isoformat(),
+        "evaluation_date": event.evaluation_date.isoformat(),
+        "event_date": event.event_date.isoformat() if event.event_date else None,
+        "window_start": event.window_start.isoformat() if event.window_start else None,
+        "window_end": event.window_end.isoformat() if event.window_end else None,
+        "timing_status": event.timing_status,
+        "horizon_days": event.horizon_days,
+        "horizon_bucket": event.horizon_bucket,
+        "prerequisite_status": event.prerequisite_status,
+        "prerequisite": event.prerequisite,
+        "market_pricing_status": event.market_pricing_status,
+        "surprise_potential": event.surprise_potential,
+        "binary_event": event.binary_event,
+        "thesis_invalidation_if_failed": event.thesis_invalidation_if_failed,
         "decision_score_enabled": False,
     }
 
