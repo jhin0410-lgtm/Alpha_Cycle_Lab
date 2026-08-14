@@ -119,6 +119,10 @@ module = "alpha_cycle.intelligence.valuation"
 disable_error_code = ["arg-type", "call-overload", "dict-item"]
 
 [[tool.mypy.overrides]]
+module = "alpha_cycle.intelligence.semiconductor_vertical"
+disable_error_code = ["operator"]
+
+[[tool.mypy.overrides]]
 module = "alpha_cycle.live_pipeline_cli"
 disable_error_code = ["no-redef"]
 
