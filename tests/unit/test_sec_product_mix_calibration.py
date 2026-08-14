@@ -121,7 +121,7 @@ def test_parser_rejects_table_or_share_drift() -> None:
             _spec(),
             _filing_html().replace(b">343<", b">999<"),
         )
-    with pytest.raises(ValueError, match="DRAM share is inconsistent"):
+    with pytest.raises(ValueError, match="identity anchor is missing"):
         parse_sec_product_mix_html(
             _spec(),
             _filing_html().replace(b"77.3%", b"70.0%"),
