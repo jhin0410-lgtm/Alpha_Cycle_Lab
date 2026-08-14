@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
@@ -17,16 +16,18 @@ from alpha_cycle.intelligence.official_semiconductor_ir_refresh import (
 )
 from alpha_cycle.official_semiconductor_ir_collector_cli import (
     DEFAULT_OUTPUT as DEFAULT_DOCUMENT_OUTPUT,
-    capture_official_ir_document,
 )
+from alpha_cycle.official_semiconductor_ir_collector_cli import capture_official_ir_document
 from alpha_cycle.semiconductor_baseline_reconciliation_cli import (
     DEFAULT_OUTPUT as DEFAULT_BASELINE_OUTPUT,
+)
+from alpha_cycle.semiconductor_baseline_reconciliation_cli import (
     capture_semiconductor_baseline_reconciliation,
 )
 from alpha_cycle.semiconductor_forward_input_cli import (
     DEFAULT_OUTPUT as DEFAULT_FORWARD_OUTPUT,
-    capture_forward_input_evidence,
 )
+from alpha_cycle.semiconductor_forward_input_cli import capture_forward_input_evidence
 
 DEFAULT_OUTPUT = Path("data/private/live-research/official-semiconductor-ir-refresh")
 
@@ -102,9 +103,9 @@ def refresh_official_semiconductor_ir(
                 {
                     "ticker": item.ticker,
                     "document_id": item.selected_document_id,
-                    "period_end": item.selected_period_end.isoformat()
-                    if item.selected_period_end
-                    else None,
+                    "period_end": (
+                        item.selected_period_end.isoformat() if item.selected_period_end else None
+                    ),
                     "source_document_sha256": result["source_document_sha256"],
                     "artifact_directory": result["artifact_directory"],
                     "baseline_fact_count": len(facts),
@@ -158,6 +159,18 @@ def refresh_official_semiconductor_ir(
         for item in plan.issuers
         if item.selected_document_id is None
     ]
+    baseline_pointer = (
+        Path(str(baseline_result["artifact_directory"])).parent
+        / "latest_semiconductor_baseline_reconciliation.json"
+        if baseline_result
+        else None
+    )
+    forward_pointer = (
+        Path(str(forward_result["artifact_directory"])).parent
+        / "latest_semiconductor_forward_input_evidence.json"
+        if forward_result
+        else None
+    )
     payload: dict[str, object] = {
         "schema_version": 1,
         "status": status,
@@ -167,16 +180,8 @@ def refresh_official_semiconductor_ir(
         "collected": collected,
         "failed": failed,
         "unresolved": unresolved,
-        "baseline_reconciliation_pointer": (
-            str(Path(str(baseline_result["artifact_directory"])).parent / "latest_semiconductor_baseline_reconciliation.json")
-            if baseline_result
-            else None
-        ),
-        "forward_input_pointer": (
-            str(Path(str(forward_result["artifact_directory"])).parent / "latest_semiconductor_forward_input_evidence.json")
-            if forward_result
-            else None
-        ),
+        "baseline_reconciliation_pointer": str(baseline_pointer) if baseline_pointer else None,
+        "forward_input_pointer": str(forward_pointer) if forward_pointer else None,
         "operating_assumptions_generated": False,
         "scenario_probabilities_enabled": False,
         "numeric_forecast_enabled": False,
@@ -203,7 +208,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="alpha-cycle-official-semiconductor-ir-refresh",
         description=(
             "Collect each issuer's latest observable registered official IR document and build "
-            "baseline/forward evidence; unresolved issuers stay explicit and assumptions are not generated"
+            "baseline/forward evidence; unresolved issuers stay explicit and assumptions are "
+            "not generated"
         ),
     )
     parser.add_argument("--evaluation-date", type=_date_value, required=True)
