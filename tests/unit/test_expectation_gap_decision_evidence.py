@@ -81,3 +81,52 @@ def test_expectation_gap_requires_both_market_and_internal_forward_views() -> No
     assert "Expectation Gap v1" in report
     assert "forward expectation의 '수준'과 'revision'" in report
     assert "numeric gap" in report
+
+
+def test_complete_source_inputs_do_not_bypass_operating_assumption_and_baseline_gates() -> None:
+    scorecards = pd.DataFrame(
+        [
+            {
+                "ticker": "000660",
+                "kis_forward_evidence_available": True,
+                "semiconductor_forward_all_numeric_inputs_covered": True,
+                "semiconductor_forward_internal_forward_model_certified": False,
+            }
+        ]
+    )
+    row = build_expectation_gap_decision_evidence(scorecards).rows.iloc[0]
+    assert (
+        row["internal_forward_view_status"]
+        == "numeric_source_inputs_complete_assumptions_and_bridges_pending"
+    )
+    blockers = json.loads(str(row["internal_forward_view_blockers_json"]))
+    assert "operating_scenario_assumptions_missing" in blockers
+    assert "baseline_reconciliation_not_certified" in blockers
+
+
+def test_ready_operating_assumptions_still_require_baseline_and_model_certification() -> None:
+    scorecards = pd.DataFrame(
+        [
+            {
+                "ticker": "005930",
+                "kis_forward_evidence_available": True,
+                "semiconductor_assumption_horizon_quarters": 4,
+                "semiconductor_assumption_all_scenario_assumptions_documented": True,
+                "semiconductor_assumption_all_scenario_assumptions_model_use_ready": True,
+                "semiconductor_assumption_baseline_reconciliation_certified": False,
+                "semiconductor_assumption_output_method_certified": False,
+                "semiconductor_assumption_company_reconciliation_certified": False,
+                "semiconductor_assumption_model_version_frozen": False,
+                "semiconductor_assumption_internal_forward_model_certified": False,
+            }
+        ]
+    )
+    row = build_expectation_gap_decision_evidence(scorecards).rows.iloc[0]
+    assert (
+        row["internal_forward_view_status"]
+        == "operating_assumptions_ready_model_certification_pending"
+    )
+    blockers = json.loads(str(row["internal_forward_view_blockers_json"]))
+    assert "baseline_reconciliation_not_certified" in blockers
+    assert "company_reconciliation_not_certified" in blockers
+    assert bool(row["expectation_gap_enabled"]) is False
