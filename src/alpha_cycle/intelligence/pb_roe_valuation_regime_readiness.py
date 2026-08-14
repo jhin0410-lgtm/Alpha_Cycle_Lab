@@ -21,7 +21,11 @@ from alpha_cycle.intelligence.historical_pb_decision_evidence import (
 from alpha_cycle.intelligence.pb_roe_valuation_regime import (
     PbRoeValuationRegimeEvidence,
     attach_pb_roe_regime_to_scorecards,
+)
+from alpha_cycle.intelligence.pb_roe_valuation_regime import (
     build_pb_roe_valuation_regime_evidence as _build_base_regime_evidence,
+)
+from alpha_cycle.intelligence.pb_roe_valuation_regime import (
     sync_record_pb_roe_regime_fields as _sync_base_record_fields,
 )
 
