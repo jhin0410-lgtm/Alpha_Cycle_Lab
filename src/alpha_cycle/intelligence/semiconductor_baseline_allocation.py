@@ -34,6 +34,10 @@ _ALLOWED_METHOD_STATUS = frozenset(
     {"draft", "documented", "observationally_calibrated", "source_mapped"}
 )
 _SHARE_UNITS = frozenset({"fraction", "percent"})
+_DIRECT_SHARE_SEMANTICS = {
+    ("000660", "dram_total"): "dram_revenue_share",
+    ("000660", "nand_and_solutions"): "nand_revenue_share",
+}
 _DIRECT_AMOUNT_SEMANTICS = {
     ("000660", "other_products_services"): "other_products_services_revenue",
 }
@@ -357,6 +361,9 @@ def build_direct_share_revenue_allocation(
         raise ValueError("Revenue allocation requires direct_share_allocation method")
     if total_input.ticker != share_input.ticker or total_input.ticker != method.ticker:
         raise ValueError("Revenue allocation ticker identities must match")
+    expected_semantic = _DIRECT_SHARE_SEMANTICS.get((method.ticker, method.block_id))
+    if expected_semantic is None or share_input.semantic_id != expected_semantic:
+        raise ValueError("Revenue allocation share semantic is outside the registered mapping")
     if (
         total_input.period_start != share_input.period_start
         or total_input.period_end != share_input.period_end
