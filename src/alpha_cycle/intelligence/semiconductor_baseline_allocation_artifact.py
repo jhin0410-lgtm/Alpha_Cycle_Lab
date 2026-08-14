@@ -1,7 +1,8 @@
 """Archived decision evidence for source-separated semiconductor revenue allocation.
 
-V1 deliberately has no production source resolver.  A source-specific resolver must first
-prove the numeric inputs from an independently verified upstream artifact.  Persisted
+V1 deliberately has no production source resolver. A source-specific resolver must first
+prove the numeric inputs from an independently verified upstream artifact and separately
+prove the observational calibration supporting the allocation method. Persisted
 "verified" booleans are never enough to activate this layer.
 """
 
@@ -69,13 +70,14 @@ def _valid_sha(value: str) -> bool:
 
 @dataclass(frozen=True)
 class VerifiedAllocationSourceBundle:
-    """Inputs produced by a source-specific resolver, not by persisted trust flags."""
+    """Source inputs plus separately verified method-calibration evidence."""
 
     resolver_id: str
     ticker: str
     evaluation_date: date
     source_reference_id: str
     inputs: tuple[SourceBoundAllocationInput, ...]
+    method_support_evidence_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if not self.resolver_id.strip() or self.ticker != SK_HYNIX_TICKER:
@@ -94,11 +96,21 @@ class VerifiedAllocationSourceBundle:
         periods = {(item.period_start, item.period_end) for item in self.inputs}
         if len(periods) != 1:
             raise ValueError("Allocation source bundle inputs must share one accounting period")
+        if not self.method_support_evidence_ids or any(
+            not _valid_sha(item) for item in self.method_support_evidence_ids
+        ):
+            raise ValueError("Allocation source bundle requires method calibration evidence IDs")
+        if len(set(self.method_support_evidence_ids)) != len(self.method_support_evidence_ids):
+            raise ValueError("Allocation method calibration evidence IDs must be unique")
+        input_evidence_ids = {item.source_evidence_id for item in self.inputs}
+        if input_evidence_ids.intersection(self.method_support_evidence_ids):
+            raise ValueError("Allocation method calibration evidence must be separate from inputs")
 
 
 AllocationSourceResolver = Callable[[str | Path, date], VerifiedAllocationSourceBundle]
 # Intentionally empty. Activating 000660 requires a separate source-specific resolver PR
 # after exact official SK hynix 2Q26 source bytes/URL and numeric share semantics are verified.
+# The resolver must also revalidate a distinct observational calibration artifact.
 ALLOCATION_SOURCE_RESOLVERS: dict[str, AllocationSourceResolver] = {}
 
 
@@ -107,6 +119,7 @@ class SemiconductorBaselineAllocationEvidence:
     evidence_id: str
     resolver_id: str
     source_reference_id: str
+    method_support_evidence_ids: tuple[str, ...]
     evaluation_date: date
     reconciliation: CompanyRevenueReconciliation
     allocations: tuple[DerivedBaselineAllocation, ...]
@@ -121,6 +134,10 @@ class SemiconductorBaselineAllocationEvidence:
     def __post_init__(self) -> None:
         if not _valid_sha(self.evidence_id) or not _valid_sha(self.source_reference_id):
             raise ValueError("Baseline allocation evidence IDs must be SHA-256")
+        if not self.method_support_evidence_ids or any(
+            not _valid_sha(item) for item in self.method_support_evidence_ids
+        ):
+            raise ValueError("Baseline allocation method support IDs must be SHA-256")
         if self.reconciliation.ticker != SK_HYNIX_TICKER:
             raise ValueError("Baseline allocation evidence v1 supports SK hynix only")
         if not self.allocations:
@@ -187,14 +204,21 @@ def build_skhynix_revenue_allocation_evidence(
     company = by_semantic["reported_company_revenue"]
     dram_share = by_semantic["dram_revenue_share"]
     nand_share = by_semantic["nand_revenue_share"]
-    verified_ids = {item.source_evidence_id for item in bundle.inputs}
+    verified_ids = {
+        *(item.source_evidence_id for item in bundle.inputs),
+        *bundle.method_support_evidence_ids,
+    }
 
     dram_method: BaselineAllocationMethod = validate_baseline_allocation_method(
         _method_raw(
             block_id="dram_total",
             baseline_requirement_id="dram_revenue_or_company_memory_bridge",
             method_id="skhynix_dram_direct_share_v1",
-            supporting_evidence_ids=(company.source_evidence_id, dram_share.source_evidence_id),
+            supporting_evidence_ids=(
+                company.source_evidence_id,
+                dram_share.source_evidence_id,
+                *bundle.method_support_evidence_ids,
+            ),
         ),
         verified_evidence_ids=verified_ids,
     )
@@ -203,7 +227,11 @@ def build_skhynix_revenue_allocation_evidence(
             block_id="nand_and_solutions",
             baseline_requirement_id="nand_solution_revenue_bridge",
             method_id="skhynix_nand_direct_share_v1",
-            supporting_evidence_ids=(company.source_evidence_id, nand_share.source_evidence_id),
+            supporting_evidence_ids=(
+                company.source_evidence_id,
+                nand_share.source_evidence_id,
+                *bundle.method_support_evidence_ids,
+            ),
         ),
         verified_evidence_ids=verified_ids,
     )
@@ -227,6 +255,7 @@ def build_skhynix_revenue_allocation_evidence(
     payload = {
         "resolver_id": resolver_id,
         "source_reference_id": bundle.source_reference_id,
+        "method_support_evidence_ids": list(bundle.method_support_evidence_ids),
         "evaluation_date": evaluation_date.isoformat(),
         "input_ids": [item.input_id for item in bundle.inputs],
         "allocation_ids": [item.allocation_id for item in allocations],
@@ -243,6 +272,7 @@ def build_skhynix_revenue_allocation_evidence(
         evidence_id=_sha(payload),
         resolver_id=resolver_id,
         source_reference_id=bundle.source_reference_id,
+        method_support_evidence_ids=bundle.method_support_evidence_ids,
         evaluation_date=evaluation_date,
         reconciliation=reconciliation,
         allocations=allocations,
@@ -257,6 +287,7 @@ def _allocation_payload(
         "evidence_id": evidence.evidence_id,
         "resolver_id": evidence.resolver_id,
         "source_reference_id": evidence.source_reference_id,
+        "method_support_evidence_ids": list(evidence.method_support_evidence_ids),
         "evaluation_date": evidence.evaluation_date.isoformat(),
         "ticker": item.ticker,
         "period_start": item.period_start.isoformat(),
