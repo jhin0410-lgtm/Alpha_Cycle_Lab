@@ -17,6 +17,9 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     company_actual = Path(
         "src/alpha_cycle/intelligence/decision_semiconductor_company_actual_calibrated.py"
     ).read_text(encoding="utf-8")
+    allocation = Path(
+        "src/alpha_cycle/intelligence/decision_semiconductor_baseline_allocation_calibrated.py"
+    ).read_text(encoding="utf-8")
     accounting = Path(
         "src/alpha_cycle/intelligence/decision_semiconductor_accounting_identity_calibrated.py"
     ).read_text(encoding="utf-8")
@@ -54,6 +57,7 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
         "decision_semiconductor_operating_assumption_calibrated",
         "decision_semiconductor_baseline_reconciliation_calibrated",
         "decision_semiconductor_accounting_identity_calibrated",
+        "decision_semiconductor_baseline_allocation_calibrated",
         "decision_semiconductor_company_actual_calibrated",
         "decision_expectation_gap_calibrated",
         "decision_catalyst_horizon_calibrated",
@@ -77,9 +81,13 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     assert "_build_company_actual_snapshot" in expectation
     assert "build_expectation_gap_decision_evidence" in expectation
 
-    assert "decision_semiconductor_accounting_identity_calibrated" in company_actual
-    assert "_build_accounting_identity_snapshot" in company_actual
+    assert "decision_semiconductor_baseline_allocation_calibrated" in company_actual
+    assert "_build_baseline_allocation_snapshot" in company_actual
     assert "load_opendart_provisional_earnings_decision_evidence" in company_actual
+
+    assert "decision_semiconductor_accounting_identity_calibrated" in allocation
+    assert "_build_accounting_snapshot" in allocation
+    assert "load_semiconductor_baseline_allocation_decision_evidence" in allocation
 
     assert "decision_semiconductor_baseline_reconciliation_calibrated" in accounting
     assert "_build_baseline_snapshot" in accounting
