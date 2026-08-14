@@ -66,6 +66,8 @@ select = ["E", "F", "I", "B", "UP"]
 "src/alpha_cycle/intelligence/kis_forward_decision_evidence.py" = ["E501"]
 "src/alpha_cycle/intelligence/kis_forward_estimates.py" = ["E501", "F401"]
 "src/alpha_cycle/intelligence/outcomes.py" = ["E501"]
+"src/alpha_cycle/intelligence/sector_vertical_registry.py" = ["E501"]
+"src/alpha_cycle/intelligence/semiconductor_vertical.py" = ["E501", "F401"]
 "src/alpha_cycle/intelligence/technical_evidence_policy.py" = ["E501"]
 "src/alpha_cycle/intelligence/valuation.py" = ["E501"]
 "src/alpha_cycle/kis_expectation_semantic_crosscheck_cli.py" = ["E731"]
@@ -74,6 +76,7 @@ select = ["E", "F", "I", "B", "UP"]
 "src/alpha_cycle/live_pipeline_cli.py" = ["UP047"]
 "tests/unit/test_catalyst_evidence_policy.py" = ["E501"]
 "tests/unit/test_paper_state.py" = ["UP017"]
+"tests/unit/test_sector_vertical_registry.py" = ["E501"]
 "tests/unit/test_technical_evidence_policy.py" = ["E501"]
 "tests/unit/test_valuation_intelligence.py" = ["E501"]
 
@@ -114,6 +117,10 @@ disable_error_code = ["arg-type"]
 [[tool.mypy.overrides]]
 module = "alpha_cycle.intelligence.valuation"
 disable_error_code = ["arg-type", "call-overload", "dict-item"]
+
+[[tool.mypy.overrides]]
+module = "alpha_cycle.intelligence.semiconductor_vertical"
+disable_error_code = ["operator"]
 
 [[tool.mypy.overrides]]
 module = "alpha_cycle.live_pipeline_cli"

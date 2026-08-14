@@ -1,18 +1,17 @@
 """Market, research, valuation, and investment decision intelligence snapshots.
 
-The final package decision wrapper preserves the existing chain through
-``decision_industry_evidence_calibrated`` and ``decision_forward_estimate_calibrated``
-before attaching optional non-scoring own-history P/B evidence. Valuation still
-passes through ``valuation_resilient`` before the final latest-observable-equity
-P/B basis correction.
+The final package decision wrapper preserves the calibrated chain through
+``decision_industry_evidence_calibrated``, ``decision_forward_estimate_calibrated``,
+``decision_historical_pb_calibrated``, and finally
+``decision_sector_vertical_calibrated``.  Sector vertical coverage remains
+non-scoring: missing industry evidence is surfaced as a research gap rather than
+converted into a zero factor score.  Valuation still passes through
+``valuation_resilient`` before the final latest-observable-equity P/B correction.
 """
 
 from alpha_cycle.intelligence.decision import (
     InvestmentDecisionSnapshot,
     write_investment_decision_snapshot,
-)
-from alpha_cycle.intelligence.decision_historical_pb_calibrated import (
-    build_investment_decision_snapshot,
 )
 from alpha_cycle.intelligence.decision_provenance import (
     DecisionEvidenceEnvelope,
@@ -23,6 +22,9 @@ from alpha_cycle.intelligence.decision_scoring import (
     CompanyExposure,
     DecisionPolicy,
     load_company_exposures,
+)
+from alpha_cycle.intelligence.decision_sector_vertical_calibrated import (
+    build_investment_decision_snapshot,
 )
 from alpha_cycle.intelligence.fundamental_macro import (
     FundamentalMacroSnapshot,
