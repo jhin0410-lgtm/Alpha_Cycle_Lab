@@ -12,6 +12,7 @@ from alpha_cycle.intelligence.sk_hynix_official_ir_attachment_discovery import (
 from alpha_cycle.intelligence.sk_hynix_official_ir_runtime_route_diagnostic import (
     DEFAULT_RUNTIME_ROUTE_OUTPUT,
     DEFAULT_RUNTIME_ROUTE_POINTER,
+    RuntimeRouteSignal,
     capture_runtime_route_diagnostic,
     load_runtime_route_diagnostic,
 )
@@ -30,15 +31,14 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _signal(item: object) -> dict[str, object]:
-    signal = item
+def _signal(item: RuntimeRouteSignal) -> dict[str, object]:
     return {
-        "source_file": signal.source_file,
-        "source_url": signal.source_url,
-        "kind": signal.kind,
-        "token": signal.token,
-        "literal": signal.literal,
-        "context": signal.context,
+        "source_file": item.source_file,
+        "source_url": item.source_url,
+        "kind": item.kind,
+        "token": item.token,
+        "literal": item.literal,
+        "context": item.context,
     }
 
 
