@@ -1,9 +1,9 @@
 """Direct-fact baseline reconciliation for semiconductor issuer forward models.
 
-Composite model baselines are not single source scalars.  V1 certifies a baseline
+Composite model baselines are not single source scalars. V1 certifies a baseline
 bridge only when every required block output is directly supported by exactly one
 archived, semantics-certified issuer fact for the same block scope and accounting
-period.  Residual arithmetic, peer substitution, and internal estimates are
+period. Residual arithmetic, peer substitution, and internal estimates are
 intentionally prohibited in this layer.
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -63,6 +64,8 @@ class SemiconductorBaselineFact:
             raise ValueError(f"Baseline issuer contract not registered: {self.ticker}")
         if not self.scope_id.strip() or not self.metric_id.strip() or not self.unit.strip():
             raise ValueError("Baseline fact scope/metric/unit cannot be blank")
+        if not math.isfinite(self.value):
+            raise ValueError("Baseline fact value must be finite")
         if self.period_start > self.period_end:
             raise ValueError("Baseline fact period_start cannot be after period_end")
         if self.source_published_date < self.period_end:
@@ -77,7 +80,9 @@ class SemiconductorBaselineFact:
             and self.source_vintage_certified
             and self.primary_source
         ):
-            raise ValueError("Bridge-eligible baseline fact requires archived certified primary evidence")
+            raise ValueError(
+                "Bridge-eligible baseline fact requires archived certified primary evidence"
+            )
         if self.decision_score_enabled:
             raise ValueError("Baseline facts must remain non-scoring")
 
@@ -163,6 +168,12 @@ def validate_baseline_fact(
     source_bytes_archived = bool(raw.get("source_bytes_archived", False))
     semantics_certified = bool(raw.get("semantics_certified", False))
     source_vintage_certified = bool(raw.get("source_vintage_certified", False))
+    value = float(str(raw.get("value", "nan")))
+    unit = str(raw.get("unit", "")).strip()
+    if not math.isfinite(value):
+        raise ValueError("Baseline fact value must be finite")
+    if not unit:
+        raise ValueError("Baseline fact unit cannot be blank")
     bridge_eligible = bool(
         source.primary_source
         and source_bytes_archived
@@ -173,8 +184,8 @@ def validate_baseline_fact(
         "ticker": ticker,
         "scope_id": scope_id,
         "metric_id": metric_id,
-        "value": float(str(raw.get("value", "nan"))),
-        "unit": str(raw.get("unit", "")).strip(),
+        "value": value,
+        "unit": unit,
         "period_start": period_start.isoformat(),
         "period_end": period_end.isoformat(),
         "source_id": source_id,
@@ -193,8 +204,8 @@ def validate_baseline_fact(
         ticker=ticker,
         scope_id=scope_id,
         metric_id=metric_id,
-        value=float(payload["value"]),
-        unit=str(payload["unit"]),
+        value=value,
+        unit=unit,
         period_start=period_start,
         period_end=period_end,
         source_id=source_id,
