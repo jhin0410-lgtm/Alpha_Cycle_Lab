@@ -1,4 +1,4 @@
-"""Attach certified future Catalyst Horizon v1 after Expectation Gap readiness."""
+"""Attach source-bounded semiconductor forward-input coverage after macro/liquidity."""
 
 from __future__ import annotations
 
@@ -9,22 +9,28 @@ from pathlib import Path
 
 import pandas as pd
 
-from alpha_cycle.intelligence.catalyst_horizon_decision_evidence import (
-    DEFAULT_CATALYST_HORIZON_POINTER,
-    append_catalyst_horizon_report,
-    load_catalyst_horizon_decision_evidence,
-)
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
-from alpha_cycle.intelligence.decision_expectation_gap_calibrated import (
-    build_investment_decision_snapshot as _build_expectation_snapshot,
+from alpha_cycle.intelligence.decision_macro_liquidity_calibrated import (
+    build_investment_decision_snapshot as _build_macro_liquidity_snapshot,
 )
 from alpha_cycle.intelligence.decision_scoring import CompanyExposure, DecisionPolicy
+from alpha_cycle.intelligence.semiconductor_forward_input_decision_evidence import (
+    DEFAULT_FORWARD_INPUT_POINTER,
+    append_semiconductor_forward_input_report,
+    load_semiconductor_forward_input_decision_evidence,
+)
 
 
-def _attach(scorecards: pd.DataFrame, summary: pd.DataFrame) -> pd.DataFrame:
+def _attach(scorecards: pd.DataFrame, issuer_coverage: pd.DataFrame) -> pd.DataFrame:
     result = scorecards.copy()
     result["ticker"] = result["ticker"].astype("string").str.zfill(6)
-    supplement = summary.copy()
+    supplement = issuer_coverage.rename(
+        columns={
+            column: f"semiconductor_forward_{column}"
+            for column in issuer_coverage.columns
+            if column != "ticker"
+        }
+    ).copy()
     supplement["ticker"] = supplement["ticker"].astype("string").str.zfill(6)
     return result.merge(supplement, on="ticker", how="left", validate="one_to_one")
 
@@ -32,19 +38,14 @@ def _attach(scorecards: pd.DataFrame, summary: pd.DataFrame) -> pd.DataFrame:
 def _sync_records(records: pd.DataFrame, scorecards: pd.DataFrame) -> pd.DataFrame:
     fields = [
         "ticker",
-        "catalyst_horizon_evidence_id",
-        "catalyst_event_count",
-        "future_certified_event_count",
-        "catalyst_1m_count",
-        "catalyst_3m_count",
-        "catalyst_6m_count",
-        "catalyst_12m_count",
-        "binary_event_count",
-        "pending_prerequisite_count",
-        "surprise_candidate_count",
-        "catalyst_horizon_status",
-        "decision_score_enabled",
-        "forecast_enabled",
+        "semiconductor_forward_required_block_count",
+        "semiconductor_forward_descriptive_ready_block_count",
+        "semiconductor_forward_numeric_input_ready_block_count",
+        "semiconductor_forward_all_descriptive_inputs_covered",
+        "semiconductor_forward_all_numeric_inputs_covered",
+        "semiconductor_forward_internal_forward_model_certified",
+        "semiconductor_forward_numeric_forecast_enabled",
+        "semiconductor_forward_decision_score_enabled",
     ]
     available = [column for column in fields if column in scorecards.columns]
     if not available or available == ["ticker"]:
@@ -64,10 +65,10 @@ def _sync_records(records: pd.DataFrame, scorecards: pd.DataFrame) -> pd.DataFra
 def _unavailable_report(report: str, reason: str) -> str:
     return (
         report.rstrip()
-        + "\n\n## Catalyst Horizon v1 (미래일정 evidence 미연결)\n\n"
+        + "\n\n## Semiconductor Forward Inputs (사용 불가)\n\n"
         + f"- 상태: `{reason}`\n"
-        + "- 과거 공시를 미래 catalyst로 재분류하지 않습니다.\n"
-        + "- 기존 catalyst context 및 의사결정 점수는 변경하지 않습니다.\n"
+        + "- historical transmission이나 qualitative commentary를 numeric forecast로 승격하지 않습니다.\n"
+        + "- 기존 의사결정 점수·fair value·target price는 변경하지 않습니다.\n"
     )
 
 
@@ -84,15 +85,14 @@ def build_investment_decision_snapshot(
     semiconductor_structural_pointer: str | Path | None = None,
     macro_liquidity_pointer: str | Path | None = None,
     semiconductor_forward_input_pointer: str | Path | None = None,
-    catalyst_horizon_pointer: str | Path | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
     policy: DecisionPolicy | None = None,
     now: datetime | None = None,
 ) -> InvestmentDecisionSnapshot:
-    """Build existing chain, then attach certified future catalyst timing if available."""
+    """Build existing chain and attach explicit issuer/block forward-input coverage."""
 
-    snapshot = _build_expectation_snapshot(
+    snapshot = _build_macro_liquidity_snapshot(
         research_snapshot,
         market_snapshot,
         valuation_snapshot=valuation_snapshot,
@@ -103,53 +103,51 @@ def build_investment_decision_snapshot(
         historical_pb_pointer=historical_pb_pointer,
         semiconductor_structural_pointer=semiconductor_structural_pointer,
         macro_liquidity_pointer=macro_liquidity_pointer,
-        semiconductor_forward_input_pointer=semiconductor_forward_input_pointer,
         benchmark=benchmark,
         exposures=exposures,
         policy=policy,
         now=now,
     )
-    explicit_pointer = catalyst_horizon_pointer is not None
+    explicit_pointer = semiconductor_forward_input_pointer is not None
     pointer = (
-        Path(catalyst_horizon_pointer)
-        if catalyst_horizon_pointer is not None
-        else DEFAULT_CATALYST_HORIZON_POINTER
+        Path(semiconductor_forward_input_pointer)
+        if semiconductor_forward_input_pointer is not None
+        else DEFAULT_FORWARD_INPUT_POINTER
     )
     if not pointer.is_file():
-        reason = "catalyst_horizon_future_timing_evidence_missing"
+        reason = "semiconductor_forward_input_evidence_missing"
         missing_warnings = tuple(dict.fromkeys((*snapshot.warnings, reason)))
-        if explicit_pointer or pointer == DEFAULT_CATALYST_HORIZON_POINTER:
+        if explicit_pointer or pointer == DEFAULT_FORWARD_INPUT_POINTER:
             return replace(
                 snapshot,
                 warnings=missing_warnings,
                 report_markdown=_unavailable_report(snapshot.report_markdown, reason),
             )
         return snapshot
-
     try:
-        evidence = load_catalyst_horizon_decision_evidence(
+        evidence = load_semiconductor_forward_input_decision_evidence(
             pointer,
             evaluation_date=snapshot.evaluation_date,
         )
     except (OSError, TypeError, ValueError) as exc:
-        reason = f"catalyst_horizon_evidence_unavailable:{type(exc).__name__}"
+        reason = f"semiconductor_forward_input_evidence_unavailable:{type(exc).__name__}"
         return replace(
             snapshot,
             warnings=tuple(dict.fromkeys((*snapshot.warnings, reason))),
             report_markdown=_unavailable_report(snapshot.report_markdown, reason),
         )
 
-    scorecards = _attach(snapshot.scorecards, evidence.summary)
+    scorecards = _attach(snapshot.scorecards, evidence.issuer_coverage)
     records = _sync_records(snapshot.decision_records, scorecards)
-    report = append_catalyst_horizon_report(snapshot.report_markdown, evidence)
-    warnings = list(snapshot.warnings)
-    warnings.extend(
+    report = append_semiconductor_forward_input_report(snapshot.report_markdown, evidence)
+    attached_warnings = list(snapshot.warnings)
+    attached_warnings.extend(
         [
-            f"catalyst_horizon_evidence:{evidence.evidence.evidence_id[:12]}",
-            "catalyst_horizon_future_timing_source_bounded",
-            "catalyst_horizon_past_disclosures_not_relabelled_as_future",
-            "catalyst_horizon_non_scoring",
-            "catalyst_horizon_no_automatic_event_forecast",
+            f"semiconductor_forward_input_evidence:{evidence.evidence_id[:12]}",
+            "semiconductor_forward_input_source_bounded",
+            "semiconductor_forward_input_qualitative_not_numeric",
+            "semiconductor_forward_model_still_requires_method_reconciliation_and_freeze",
+            "semiconductor_forward_input_non_scoring",
         ]
     )
     return replace(
@@ -157,7 +155,7 @@ def build_investment_decision_snapshot(
         scorecards=scorecards,
         decision_records=records,
         report_markdown=report,
-        warnings=tuple(dict.fromkeys(warnings)),
+        warnings=tuple(dict.fromkeys(attached_warnings)),
     )
 
 

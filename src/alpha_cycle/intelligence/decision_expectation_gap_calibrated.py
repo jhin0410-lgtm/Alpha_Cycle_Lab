@@ -1,4 +1,4 @@
-"""Attach provider-agnostic Expectation Gap v1 readiness after macro/liquidity."""
+"""Attach provider-agnostic Expectation Gap v1 after forward-input coverage."""
 
 from __future__ import annotations
 
@@ -10,10 +10,10 @@ from pathlib import Path
 import pandas as pd
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
-from alpha_cycle.intelligence.decision_macro_liquidity_calibrated import (
-    build_investment_decision_snapshot as _build_macro_liquidity_snapshot,
-)
 from alpha_cycle.intelligence.decision_scoring import CompanyExposure, DecisionPolicy
+from alpha_cycle.intelligence.decision_semiconductor_forward_input_calibrated import (
+    build_investment_decision_snapshot as _build_forward_input_snapshot,
+)
 from alpha_cycle.intelligence.expectation_gap_decision_evidence import (
     append_expectation_gap_report,
     build_expectation_gap_decision_evidence,
@@ -74,6 +74,7 @@ def build_investment_decision_snapshot(
     historical_pb_pointer: str | Path | None = None,
     semiconductor_structural_pointer: str | Path | None = None,
     macro_liquidity_pointer: str | Path | None = None,
+    semiconductor_forward_input_pointer: str | Path | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
     policy: DecisionPolicy | None = None,
@@ -81,7 +82,7 @@ def build_investment_decision_snapshot(
 ) -> InvestmentDecisionSnapshot:
     """Build existing chain, then attach expectation certification/readiness only."""
 
-    snapshot = _build_macro_liquidity_snapshot(
+    snapshot = _build_forward_input_snapshot(
         research_snapshot,
         market_snapshot,
         valuation_snapshot=valuation_snapshot,
@@ -92,6 +93,7 @@ def build_investment_decision_snapshot(
         historical_pb_pointer=historical_pb_pointer,
         semiconductor_structural_pointer=semiconductor_structural_pointer,
         macro_liquidity_pointer=macro_liquidity_pointer,
+        semiconductor_forward_input_pointer=semiconductor_forward_input_pointer,
         benchmark=benchmark,
         exposures=exposures,
         policy=policy,

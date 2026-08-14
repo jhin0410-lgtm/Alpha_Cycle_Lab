@@ -14,6 +14,9 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     expectation = Path(
         "src/alpha_cycle/intelligence/decision_expectation_gap_calibrated.py"
     ).read_text(encoding="utf-8")
+    forward_input = Path(
+        "src/alpha_cycle/intelligence/decision_semiconductor_forward_input_calibrated.py"
+    ).read_text(encoding="utf-8")
     macro = Path(
         "src/alpha_cycle/intelligence/decision_macro_liquidity_calibrated.py"
     ).read_text(encoding="utf-8")
@@ -35,6 +38,7 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
         "decision_semiconductor_transmission_calibrated",
         "decision_semiconductor_structural_calibrated",
         "decision_macro_liquidity_calibrated",
+        "decision_semiconductor_forward_input_calibrated",
         "decision_expectation_gap_calibrated",
         "decision_catalyst_horizon_calibrated",
         "decision_scenario_expected_return_calibrated",
@@ -53,9 +57,13 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     assert "_build_expectation_snapshot" in catalyst
     assert "load_catalyst_horizon_decision_evidence" in catalyst
 
-    assert "decision_macro_liquidity_calibrated" in expectation
-    assert "_build_macro_liquidity_snapshot" in expectation
+    assert "decision_semiconductor_forward_input_calibrated" in expectation
+    assert "_build_forward_input_snapshot" in expectation
     assert "build_expectation_gap_decision_evidence" in expectation
+
+    assert "decision_macro_liquidity_calibrated" in forward_input
+    assert "_build_macro_liquidity_snapshot" in forward_input
+    assert "load_semiconductor_forward_input_decision_evidence" in forward_input
 
     assert "decision_semiconductor_structural_calibrated" in macro
     assert "_build_structural_snapshot" in macro
