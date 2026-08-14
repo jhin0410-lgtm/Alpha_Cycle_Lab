@@ -45,17 +45,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit(
             "SEC_EDGAR_USER_AGENT is required and must identify the application plus contact email"
         )
+    output = Path(args.output)
     pointer = capture_post_earnings_all_form_inventory(
         observed_date=args.observed_date,
         after_date=args.after_date,
         user_agent=user_agent,
-        output=Path(args.output),
+        output=output,
         timeout_seconds=args.timeout_seconds,
     )
     evidence = load_post_earnings_all_form_inventory_evidence(
-        Path(str(pointer["artifact_directory"]))
-        / ".."
-        / "latest_sec_post_earnings_all_form_inventory.json",
+        output / "latest_sec_post_earnings_all_form_inventory.json",
         evaluation_date=args.observed_date,
     )
     classification_counts: dict[str, int] = {}
@@ -78,7 +77,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "nand_anchor": result.nand_anchor,
                 "other_products_anchor": result.other_products_anchor,
                 "revenue_anchor": result.revenue_anchor,
-                "candidate_for_manual_parser_review": result.candidate_for_manual_parser_review,
+                "candidate_for_manual_parser_review": (
+                    result.candidate_for_manual_parser_review
+                ),
             }
         )
     summary = {
