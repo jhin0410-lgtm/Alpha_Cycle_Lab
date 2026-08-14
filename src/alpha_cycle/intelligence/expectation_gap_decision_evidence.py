@@ -2,7 +2,7 @@
 
 The current live system has a raw KIS estimate-perform artifact and observational
 industry-to-earnings transmission, but neither side is a certified forward
-expectation gap.  This module maps the KIS trust boundary into the provider-
+expectation gap. This module maps the KIS trust boundary into the provider-
 agnostic expectation contract and makes the missing internal forward operating
 view explicit instead of inventing a forecast from historical correlations.
 """
@@ -62,7 +62,10 @@ def kis_expectation_semantics(
         comparable_snapshot_scope_certified=False,
         revision_calculation_certified=False,
         numeric_evidence_available=False,
-        source_scope="KIS estimate-perform raw structure; forward period/consensus semantics uncertified",
+        source_scope=(
+            "KIS estimate-perform raw structure; forward period/consensus "
+            "semantics uncertified"
+        ),
     )
 
 
@@ -156,10 +159,23 @@ def append_expectation_gap_report(
         "",
         "## Expectation Gap v1 (인증상태·비점수)",
         "",
-        "- 시장 forward expectation의 '수준'과 'revision'을 별도 capability로 인증합니다.",
-        "- 현재 KIS raw estimate-perform는 forward 기간·metric·집계·consensus/revision semantics가 인증되지 않아 numeric evidence를 사용하지 않습니다.",
-        "- 과거 산업→실적 transmission은 내부 forward forecast가 아니므로 시장 기대와의 numeric gap으로 변환하지 않습니다.",
-        "- 이 섹션은 composite/valuation score, fair value, target price를 변경하지 않습니다.",
+        (
+            "- 시장 forward expectation의 '수준'과 'revision'을 별도 "
+            "capability로 인증합니다."
+        ),
+        (
+            "- 현재 KIS raw estimate-perform는 forward 기간·metric·집계·"
+            "consensus/revision semantics가 인증되지 않아 numeric evidence를 "
+            "사용하지 않습니다."
+        ),
+        (
+            "- 과거 산업→실적 transmission은 내부 forward forecast가 아니므로 "
+            "시장 기대와의 numeric gap으로 변환하지 않습니다."
+        ),
+        (
+            "- 이 섹션은 composite/valuation score, fair value, target price를 "
+            "변경하지 않습니다."
+        ),
         "",
         "| 종목 | provider | 기대수준 | revision | 내부 forward view | expectation gap |",
         "|---|---|---|---|---|---|",
