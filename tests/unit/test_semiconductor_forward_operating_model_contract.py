@@ -25,6 +25,7 @@ def test_samsung_and_hynix_forward_models_are_not_the_same_company_model() -> No
         "dram_total",
         "hbm_mix_overlay",
         "nand_and_solutions",
+        "other_products_services",
         "corporate_other",
     }
     assert {block.block_id for block in samsung.blocks} == {
@@ -40,6 +41,9 @@ def test_samsung_and_hynix_forward_models_are_not_the_same_company_model() -> No
     )
     hbm = next(block for block in hynix.blocks if block.block_id == "hbm_mix_overlay")
     assert hbm.additive_to_company_financials is False
+    other = next(block for block in hynix.blocks if block.block_id == "other_products_services")
+    assert other.additive_to_company_financials is True
+    assert other.required_outputs == ("revenue",)
     assert "hbm_overlay_is_not_double_counted_as_additive_revenue" in (
         hynix.reconciliation_requirements
     )
