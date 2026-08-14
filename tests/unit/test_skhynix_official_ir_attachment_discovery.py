@@ -19,7 +19,6 @@ from alpha_cycle.intelligence.sk_hynix_official_ir_attachment_discovery_verifier
     load_official_ir_attachment_discovery_evidence,
 )
 
-
 OFFICIAL_PDF = (
     "https://mis-prod-koce-homepage-cdn-01-blob-ep.azureedge.net/"
     "web/attach/12345678901234567.pdf"
