@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from alpha_cycle.intelligence import semiconductor_accounting_identity_decision_evidence as decision_module
+from alpha_cycle.intelligence import (
+    semiconductor_accounting_identity_decision_evidence as decision_module,
+)
 from alpha_cycle.intelligence.semiconductor_accounting_identity import (
     SamsungAccountingIdentityEvidence,
 )
