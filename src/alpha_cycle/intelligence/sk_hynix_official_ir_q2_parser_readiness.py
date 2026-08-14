@@ -212,7 +212,9 @@ def build_q2_parser_readiness(
 ) -> OfficialIrQ2ParserReadiness:
     fingerprint = attachment.fingerprint_q2_pdf(pdf_bytes)
     if fingerprint != evidence.fingerprint:
-        raise ValueError("SK hynix Q2 parser readiness fingerprint differs from attachment evidence")
+        raise ValueError(
+            "SK hynix Q2 parser readiness fingerprint differs from attachment evidence"
+        )
     page_texts = attachment._extract_page_texts(pdf_bytes)
 
     contexts: list[ParserContext] = []
@@ -303,7 +305,9 @@ def capture_q2_parser_readiness(
     try:
         pointer_obj: object = json.loads(attachment_pointer.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as exc:
-        raise ValueError("SK hynix Q2 attachment pointer is unreadable for parser readiness") from exc
+        raise ValueError(
+            "SK hynix Q2 attachment pointer is unreadable for parser readiness"
+        ) from exc
     if not isinstance(pointer_obj, dict):
         raise ValueError("SK hynix Q2 attachment pointer must be an object")
     pointer = {str(key): value for key, value in pointer_obj.items()}
