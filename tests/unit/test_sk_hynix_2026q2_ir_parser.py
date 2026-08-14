@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
 
-from alpha_cycle.intelligence.official_semiconductor_ir_collector import OfficialIrDocumentSpec
+from alpha_cycle.intelligence.official_semiconductor_ir_collector import (
+    DEFAULT_IR_DOCUMENT_REGISTRY,
+    OfficialIrDocumentSpec,
+    load_official_ir_document_registry,
+)
 from alpha_cycle.intelligence.semiconductor_forward_input_evidence import (
     DEFAULT_FORWARD_INPUT_SOURCE_REGISTRY,
     validate_forward_input_claim,
@@ -55,9 +60,16 @@ def _pages() -> tuple[str, ...]:
     return tuple(pages)
 
 
-def _claims_by_metric():
+def _claims_by_metric() -> tuple[object, dict[str, dict[str, object]]]:
     parsed = parse_sk_hynix_2026q2(_spec(), b"%PDF-synthetic", _pages())
-    return parsed, {str(row["metric_id"]): row for row in parsed.forward_input_claims}
+    claims = {str(row["metric_id"]): row for row in parsed.forward_input_claims}
+    return parsed, claims
+
+
+def test_candidate_parser_remains_dormant_until_official_document_is_registered() -> None:
+    specs = load_official_ir_document_registry(DEFAULT_IR_DOCUMENT_REGISTRY)
+
+    assert all(spec.ticker != "000660" for spec in specs.values())
 
 
 def test_sk_hynix_parser_is_forward_only_and_emits_only_supported_metrics() -> None:
@@ -145,14 +157,10 @@ def test_sk_hynix_parser_page_count_identity_and_guidance_drift_fail_closed() ->
 
 
 def test_sk_hynix_parser_rejects_wrong_issuer_or_parser_identity() -> None:
-    wrong_parser = OfficialIrDocumentSpec(
-        **{**_spec().__dict__, "parser_id": "unknown_parser"}
-    )
+    wrong_parser = replace(_spec(), parser_id="unknown_parser")
     with pytest.raises(ValueError, match="wrong parser_id"):
         parse_sk_hynix_2026q2(wrong_parser, b"%PDF-synthetic", _pages())
 
-    wrong_ticker = OfficialIrDocumentSpec(
-        **{**_spec().__dict__, "ticker": "005930"}
-    )
+    wrong_ticker = replace(_spec(), ticker="005930")
     with pytest.raises(ValueError, match="wrong issuer/source identity"):
         parse_sk_hynix_2026q2(wrong_ticker, b"%PDF-synthetic", _pages())
