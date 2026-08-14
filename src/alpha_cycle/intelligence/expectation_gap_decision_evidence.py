@@ -201,6 +201,10 @@ def append_expectation_gap_report(
             "reconciliation·model version이 인증되기 전에는 numeric forecast가 아닙니다."
         ),
         (
+            "- certified market expectation level과 certified internal forward view가 "
+            "동시에 없으면 numeric gap은 비활성 상태를 유지합니다."
+        ),
+        (
             "- 이 섹션은 composite/valuation score, fair value, target price를 "
             "변경하지 않습니다."
         ),
