@@ -101,6 +101,13 @@ SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS: dict[str, IssuerForwardModelContract] = {
                 required_outputs=("revenue", "gross_profit_or_margin"),
             ),
             ForwardModelBlock(
+                block_id="other_products_services",
+                additive_to_company_financials=True,
+                required_baseline_metrics=("other_products_services_revenue_bridge",),
+                required_forward_drivers=("other_products_services_revenue_growth",),
+                required_outputs=("revenue",),
+            ),
+            ForwardModelBlock(
                 block_id="corporate_other",
                 additive_to_company_financials=True,
                 required_baseline_metrics=("company_to_memory_reconciliation",),
@@ -118,7 +125,7 @@ SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS: dict[str, IssuerForwardModelContract] = {
             "ending_equity",
         ),
         reconciliation_requirements=(
-            "product_blocks_reconcile_to_reported_company_baseline",
+            "all_product_revenue_blocks_reconcile_to_reported_company_baseline",
             "hbm_overlay_is_not_double_counted_as_additive_revenue",
             "quarterly_model_reconciles_to_annual_view",
             "cash_flow_and_equity_roll_forward_reconcile",
@@ -128,6 +135,7 @@ SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS: dict[str, IssuerForwardModelContract] = {
             "hbm_qualification_failure",
             "hbm_yield_or_packaging_bottleneck",
             "inventory_reaccumulation",
+            "other_products_services_revenue_materiality_change",
             "ai_memory_demand_break",
         ),
     ),
