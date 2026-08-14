@@ -18,6 +18,12 @@ from alpha_cycle.official_semiconductor_ir_collector_cli import (
     DEFAULT_OUTPUT as DEFAULT_DOCUMENT_OUTPUT,
 )
 from alpha_cycle.official_semiconductor_ir_collector_cli import capture_official_ir_document
+from alpha_cycle.semiconductor_accounting_identity_cli import (
+    DEFAULT_OUTPUT as DEFAULT_ACCOUNTING_OUTPUT,
+)
+from alpha_cycle.semiconductor_accounting_identity_cli import (
+    capture_semiconductor_accounting_identity,
+)
 from alpha_cycle.semiconductor_baseline_reconciliation_cli import (
     DEFAULT_OUTPUT as DEFAULT_BASELINE_OUTPUT,
 )
@@ -65,6 +71,7 @@ def refresh_official_semiconductor_ir(
     document_output: str | Path = DEFAULT_DOCUMENT_OUTPUT,
     baseline_output: str | Path = DEFAULT_BASELINE_OUTPUT,
     forward_output: str | Path = DEFAULT_FORWARD_OUTPUT,
+    accounting_output: str | Path = DEFAULT_ACCOUNTING_OUTPUT,
     timeout_seconds: float = 20.0,
     captured_at: datetime | None = None,
 ) -> dict[str, object]:
@@ -74,8 +81,10 @@ def refresh_official_semiconductor_ir(
     )
     collected: list[dict[str, object]] = []
     failed: list[dict[str, object]] = []
+    downstream_failures: list[dict[str, object]] = []
     all_facts: list[dict[str, object]] = []
     all_claims: list[dict[str, object]] = []
+    samsung_document_pointer: Path | None = None
     for item in plan.issuers:
         if item.selected_document_id is None:
             continue
@@ -99,6 +108,11 @@ def refresh_official_semiconductor_ir(
             )
             all_facts.extend(facts)
             all_claims.extend(claims)
+            if item.ticker == "005930":
+                samsung_document_pointer = (
+                    Path(document_output)
+                    / f"latest_{item.selected_document_id}.json"
+                )
             collected.append(
                 {
                     "ticker": item.ticker,
@@ -124,6 +138,7 @@ def refresh_official_semiconductor_ir(
 
     baseline_result: dict[str, object] | None = None
     forward_result: dict[str, object] | None = None
+    accounting_result: dict[str, object] | None = None
     if all_facts:
         baseline_result = capture_semiconductor_baseline_reconciliation(
             all_facts,
@@ -136,19 +151,28 @@ def refresh_official_semiconductor_ir(
             evaluation_date=evaluation_date,
             output=forward_output,
         )
+    if samsung_document_pointer is not None:
+        try:
+            accounting_result = capture_semiconductor_accounting_identity(
+                samsung_document_pointer,
+                evaluation_date=evaluation_date,
+                output=accounting_output,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            downstream_failures.append(
+                {
+                    "ticker": "005930",
+                    "layer": "accounting_identity",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
 
     captured = captured_at or datetime.now(UTC)
     if captured.tzinfo is None or captured.utcoffset() is None:
         raise ValueError("captured_at must be timezone-aware")
     root = Path(output)
     root.mkdir(parents=True, exist_ok=True)
-    status = (
-        "complete"
-        if collected and not failed and all(item.selected_document_id for item in plan.issuers)
-        else "partial"
-        if collected
-        else "unavailable"
-    )
     unresolved = [
         {
             "ticker": item.ticker,
@@ -159,6 +183,16 @@ def refresh_official_semiconductor_ir(
         for item in plan.issuers
         if item.selected_document_id is None
     ]
+    status = (
+        "complete"
+        if collected
+        and not failed
+        and not downstream_failures
+        and not unresolved
+        else "partial"
+        if collected
+        else "unavailable"
+    )
     baseline_pointer = (
         Path(str(baseline_result["artifact_directory"])).parent
         / "latest_semiconductor_baseline_reconciliation.json"
@@ -171,6 +205,12 @@ def refresh_official_semiconductor_ir(
         if forward_result
         else None
     )
+    accounting_pointer = (
+        Path(str(accounting_result["artifact_directory"])).parent
+        / "latest_semiconductor_accounting_identity.json"
+        if accounting_result
+        else None
+    )
     payload: dict[str, object] = {
         "schema_version": 1,
         "status": status,
@@ -179,9 +219,11 @@ def refresh_official_semiconductor_ir(
         "selected_document_ids": list(plan.selected_document_ids),
         "collected": collected,
         "failed": failed,
+        "downstream_failures": downstream_failures,
         "unresolved": unresolved,
         "baseline_reconciliation_pointer": str(baseline_pointer) if baseline_pointer else None,
         "forward_input_pointer": str(forward_pointer) if forward_pointer else None,
+        "accounting_identity_pointer": str(accounting_pointer) if accounting_pointer else None,
         "operating_assumptions_generated": False,
         "scenario_probabilities_enabled": False,
         "numeric_forecast_enabled": False,
@@ -208,8 +250,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="alpha-cycle-official-semiconductor-ir-refresh",
         description=(
             "Collect each issuer's latest observable registered official IR document and build "
-            "baseline/forward evidence; unresolved issuers stay explicit and assumptions are "
-            "not generated"
+            "baseline/forward/accounting-identity evidence; unresolved issuers stay explicit "
+            "and assumptions are not generated"
         ),
     )
     parser.add_argument("--evaluation-date", type=_date_value, required=True)
@@ -218,6 +260,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--document-output", type=Path, default=DEFAULT_DOCUMENT_OUTPUT)
     parser.add_argument("--baseline-output", type=Path, default=DEFAULT_BASELINE_OUTPUT)
     parser.add_argument("--forward-output", type=Path, default=DEFAULT_FORWARD_OUTPUT)
+    parser.add_argument("--accounting-output", type=Path, default=DEFAULT_ACCOUNTING_OUTPUT)
     parser.add_argument("--timeout-seconds", type=float, default=20.0)
     return parser
 
@@ -235,6 +278,7 @@ def main(argv: list[str] | None = None) -> int:
             document_output=args.document_output,
             baseline_output=args.baseline_output,
             forward_output=args.forward_output,
+            accounting_output=args.accounting_output,
             timeout_seconds=args.timeout_seconds,
         )
         print(json.dumps(result, ensure_ascii=False, sort_keys=True))

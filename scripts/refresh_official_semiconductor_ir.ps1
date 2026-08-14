@@ -74,6 +74,7 @@ $RefreshOutput = Join-Path $OutputRoot "official-semiconductor-ir-refresh"
 $DocumentOutput = Join-Path $OutputRoot "official-semiconductor-ir-documents"
 $BaselineOutput = Join-Path $OutputRoot "semiconductor-baseline-reconciliation"
 $ForwardOutput = Join-Path $OutputRoot "semiconductor-forward-input-evidence"
+$AccountingOutput = Join-Path $OutputRoot "semiconductor-accounting-identity"
 $Timeout = Get-OptionValue -Arguments $PipelineArguments -Name "--timeout-seconds"
 if ([string]::IsNullOrWhiteSpace($Timeout)) {
     $Timeout = "20"
@@ -86,6 +87,7 @@ Write-Host "Refreshing registered official semiconductor IR evidence for $Evalua
     --document-output $DocumentOutput `
     --baseline-output $BaselineOutput `
     --forward-output $ForwardOutput `
+    --accounting-output $AccountingOutput `
     --timeout-seconds $Timeout
 $exitCode = $LASTEXITCODE
 if ($null -eq $exitCode) {
