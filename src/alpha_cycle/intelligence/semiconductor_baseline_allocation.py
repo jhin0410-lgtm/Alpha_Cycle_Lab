@@ -1,16 +1,16 @@
 """Derived semiconductor baseline allocation without weakening source-fact boundaries.
 
 The direct-fact baseline reconciliation layer remains authoritative for disclosed
-accounting facts.  This module is a separate model layer for the narrower case where a
-reported company total and a directly evidenced product share can be combined to derive
-a block revenue baseline.  Derived values are never relabeled as source facts.
+accounting facts. This module is a separate model layer for combining verified company
+revenue and directly evidenced product shares, while also allowing an explicitly reported
+product-revenue amount to be referenced without relabeling the wrapper as a source fact.
 
-V1 intentionally supports revenue share allocation only.  Profitability allocation,
-residual arithmetic, peer substitution, and automatic company-model certification remain
-disabled.  A revenue allocation is usable only when both source inputs are verified and
-the allocation method is observationally calibrated, frozen, and evidence-backed.  Even
-then, the resulting artifact certifies only the revenue bridge; it cannot enable a
-numeric forward forecast by itself.
+V1 supports only direct-share revenue allocation and direct-amount revenue references.
+Profitability allocation, residual arithmetic, peer substitution, and automatic company-
+model certification remain disabled. A direct-share method must be observationally
+calibrated; a direct-amount reference must be source-mapped. Both paths must be frozen and
+evidence-backed. Even a certified revenue bridge cannot enable a numeric forward forecast
+by itself.
 """
 
 from __future__ import annotations
@@ -29,9 +29,14 @@ from alpha_cycle.intelligence.semiconductor_model_input_semantics import (
     baseline_requirement_semantics,
 )
 
-_ALLOWED_METHOD_KINDS = frozenset({"direct_share_allocation"})
-_ALLOWED_METHOD_STATUS = frozenset({"draft", "documented", "observationally_calibrated"})
+_ALLOWED_METHOD_KINDS = frozenset({"direct_share_allocation", "direct_amount_reference"})
+_ALLOWED_METHOD_STATUS = frozenset(
+    {"draft", "documented", "observationally_calibrated", "source_mapped"}
+)
 _SHARE_UNITS = frozenset({"fraction", "percent"})
+_DIRECT_AMOUNT_SEMANTICS = {
+    ("000660", "other_products_services"): "other_products_services_revenue",
+}
 
 
 def _sha(payload: dict[str, object]) -> str:
@@ -54,6 +59,14 @@ def _registered_block(ticker: str, block_id: str) -> ForwardModelBlock:
     if block is None:
         raise ValueError(f"Baseline allocation block is not registered: {ticker}/{block_id}")
     return block
+
+
+def _ready_method_status(method_kind: str, method_status: str) -> bool:
+    if method_kind == "direct_share_allocation":
+        return method_status == "observationally_calibrated"
+    if method_kind == "direct_amount_reference":
+        return method_status == "source_mapped"
+    return False
 
 
 @dataclass(frozen=True)
@@ -142,11 +155,11 @@ class BaselineAllocationMethod:
         if self.decision_score_enabled:
             raise ValueError("Baseline allocation method must remain non-scoring")
         if self.method_use_ready and (
-            self.method_status != "observationally_calibrated"
+            not _ready_method_status(self.method_kind, self.method_status)
             or not self.method_version_frozen
             or not self.supporting_evidence_verified
         ):
-            raise ValueError("Ready allocation method requires calibrated frozen verified method")
+            raise ValueError("Ready allocation method has an invalid status/evidence boundary")
 
 
 @dataclass(frozen=True)
@@ -311,7 +324,7 @@ def validate_baseline_allocation_method(
     rationale = str(raw.get("rationale", "")).strip()
     invalidation = str(raw.get("invalidation_condition", "")).strip()
     method_use_ready = bool(
-        method_status == "observationally_calibrated"
+        _ready_method_status(method_kind, method_status)
         and method_version_frozen
         and supporting_verified
         and supporting_ids
@@ -408,6 +421,60 @@ def build_direct_share_revenue_allocation(
             total_input.source_evidence_id,
             share_input.source_evidence_id,
         ),
+        allocation_ready=allocation_ready,
+    )
+
+
+def build_direct_amount_revenue_reference(
+    *,
+    amount_input: SourceBoundAllocationInput,
+    method: BaselineAllocationMethod,
+) -> DerivedBaselineAllocation:
+    if method.method_kind != "direct_amount_reference":
+        raise ValueError("Direct revenue reference requires direct_amount_reference method")
+    if amount_input.ticker != method.ticker:
+        raise ValueError("Direct revenue reference ticker identities must match")
+    expected_semantic = _DIRECT_AMOUNT_SEMANTICS.get((method.ticker, method.block_id))
+    if expected_semantic is None or amount_input.semantic_id != expected_semantic:
+        raise ValueError("Direct revenue reference semantic is outside the registered mapping")
+    if amount_input.unit in _SHARE_UNITS:
+        raise ValueError("Direct revenue reference must use an amount unit")
+    allocation_ready = bool(amount_input.source_evidence_verified and method.method_use_ready)
+    payload: dict[str, object] = {
+        "ticker": method.ticker,
+        "block_id": method.block_id,
+        "baseline_requirement_id": method.baseline_requirement_id,
+        "output_metric": method.output_metric,
+        "value": amount_input.value,
+        "unit": amount_input.unit,
+        "period_start": amount_input.period_start.isoformat(),
+        "period_end": amount_input.period_end.isoformat(),
+        "method_id": method.method_id,
+        "method_version": method.method_version,
+        "source_input_ids": [amount_input.input_id],
+        "source_evidence_ids": [amount_input.source_evidence_id],
+        "allocation_ready": allocation_ready,
+        "source_fact": False,
+        "derived_not_source_fact": True,
+        "residual_derivation_used": False,
+        "profitability_allocation_used": False,
+        "numeric_forecast_enabled": False,
+        "decision_score_enabled": False,
+    }
+    return DerivedBaselineAllocation(
+        allocation_id=_sha(payload),
+        ticker=method.ticker,
+        block_id=method.block_id,
+        baseline_requirement_id=method.baseline_requirement_id,
+        output_metric=method.output_metric,
+        value=amount_input.value,
+        unit=amount_input.unit,
+        period_start=amount_input.period_start,
+        period_end=amount_input.period_end,
+        method_id=method.method_id,
+        method_version=method.method_version,
+        source_input_ids=(amount_input.input_id,),
+        source_evidence_ids=(amount_input.source_evidence_id,),
         allocation_ready=allocation_ready,
     )
 
@@ -513,6 +580,7 @@ __all__ = [
     "CompanyRevenueReconciliation",
     "DerivedBaselineAllocation",
     "SourceBoundAllocationInput",
+    "build_direct_amount_revenue_reference",
     "build_direct_share_revenue_allocation",
     "reconcile_company_revenue",
     "validate_baseline_allocation_method",
