@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from alpha_cycle.intelligence.semiconductor_structural_evidence import (
+    SemiconductorStructuralClaim,
     build_structural_evidence_bundle,
     load_structural_source_registry,
 )
@@ -46,24 +47,23 @@ def _load_claims(path: Path) -> list[dict[str, object]]:
     return claims
 
 
-def _claim_payload(claim: object) -> dict[str, object]:
-    row = claim
+def _claim_payload(claim: SemiconductorStructuralClaim) -> dict[str, object]:
     return {
-        "claim_id": row.claim_id,
-        "subject": row.subject,
-        "dimension": row.dimension,
-        "as_of_date": row.as_of_date.isoformat(),
-        "source_id": row.source_id,
-        "source_url": row.source_url,
-        "source_published_date": row.source_published_date.isoformat(),
-        "evidence_kind": row.evidence_kind,
-        "statement": row.statement,
-        "numeric_value": row.numeric_value,
-        "unit": row.unit,
-        "product_scope": row.product_scope,
-        "semantics_certified": row.semantics_certified,
-        "reuse_basis_documented": row.reuse_basis_documented,
-        "issuer_specific": row.issuer_specific,
+        "claim_id": claim.claim_id,
+        "subject": claim.subject,
+        "dimension": claim.dimension,
+        "as_of_date": claim.as_of_date.isoformat(),
+        "source_id": claim.source_id,
+        "source_url": claim.source_url,
+        "source_published_date": claim.source_published_date.isoformat(),
+        "evidence_kind": claim.evidence_kind,
+        "statement": claim.statement,
+        "numeric_value": claim.numeric_value,
+        "unit": claim.unit,
+        "product_scope": claim.product_scope,
+        "semantics_certified": claim.semantics_certified,
+        "reuse_basis_documented": claim.reuse_basis_documented,
+        "issuer_specific": claim.issuer_specific,
         "decision_score_enabled": False,
     }
 
