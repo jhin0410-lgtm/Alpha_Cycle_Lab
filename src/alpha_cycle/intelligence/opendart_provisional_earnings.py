@@ -33,6 +33,15 @@ _ALLOWED_UNIT_SCALES = {
     "억원": ("KRW_million", 100.0),
 }
 _AMOUNT_TOKEN = re.compile(r"^-?\(?[0-9][0-9,]*(?:\.[0-9]+)?\)?$")
+_METRIC_SECTION_LABELS = frozenset(
+    {
+        "매출액",
+        "영업이익",
+        "법인세비용차감전계속사업이익",
+        "당기순이익",
+        "당기순이익(손실)",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -304,7 +313,15 @@ def _current_amount(lines: tuple[str, ...], labels: tuple[str, ...], metric: str
             f"OpenDART provisional earnings metric label must be unique: {metric} count={len(indices)}"
         )
     start = indices[0]
-    window = lines[start + 1 : start + 18]
+    section_end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index] in _METRIC_SECTION_LABELS
+        ),
+        len(lines),
+    )
+    window = lines[start + 1 : section_end]
     current_positions = [index for index, line in enumerate(window) if line == "당해실적"]
     if len(current_positions) != 1:
         raise ValueError(
