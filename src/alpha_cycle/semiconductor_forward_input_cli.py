@@ -82,6 +82,45 @@ def _claim_payload(claim: SemiconductorForwardInputClaim) -> dict[str, object]:
     }
 
 
+def _prepare_claims(
+    claims: list[dict[str, object]],
+) -> tuple[
+    list[dict[str, object]],
+    list[tuple[str, str]],
+    dict[str, tuple[Path, bytes]],
+]:
+    prepared: list[dict[str, object]] = []
+    binding_seeds: list[tuple[str, str]] = []
+    documents: dict[str, tuple[Path, bytes]] = {}
+    for raw in claims:
+        document_path = Path(str(raw.get("source_document_path", "")).strip())
+        if not str(document_path) or not document_path.is_file():
+            raise ValueError(f"Forward-input source document not found: {document_path}")
+        parser_id = str(raw.get("parser_id", "")).strip()
+        if not parser_id:
+            raise ValueError("Forward-input source document requires parser_id")
+        data = document_path.read_bytes()
+        if not data:
+            raise ValueError(f"Forward-input source document is empty: {document_path}")
+        digest = hashlib.sha256(data).hexdigest()
+        documents.setdefault(digest, (document_path, data))
+        clean = {
+            key: value
+            for key, value in raw.items()
+            if key
+            not in {
+                "source_document_path",
+                "source_document_sha256",
+                "source_bytes_archived",
+                "archived_document_path",
+                "parser_id",
+            }
+        }
+        prepared.append(clean)
+        binding_seeds.append((digest, parser_id))
+    return prepared, binding_seeds, documents
+
+
 def capture_forward_input_evidence(
     claims: list[dict[str, object]],
     *,
@@ -93,8 +132,9 @@ def capture_forward_input_evidence(
 ) -> dict[str, object]:
     registry_file = Path(registry_path)
     registry = load_structural_source_registry(registry_file)
+    prepared_claims, binding_seeds, documents = _prepare_claims(claims)
     evidence = build_semiconductor_forward_input_evidence(
-        claims,
+        prepared_claims,
         registry,
         evaluation_date=evaluation_date,
     )
@@ -115,6 +155,29 @@ def capture_forward_input_evidence(
         shutil.rmtree(temporary)
     temporary.mkdir()
     try:
+        documents_dir = temporary / "source_documents"
+        documents_dir.mkdir()
+        archived_paths: dict[str, str] = {}
+        for digest, (original, data) in sorted(documents.items()):
+            suffix = original.suffix.lower() or ".bin"
+            target = documents_dir / f"{digest}{suffix}"
+            target.write_bytes(data)
+            archived_paths[digest] = str((directory / "source_documents" / target.name).resolve())
+
+        bindings = [
+            {
+                "claim_id": claim.claim_id,
+                "source_document_sha256": digest,
+                "archived_document_path": archived_paths[digest],
+                "parser_id": parser_id,
+                "source_bytes_archived": True,
+            }
+            for claim, (digest, parser_id) in zip(
+                evidence.claims,
+                binding_seeds,
+                strict=True,
+            )
+        ]
         archived_registry = temporary / "source_registry.yaml"
         shutil.copy2(registry_file, archived_registry)
         registry_sha256 = _sha256_file(archived_registry)
@@ -127,10 +190,14 @@ def capture_forward_input_evidence(
             ),
             encoding="utf-8",
         )
+        (temporary / "source_bindings.json").write_text(
+            json.dumps(bindings, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
         evidence.block_coverage.to_csv(temporary / "block_coverage.csv", index=False)
         evidence.issuer_coverage.to_csv(temporary / "issuer_coverage.csv", index=False)
         manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "status": "semiconductor_forward_input_evidence_captured",
             "evidence_id": evidence.evidence_id,
             "captured_at": captured.isoformat(),
@@ -139,6 +206,8 @@ def capture_forward_input_evidence(
             "tickers": sorted({claim.ticker for claim in evidence.claims}),
             "input_path": str(Path(input_path).resolve()) if input_path else None,
             "source_registry_sha256": registry_sha256,
+            "source_document_sha256s": sorted(documents),
+            "source_bytes_archived": True,
             "numeric_forecast_enabled": False,
             "decision_score_enabled": False,
             "fair_value_estimate_enabled": False,
@@ -149,9 +218,11 @@ def capture_forward_input_evidence(
             "order_api_enabled": False,
             "files": [
                 "claims.json",
+                "source_bindings.json",
                 "block_coverage.csv",
                 "issuer_coverage.csv",
                 "source_registry.yaml",
+                "source_documents/",
             ],
         }
         (temporary / "manifest.json").write_text(
@@ -165,16 +236,18 @@ def capture_forward_input_evidence(
         raise
 
     pointer = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "semiconductor_forward_input_evidence_captured",
         "evidence_id": evidence.evidence_id,
         "evaluation_date": evaluation_date.isoformat(),
         "manifest_path": str((directory / "manifest.json").resolve()),
         "claims_path": str((directory / "claims.json").resolve()),
+        "source_bindings_path": str((directory / "source_bindings.json").resolve()),
         "block_coverage_path": str((directory / "block_coverage.csv").resolve()),
         "issuer_coverage_path": str((directory / "issuer_coverage.csv").resolve()),
         "source_registry_path": str((directory / "source_registry.yaml").resolve()),
         "source_registry_sha256": registry_sha256,
+        "source_bytes_archived": True,
         "numeric_forecast_enabled": False,
         "decision_score_enabled": False,
         "fair_value_estimate_enabled": False,
@@ -198,7 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="alpha-cycle-semiconductor-forward-input",
         description=(
-            "Validate source-bounded semiconductor baseline/forward-driver claims and "
+            "Archive source bytes, validate semiconductor baseline/forward-driver claims, and "
             "capture block coverage without enabling a numeric forecast"
         ),
     )

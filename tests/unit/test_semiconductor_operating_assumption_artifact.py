@@ -18,7 +18,7 @@ from alpha_cycle.semiconductor_operating_assumption_cli import (
 EVALUATION = date(2026, 8, 14)
 
 
-def _forward_claims() -> list[dict[str, object]]:
+def _forward_claims(source_document: Path) -> list[dict[str, object]]:
     return [
         {
             "ticker": "000660",
@@ -37,14 +37,18 @@ def _forward_claims() -> list[dict[str, object]]:
             "semantics_certified": False,
             "source_vintage_certified": False,
             "reuse_or_license_basis_documented": False,
+            "source_document_path": str(source_document),
+            "parser_id": "synthetic_operating_assumption_test_v1",
         }
     ]
 
 
 def _forward_pointer(tmp_path: Path) -> tuple[Path, str]:
+    source_document = tmp_path / "synthetic-sk-hynix-ir.pdf"
+    source_document.write_bytes(b"%PDF-synthetic-operating-assumption-source")
     output = tmp_path / "forward"
     result = capture_forward_input_evidence(
-        _forward_claims(),
+        _forward_claims(source_document),
         evaluation_date=EVALUATION,
         output=output,
     )

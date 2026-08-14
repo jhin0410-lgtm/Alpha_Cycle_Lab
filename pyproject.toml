@@ -12,6 +12,7 @@ license = {text = "License under review; see LICENSE"}
 dependencies = [
   "numpy>=1.26,<3",
   "pandas>=2.2,<4",
+  "pypdf>=6.14,<7",
   "PyYAML>=6.0,<7",
   "tzdata>=2024.1; platform_system == 'Windows'",
 ]
@@ -80,6 +81,7 @@ select = ["E", "F", "I", "B", "UP"]
 "src/alpha_cycle/intelligence/kis_forward_estimates.py" = ["E501", "F401"]
 "src/alpha_cycle/intelligence/macro_liquidity_decision_evidence.py" = ["E501"]
 "src/alpha_cycle/intelligence/macro_liquidity_evidence.py" = ["E501", "F401"]
+"src/alpha_cycle/intelligence/official_semiconductor_ir_collector.py" = ["E501", "F401"]
 "src/alpha_cycle/intelligence/outcomes.py" = ["E501"]
 "src/alpha_cycle/intelligence/scenario_expected_return.py" = ["E501"]
 "src/alpha_cycle/intelligence/scenario_expected_return_decision_evidence.py" = ["E501"]
@@ -103,6 +105,7 @@ select = ["E", "F", "I", "B", "UP"]
 "src/alpha_cycle/kosis_semiconductor_history_cli.py" = ["E501"]
 "src/alpha_cycle/live_pipeline_cli.py" = ["UP047"]
 "src/alpha_cycle/macro_liquidity_cli.py" = ["E501"]
+"src/alpha_cycle/official_semiconductor_ir_refresh_cli.py" = ["E501", "F401", "I001"]
 "src/alpha_cycle/semiconductor_baseline_reconciliation_cli.py" = ["E501"]
 "src/alpha_cycle/semiconductor_forward_input_cli.py" = ["E501"]
 "src/alpha_cycle/semiconductor_operating_assumption_cli.py" = ["E501"]
