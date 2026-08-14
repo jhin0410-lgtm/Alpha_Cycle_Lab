@@ -13,8 +13,28 @@ $DefaultOutput = Join-Path $RepositoryRoot "data/private/research/sec-post-earni
 Set-Location $RepositoryRoot
 $ProjectPython = [Environment]::GetEnvironmentVariable("ALPHA_CYCLE_PYTHON", "Process")
 if ([string]::IsNullOrWhiteSpace($ProjectPython)) {
-    $ProjectPython = "python"
+    $VenvPython = Join-Path $RepositoryRoot ".venv\Scripts\python.exe"
+    if (Test-Path $VenvPython) {
+        $ProjectPython = (Resolve-Path $VenvPython).Path
+    }
+    else {
+        $ProjectPython = "python"
+    }
 }
+
+& $ProjectPython -c "import alpha_cycle, pypdf" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw (
+        "Alpha Cycle Python dependencies are not ready for SEC research. " +
+        "Resolved Python: $ProjectPython`n" +
+        "Create/install the project environment with:`n" +
+        "  py -3.12 -m venv .venv`n" +
+        "  .\.venv\Scripts\python.exe -m pip install --upgrade pip`n" +
+        "  .\.venv\Scripts\python.exe -m pip install -e .`n" +
+        "Then rerun this script. You may also set ALPHA_CYCLE_PYTHON to an explicit interpreter."
+    )
+}
+
 $SecUserAgent = [Environment]::GetEnvironmentVariable("SEC_EDGAR_USER_AGENT", "Process")
 if ([string]::IsNullOrWhiteSpace($SecUserAgent)) {
     throw (
@@ -34,6 +54,7 @@ if ([string]::IsNullOrWhiteSpace($Output)) {
 }
 
 Write-Host "Scanning official SK hynix SEC 6-K filings after $AfterDate for product-mix candidates."
+Write-Host "Python: $ProjectPython"
 & $ProjectPython -m alpha_cycle.sec_post_earnings_product_mix_scout_cli `
     --observed-date $ObservedDate `
     --after-date $AfterDate `
