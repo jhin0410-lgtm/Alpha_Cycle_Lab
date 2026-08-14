@@ -3,9 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
-from typing import Sequence
 
 from alpha_cycle.intelligence.sec_product_mix_calibration import (
     DEFAULT_SEC_PRODUCT_MIX_OUTPUT,
