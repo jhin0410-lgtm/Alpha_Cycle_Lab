@@ -2,10 +2,11 @@
 
 The final package decision wrapper preserves the calibrated chain through
 ``decision_industry_evidence_calibrated``, ``decision_forward_estimate_calibrated``,
-``decision_historical_pb_calibrated``, ``decision_sector_vertical_calibrated``, and
-finally ``decision_semiconductor_transmission_calibrated``.  Sector vertical and
-transmission evidence remain non-scoring: missing industry evidence is surfaced as
-a research gap rather than converted into a zero factor score.  Valuation still
+``decision_historical_pb_calibrated``, ``decision_sector_vertical_calibrated``,
+``decision_semiconductor_transmission_calibrated``, and finally
+``decision_semiconductor_structural_calibrated``. Sector vertical, transmission,
+and structural evidence remain non-scoring: missing industry evidence is surfaced
+as a research gap rather than converted into a zero factor score. Valuation still
 passes through ``valuation_resilient`` before the final latest-observable-equity
 P/B correction.
 """
@@ -24,7 +25,7 @@ from alpha_cycle.intelligence.decision_scoring import (
     DecisionPolicy,
     load_company_exposures,
 )
-from alpha_cycle.intelligence.decision_semiconductor_transmission_calibrated import (
+from alpha_cycle.intelligence.decision_semiconductor_structural_calibrated import (
     build_investment_decision_snapshot,
 )
 from alpha_cycle.intelligence.fundamental_macro import (
