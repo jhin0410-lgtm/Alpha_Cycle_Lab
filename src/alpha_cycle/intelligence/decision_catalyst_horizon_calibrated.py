@@ -115,11 +115,11 @@ def build_investment_decision_snapshot(
     )
     if not pointer.is_file():
         reason = "catalyst_horizon_future_timing_evidence_missing"
-        warnings = tuple(dict.fromkeys((*snapshot.warnings, reason)))
+        missing_warnings = tuple(dict.fromkeys((*snapshot.warnings, reason)))
         if explicit_pointer or pointer == DEFAULT_CATALYST_HORIZON_POINTER:
             return replace(
                 snapshot,
-                warnings=warnings,
+                warnings=missing_warnings,
                 report_markdown=_unavailable_report(snapshot.report_markdown, reason),
             )
         return snapshot
