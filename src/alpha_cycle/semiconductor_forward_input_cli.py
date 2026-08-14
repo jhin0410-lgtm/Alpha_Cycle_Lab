@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from datetime import UTC, date, datetime
@@ -10,8 +11,12 @@ from pathlib import Path
 from typing import cast
 
 from alpha_cycle.intelligence.semiconductor_forward_input_evidence import (
+    DEFAULT_FORWARD_INPUT_SOURCE_REGISTRY,
     SemiconductorForwardInputClaim,
     build_semiconductor_forward_input_evidence,
+)
+from alpha_cycle.intelligence.semiconductor_structural_evidence import (
+    load_structural_source_registry,
 )
 
 DEFAULT_OUTPUT = Path("data/private/live-research/semiconductor-forward-input-evidence")
@@ -22,6 +27,14 @@ def _date_value(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("date must use YYYY-MM-DD") from exc
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _load_claims(path: Path) -> list[dict[str, object]]:
@@ -55,6 +68,7 @@ def _claim_payload(claim: SemiconductorForwardInputClaim) -> dict[str, object]:
         "unit": claim.unit,
         "period_start": claim.period_start.isoformat() if claim.period_start else None,
         "period_end": claim.period_end.isoformat() if claim.period_end else None,
+        "source_id": claim.source_id,
         "source_role": claim.source_role,
         "source_url": claim.source_url,
         "source_published_date": claim.source_published_date.isoformat(),
@@ -63,6 +77,7 @@ def _claim_payload(claim: SemiconductorForwardInputClaim) -> dict[str, object]:
         "source_vintage_certified": claim.source_vintage_certified,
         "reuse_or_license_basis_documented": claim.reuse_or_license_basis_documented,
         "primary_source": claim.primary_source,
+        "numeric_model_input_eligible": claim.numeric_model_input_eligible,
         "decision_score_enabled": False,
     }
 
@@ -71,12 +86,16 @@ def capture_forward_input_evidence(
     claims: list[dict[str, object]],
     *,
     evaluation_date: date,
+    registry_path: str | Path = DEFAULT_FORWARD_INPUT_SOURCE_REGISTRY,
     output: str | Path = DEFAULT_OUTPUT,
     input_path: str | Path | None = None,
     captured_at: datetime | None = None,
 ) -> dict[str, object]:
+    registry_file = Path(registry_path)
+    registry = load_structural_source_registry(registry_file)
     evidence = build_semiconductor_forward_input_evidence(
         claims,
+        registry,
         evaluation_date=evaluation_date,
     )
     captured = captured_at or datetime.now(UTC)
@@ -96,6 +115,9 @@ def capture_forward_input_evidence(
         shutil.rmtree(temporary)
     temporary.mkdir()
     try:
+        archived_registry = temporary / "source_registry.yaml"
+        shutil.copy2(registry_file, archived_registry)
+        registry_sha256 = _sha256_file(archived_registry)
         (temporary / "claims.json").write_text(
             json.dumps(
                 [_claim_payload(claim) for claim in evidence.claims],
@@ -116,6 +138,7 @@ def capture_forward_input_evidence(
             "claim_count": len(evidence.claims),
             "tickers": sorted({claim.ticker for claim in evidence.claims}),
             "input_path": str(Path(input_path).resolve()) if input_path else None,
+            "source_registry_sha256": registry_sha256,
             "numeric_forecast_enabled": False,
             "decision_score_enabled": False,
             "fair_value_estimate_enabled": False,
@@ -124,7 +147,12 @@ def capture_forward_input_evidence(
             "holdings_api_enabled": False,
             "balance_api_enabled": False,
             "order_api_enabled": False,
-            "files": ["claims.json", "block_coverage.csv", "issuer_coverage.csv"],
+            "files": [
+                "claims.json",
+                "block_coverage.csv",
+                "issuer_coverage.csv",
+                "source_registry.yaml",
+            ],
         }
         (temporary / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
@@ -145,6 +173,8 @@ def capture_forward_input_evidence(
         "claims_path": str((directory / "claims.json").resolve()),
         "block_coverage_path": str((directory / "block_coverage.csv").resolve()),
         "issuer_coverage_path": str((directory / "issuer_coverage.csv").resolve()),
+        "source_registry_path": str((directory / "source_registry.yaml").resolve()),
+        "source_registry_sha256": registry_sha256,
         "numeric_forecast_enabled": False,
         "decision_score_enabled": False,
         "fair_value_estimate_enabled": False,
@@ -174,6 +204,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--evaluation-date", type=_date_value, required=True)
+    parser.add_argument("--registry", type=Path, default=DEFAULT_FORWARD_INPUT_SOURCE_REGISTRY)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser
 
@@ -185,6 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         result = capture_forward_input_evidence(
             _load_claims(args.input),
             evaluation_date=args.evaluation_date,
+            registry_path=args.registry,
             output=args.output,
             input_path=args.input,
         )
