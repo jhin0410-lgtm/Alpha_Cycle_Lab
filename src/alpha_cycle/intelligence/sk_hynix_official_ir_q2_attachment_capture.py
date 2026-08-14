@@ -25,6 +25,7 @@ from urllib.request import Request, urlopen
 
 from pypdf import PdfReader
 
+from alpha_cycle.intelligence.sk_hynix_official_ir_board_api_capture import BoardRowSummary
 from alpha_cycle.intelligence.sk_hynix_official_ir_board_api_pipeline import (
     DEFAULT_BOARD_API_POINTER,
     OfficialIrBoardApiCapture,
@@ -180,7 +181,7 @@ def _evidence_payload(item: OfficialIrQ2AttachmentEvidence) -> dict[str, object]
     }
 
 
-def _only_q2_candidate(board: OfficialIrBoardApiCapture):
+def _only_q2_candidate(board: OfficialIrBoardApiCapture) -> BoardRowSummary:
     candidates = [item for item in board.rows if item.candidate_2026q2]
     if len(candidates) != 1:
         raise ValueError(
