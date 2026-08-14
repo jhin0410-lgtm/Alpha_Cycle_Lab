@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from alpha_cycle.intelligence import sk_hynix_official_ir_component_contract_diagnostic as diagnostic
+from alpha_cycle.intelligence import (
+    sk_hynix_official_ir_component_contract_diagnostic as diagnostic,
+)
 from alpha_cycle.intelligence.sk_hynix_official_ir_component_contract_diagnostic import (
     DEFAULT_COMPONENT_CONTRACT_POINTER,
     build_component_contract_diagnostic,
@@ -19,7 +21,18 @@ SOURCE_EVIDENCE_ID = "a" * 64
 OBSERVED_DATE = date(2026, 8, 15)
 SOURCE_URL = "https://www.skhynix.com/_nuxt/component.js"
 
-COMPONENT_BYTES = b'''name:"IR-EARNINGS",data:function(){return{board:{cdnPath:"https://issuer.example/web"}}},methods:{setBoard:function(){this.board.parameter.bcode=105;this.board.parameter.pageSize=100},queryBoardList:function(){var t=this;r.execute.get(this,"/performance/list",this.board.parameter,function(e){t.board.list=e.list;t.lastOne=e.list[0]})},queryBoardView:function(){r.execute.get(this,"/performance/detail",{seq:this.seq},function(e){return e})}},render:function(){return t.board.cdnPath+t.lastOne.fileUrl2+t.board.cdnPath+line.fileUrl3};var code={"\xec\x8b\xa4\xec\xa0\x81\xeb\xb0\x9c\xed\x91\x9c":105};'''
+COMPONENT_BYTES = (
+    'name:"IR-EARNINGS",data:function(){return{board:{'
+    'cdnPath:"https://issuer.example/web"}}},methods:{'
+    'setBoard:function(){this.board.parameter.bcode=105;'
+    'this.board.parameter.pageSize=100},queryBoardList:function(){'
+    'var t=this;r.execute.get(this,"/performance/list",this.board.parameter,'
+    'function(e){t.board.list=e.list;t.lastOne=e.list[0]})},'
+    'queryBoardView:function(){r.execute.get(this,"/performance/detail",'
+    '{seq:this.seq},function(e){return e})}},render:function(){return '
+    't.board.cdnPath+t.lastOne.fileUrl2+t.board.cdnPath+line.fileUrl3};'
+    'var code={"실적발표":105};'
+).encode("utf-8")
 
 
 def _patch_sources(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,18 +59,26 @@ def test_scan_component_contracts_extracts_exact_routes_and_file_bindings() -> N
         ("get", "/performance/detail"),
     }
     assert {item.value for item in bcodes} == {"105"}
-    assert {item.value for item in mappings} == {"\uc2e4\uc801\ubc1c\ud45c=105"}
+    assert {item.value for item in mappings} == {"실적발표=105"}
     assert {item.value for item in cdns} == {"https://issuer.example/web"}
     assert {item.value for item in bindings} == {
         "t.board.cdnPath+t.lastOne.fileUrl2",
         "t.board.cdnPath+line.fileUrl3",
     }
-    assert {item.value for item in windows} >= {"setBoard", "queryBoardList", "queryBoardView"}
+    assert {item.value for item in windows} >= {
+        "setBoard",
+        "queryBoardList",
+        "queryBoardView",
+    }
     assert all(item.component_name == "IR-EARNINGS" for item in execute)
 
 
 def test_identifier_only_text_never_becomes_execute_route() -> None:
-    data = b'''name:"IR",methods:{queryBoardList:function(){var attachmentId=row.attachmentId;var routeName="/performance/list";return routeName}}'''
+    data = (
+        'name:"IR",methods:{queryBoardList:function(){'
+        'var attachmentId=row.attachmentId;'
+        'var routeName="/performance/list";return routeName}}'
+    ).encode("utf-8")
     execute, bcodes, mappings, cdns, bindings, windows = scan_component_contracts(
         source_file="script.js",
         source_url=SOURCE_URL,
