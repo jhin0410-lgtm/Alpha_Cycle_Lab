@@ -50,6 +50,11 @@ _BASELINE_KINDS: dict[tuple[str, str, str], str] = {
     ): "reconciliation_artifact",
     (
         "000660",
+        "other_products_services",
+        "other_products_services_revenue_bridge",
+    ): "reconciliation_artifact",
+    (
+        "000660",
         "corporate_other",
         "company_to_memory_reconciliation",
     ): "reconciliation_artifact",
