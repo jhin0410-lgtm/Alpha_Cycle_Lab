@@ -1,26 +1,36 @@
 # SK hynix official IR board API capture
 
-This stage follows the verified SK hynix Earnings Release component contract.
+This stage follows the verified SK hynix issuer board contract and Earnings Release
+component contract.
 
-The archived issuer JavaScript already proves the following UI-FR-IR06 behavior:
+The archived issuer JavaScript proves the board flow in two separate layers.
 
-- board category (`bcode`) = `105` for `실적발표` / Earnings Release,
-- list route = `GET /board/list`,
-- page = `1`,
+The shared board implementation proves:
+
+- literal list route = `GET /board/list`,
+- board response fields include `cdnUrl`, `list`, and `total`, and
+- returned board rows carry attachment fields such as `fileUrl1..4`.
+
+The `UI-FR-IR06` Earnings Release component separately proves:
+
+- board category (`bcode`) = `105`,
+- checked-in category mapping `실적발표=105`,
 - page size = `200`,
-- language = `ENG` for the English page,
-- the board response supplies `cdnUrl`, `list`, and `total`,
-- Earnings Release PDF buttons are built from `board.cdnPath + fileUrl2`, and
-- additional issuer attachments can appear in `fileUrl1`, `fileUrl3`, and `fileUrl4`.
+- language selection = `KOR` / `ENG`, and
+- Earnings Release PDF buttons are built from `board.cdnPath + fileUrl2`.
+
+The live minified bundle does not attribute the shared `/board/list` helper call directly to
+`UI-FR-IR06`. The production-facing orchestration therefore requires both source-backed
+layers instead of inventing that component attribution.
 
 Those facts do **not** by themselves prove the effective browser Axios base URL. The
 capture therefore has a separate transport gate.
 
 ## Transport gate
 
-`sk_hynix_official_ir_board_api_capture.py` re-verifies the archived official page and
-issuer-controlled JavaScript bytes and accepts an API base only when an explicit literal
-assignment is present for one of:
+`sk_hynix_official_ir_board_api_pipeline.py` re-verifies the archived official page,
+issuer-controlled JavaScript, and component-contract artifact. It accepts an API base only
+when an explicit literal assignment is present for one of:
 
 - `browserBaseURL`
 - `browserBaseUrl`
