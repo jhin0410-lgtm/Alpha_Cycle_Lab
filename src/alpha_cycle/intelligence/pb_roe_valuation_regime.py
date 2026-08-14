@@ -297,7 +297,10 @@ def build_pb_roe_valuation_regime_evidence(
         "evaluation_date": evaluation_date.isoformat(),
         "valuation_snapshot_id": valuation_snapshot_id,
         "historical_pb_artifact_id": historical_pb.artifact_id,
-        "rows": [_serializable_row(raw) for raw in frame.to_dict(orient="records")],
+        "rows": [
+            _serializable_row(cast(dict[str, object], raw))
+            for raw in frame.to_dict(orient="records")
+        ],
     }
     evidence_id = hashlib.sha256(
         json.dumps(
