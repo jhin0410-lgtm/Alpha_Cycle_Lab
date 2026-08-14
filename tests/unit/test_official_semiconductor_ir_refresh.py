@@ -74,7 +74,7 @@ def _fake_collector_result(tmp_path: Path) -> dict[str, object]:
                         "source_url": "https://www.samsung.com/example",
                         "source_published_date": "2026-07-30",
                         "source_document_path": str(source),
-                        "parser_id": "samsung_earnings_presentation_2026q2_v1",
+                        "parser_id": "samsung_earnings_presentation_2026q2_v2",
                     }
                 ]
             }
@@ -87,6 +87,12 @@ def _fake_collector_result(tmp_path: Path) -> dict[str, object]:
         "baseline_fact_pack_path": str(baseline),
         "forward_input_claim_pack_path": str(forward),
     }
+
+
+def _fake_downstream_result(root: Path, name: str) -> dict[str, object]:
+    artifact = root / name
+    artifact.mkdir(parents=True)
+    return {"artifact_directory": str(artifact)}
 
 
 def test_refresh_builds_downstream_evidence_from_collected_document_only(
@@ -103,38 +109,88 @@ def test_refresh_builds_downstream_evidence_from_collected_document_only(
 
     def fake_baseline(rows, **kwargs):
         seen["baseline"] = rows
-        root = Path(kwargs["output"])
-        artifact = root / "baseline-artifact"
-        artifact.mkdir(parents=True)
-        return {"artifact_directory": str(artifact)}
+        return _fake_downstream_result(Path(kwargs["output"]), "baseline-artifact")
 
     def fake_forward(rows, **kwargs):
         seen["forward"] = rows
-        root = Path(kwargs["output"])
-        artifact = root / "forward-artifact"
-        artifact.mkdir(parents=True)
-        return {"artifact_directory": str(artifact)}
+        return _fake_downstream_result(Path(kwargs["output"]), "forward-artifact")
+
+    def fake_accounting(pointer, **kwargs):
+        seen["accounting_pointer"] = Path(pointer)
+        return _fake_downstream_result(Path(kwargs["output"]), "accounting-artifact")
 
     monkeypatch.setattr(refresh_cli, "capture_semiconductor_baseline_reconciliation", fake_baseline)
     monkeypatch.setattr(refresh_cli, "capture_forward_input_evidence", fake_forward)
+    monkeypatch.setattr(refresh_cli, "capture_semiconductor_accounting_identity", fake_accounting)
     result = refresh_cli.refresh_official_semiconductor_ir(
         evaluation_date=date(2026, 8, 14),
         output=tmp_path / "refresh",
         document_output=tmp_path / "documents",
         baseline_output=tmp_path / "baseline",
         forward_output=tmp_path / "forward",
+        accounting_output=tmp_path / "accounting",
     )
     assert result["status"] == "partial"
     assert result["selected_document_ids"] == ["samsung_005930_2026q2_earnings"]
     assert len(result["collected"]) == 1
     assert result["failed"] == []
+    assert result["downstream_failures"] == []
     assert result["unresolved"][0]["ticker"] == "000660"
     assert len(seen["baseline"]) == 1
     assert len(seen["forward"]) == 1
+    assert str(seen["accounting_pointer"]).endswith(
+        "latest_samsung_005930_2026q2_earnings.json"
+    )
+    assert result["accounting_identity_pointer"] is not None
     assert result["operating_assumptions_generated"] is False
     assert result["scenario_probabilities_enabled"] is False
     assert result["numeric_forecast_enabled"] is False
     assert result["decision_score_enabled"] is False
+
+
+def test_accounting_identity_failure_is_downstream_gap_not_source_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    collected = _fake_collector_result(tmp_path)
+    monkeypatch.setattr(
+        refresh_cli,
+        "capture_official_ir_document",
+        lambda *_args, **_kwargs: collected,
+    )
+    monkeypatch.setattr(
+        refresh_cli,
+        "capture_semiconductor_baseline_reconciliation",
+        lambda _rows, **kwargs: _fake_downstream_result(
+            Path(kwargs["output"]), "baseline-artifact"
+        ),
+    )
+    monkeypatch.setattr(
+        refresh_cli,
+        "capture_forward_input_evidence",
+        lambda _rows, **kwargs: _fake_downstream_result(
+            Path(kwargs["output"]), "forward-artifact"
+        ),
+    )
+    monkeypatch.setattr(
+        refresh_cli,
+        "capture_semiconductor_accounting_identity",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("identity drift")),
+    )
+    result = refresh_cli.refresh_official_semiconductor_ir(
+        evaluation_date=date(2026, 8, 14),
+        output=tmp_path / "refresh",
+        document_output=tmp_path / "documents",
+        baseline_output=tmp_path / "baseline",
+        forward_output=tmp_path / "forward",
+        accounting_output=tmp_path / "accounting",
+    )
+    assert result["status"] == "partial"
+    assert result["failed"] == []
+    assert result["downstream_failures"][0]["layer"] == "accounting_identity"
+    assert result["baseline_reconciliation_pointer"] is not None
+    assert result["forward_input_pointer"] is not None
+    assert result["accounting_identity_pointer"] is None
 
 
 def test_latest_document_collection_failure_does_not_fallback_or_publish_downstream(
@@ -152,9 +208,11 @@ def test_latest_document_collection_failure_does_not_fallback_or_publish_downstr
         document_output=tmp_path / "documents",
         baseline_output=tmp_path / "baseline",
         forward_output=tmp_path / "forward",
+        accounting_output=tmp_path / "accounting",
     )
     assert result["status"] == "unavailable"
     assert result["collected"] == []
     assert result["failed"][0]["document_id"] == "samsung_005930_2026q2_earnings"
     assert result["baseline_reconciliation_pointer"] is None
     assert result["forward_input_pointer"] is None
+    assert result["accounting_identity_pointer"] is None
