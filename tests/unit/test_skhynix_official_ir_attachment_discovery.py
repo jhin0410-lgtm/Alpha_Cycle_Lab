@@ -13,6 +13,7 @@ from alpha_cycle.intelligence.sk_hynix_official_ir_attachment_discovery import (
     capture_official_ir_attachment_discovery,
     extract_explicit_pdf_urls,
     extract_explicit_script_urls,
+    fingerprint_skhynix_2026q2_deck,
 )
 from alpha_cycle.intelligence.sk_hynix_official_ir_attachment_discovery_verifier import (
     load_official_ir_attachment_discovery_evidence,
@@ -51,6 +52,29 @@ def test_script_extraction_stays_on_issuer_controlled_resources() -> None:
         '<script src="/assets/not-javascript.css"></script>'
     ).encode()
     assert extract_explicit_script_urls(page) == (OFFICIAL_SCRIPT,)
+
+
+def test_pinned_q2_deck_fingerprint_requires_product_share_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pages = [""] * 19
+    pages[0] = "2026.07.29 Investor Relations FY2026 Earnings"
+    pages[8] = "Q3 B/G : Approx. 10% increase QoQ"
+    pages[9] = "Began HBM4 shipment in Q2"
+    pages[15] = (
+        "Revenue by Product Revenue by Application Revenue 79,319 "
+        "DRAM 73% NAND 27%"
+    )
+    monkeypatch.setattr(discovery, "extract_pdf_pages", lambda data: tuple(pages))
+    matched, page_count, reason = fingerprint_skhynix_2026q2_deck(b"%PDF-test")
+    assert matched is True
+    assert page_count == 19
+    assert "matched pinned" in reason
+
+    pages[15] = "Revenue by Product Revenue by Application Revenue 79,319 DRAM 73% NAND"
+    matched, _, reason = fingerprint_skhynix_2026q2_deck(b"%PDF-test")
+    assert matched is False
+    assert "27%" in reason
 
 
 def test_one_explicit_matching_official_pdf_resolves(
