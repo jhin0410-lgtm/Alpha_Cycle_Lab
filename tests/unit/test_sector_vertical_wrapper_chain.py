@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_package_routes_final_decision_builder_through_structural_wrapper() -> None:
+def test_package_routes_final_decision_builder_through_macro_liquidity_wrapper() -> None:
     package = Path("src/alpha_cycle/intelligence/__init__.py").read_text(encoding="utf-8")
+    macro = Path(
+        "src/alpha_cycle/intelligence/decision_macro_liquidity_calibrated.py"
+    ).read_text(encoding="utf-8")
     structural = Path(
         "src/alpha_cycle/intelligence/decision_semiconductor_structural_calibrated.py"
     ).read_text(encoding="utf-8")
@@ -21,10 +24,15 @@ def test_package_routes_final_decision_builder_through_structural_wrapper() -> N
     assert "decision_sector_vertical_calibrated" in package
     assert "decision_semiconductor_transmission_calibrated" in package
     assert "decision_semiconductor_structural_calibrated" in package
+    assert "decision_macro_liquidity_calibrated" in package
     assert (
-        "from alpha_cycle.intelligence.decision_semiconductor_structural_calibrated import"
+        "from alpha_cycle.intelligence.decision_macro_liquidity_calibrated import"
         in package
     )
+
+    assert "decision_semiconductor_structural_calibrated" in macro
+    assert "_build_structural_snapshot" in macro
+    assert "build_macro_liquidity_decision_evidence" in macro
 
     assert "decision_semiconductor_transmission_calibrated" in structural
     assert "_build_transmission_snapshot" in structural
