@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date
 from pathlib import Path
@@ -42,6 +43,22 @@ def _require_discovery_only(payload: dict[str, object], label: str) -> None:
             raise ValueError(f"{label} requires {flag}=false")
 
 
+def _sha_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _candidate_row(item) -> dict[str, object]:
+    return {
+        "url": item.url,
+        "discovered_from": list(item.discovered_from),
+        "pdf_sha256": item.pdf_sha256,
+        "pdf_bytes": item.pdf_bytes,
+        "page_count": item.page_count,
+        "fingerprint_match": item.fingerprint_match,
+        "fingerprint_reason": item.fingerprint_reason,
+    }
+
+
 def load_official_ir_attachment_discovery_evidence(
     pointer_path: str | Path,
     *,
@@ -68,6 +85,12 @@ def load_official_ir_attachment_discovery_evidence(
         page_bytes = (artifact_directory / "official_ir_page.html").read_bytes()
     except FileNotFoundError as exc:
         raise ValueError("SK hynix IR discovery archived page bytes are missing") from exc
+    page_sha = _sha_bytes(page_bytes)
+    if page_sha != str(pointer.get("ir_page_sha256", "")):
+        raise ValueError("SK hynix IR discovery page hash does not reproduce")
+    if page_sha != str(manifest.get("ir_page_sha256", "")):
+        raise ValueError("SK hynix IR discovery manifest page hash does not reproduce")
+
     script_urls = extract_explicit_script_urls(page_bytes)
     raw_scripts = manifest.get("scripts")
     if not isinstance(raw_scripts, list) or len(raw_scripts) != len(script_urls):
@@ -82,9 +105,14 @@ def load_official_ir_attachment_discovery_evidence(
         if Path(file_name).name != file_name or url not in script_urls:
             raise ValueError("SK hynix IR discovery script identity is unsafe")
         try:
-            script_bytes_by_url[url] = (artifact_directory / file_name).read_bytes()
+            data = (artifact_directory / file_name).read_bytes()
         except FileNotFoundError as exc:
             raise ValueError("SK hynix IR discovery archived script bytes are missing") from exc
+        if _sha_bytes(data) != str(row.get("sha256", "")):
+            raise ValueError("SK hynix IR discovery script hash does not reproduce")
+        script_bytes_by_url[url] = data
+    if set(script_bytes_by_url) != set(script_urls):
+        raise ValueError("SK hynix IR discovery script identities are duplicated or missing")
 
     explicit_pdf_urls = set(
         extract_explicit_pdf_urls(
@@ -109,9 +137,14 @@ def load_official_ir_attachment_discovery_evidence(
         if Path(file_name).name != file_name or url not in explicit_pdf_urls:
             raise ValueError("SK hynix IR discovery PDF identity is unsafe")
         try:
-            pdf_bytes_by_url[url] = (artifact_directory / file_name).read_bytes()
+            data = (artifact_directory / file_name).read_bytes()
         except FileNotFoundError as exc:
             raise ValueError("SK hynix IR discovery archived PDF bytes are missing") from exc
+        if _sha_bytes(data) != str(row.get("sha256", "")):
+            raise ValueError("SK hynix IR discovery PDF hash does not reproduce")
+        pdf_bytes_by_url[url] = data
+    if set(pdf_bytes_by_url) != explicit_pdf_urls:
+        raise ValueError("SK hynix IR discovery PDF identities are duplicated or missing")
 
     reconstructed = build_official_ir_attachment_discovery_evidence(
         observed_date=observed_date,
@@ -124,12 +157,22 @@ def load_official_ir_attachment_discovery_evidence(
         raise ValueError("SK hynix IR discovery evidence does not reproduce from source bytes")
     if str(manifest.get("evidence_id", "")) != persisted_id:
         raise ValueError("SK hynix IR discovery manifest evidence ID mismatch")
-    if reconstructed.resolved is not bool(pointer.get("resolved")):
+    if reconstructed.resolved != bool(pointer.get("resolved")):
         raise ValueError("SK hynix IR discovery resolved flag mismatch")
     if reconstructed.resolved_url != pointer.get("resolved_url"):
         raise ValueError("SK hynix IR discovery resolved URL mismatch")
     if reconstructed.resolved_pdf_sha256 != pointer.get("resolved_pdf_sha256"):
         raise ValueError("SK hynix IR discovery resolved PDF hash mismatch")
+    if reconstructed.resolved != bool(manifest.get("resolved")):
+        raise ValueError("SK hynix IR discovery manifest resolved flag mismatch")
+    if reconstructed.resolved_url != manifest.get("resolved_url"):
+        raise ValueError("SK hynix IR discovery manifest resolved URL mismatch")
+    if reconstructed.resolved_pdf_sha256 != manifest.get("resolved_pdf_sha256"):
+        raise ValueError("SK hynix IR discovery manifest resolved PDF hash mismatch")
+    raw_candidates = manifest.get("candidates")
+    expected_candidates = [_candidate_row(item) for item in reconstructed.candidates]
+    if raw_candidates != expected_candidates:
+        raise ValueError("SK hynix IR discovery persisted candidates do not reproduce")
     return reconstructed
 
 
