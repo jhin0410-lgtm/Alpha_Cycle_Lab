@@ -14,6 +14,7 @@ import pytest
         ("discover_skhynix_official_ir_attachment.ps1", False),
         ("report_skhynix_official_ir_runtime_routes.ps1", False),
         ("report_skhynix_official_ir_component_contracts.ps1", False),
+        ("capture_skhynix_official_ir_board_api.ps1", False),
     ],
 )
 def test_research_windows_scripts_prefer_project_venv_and_preflight_dependencies(
