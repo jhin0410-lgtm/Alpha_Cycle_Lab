@@ -40,6 +40,7 @@ alpha-cycle-kosis-semiconductor-sources = "alpha_cycle.kosis_semiconductor_sourc
 alpha-cycle-live = "alpha_cycle.live_pipeline_provenance_cli:main"
 alpha-cycle-macro-liquidity = "alpha_cycle.macro_liquidity_cli:main"
 alpha-cycle-resume = "alpha_cycle.resume_pipeline_provenance_cli:main"
+alpha-cycle-semiconductor-accounting-identity = "alpha_cycle.semiconductor_accounting_identity_cli:main"
 alpha-cycle-semiconductor-baseline-reconciliation = "alpha_cycle.semiconductor_baseline_reconciliation_cli:main"
 alpha-cycle-semiconductor-forward-input = "alpha_cycle.semiconductor_forward_input_cli:main"
 alpha-cycle-semiconductor-historical-official-ir = "alpha_cycle.semiconductor_historical_official_ir_cli:main"
