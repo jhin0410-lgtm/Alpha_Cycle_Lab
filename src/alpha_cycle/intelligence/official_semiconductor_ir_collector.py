@@ -261,12 +261,17 @@ def _forward_claim(
     }
 
 
+def _require_anchor(text: str, anchor: str, label: str) -> None:
+    if anchor.casefold() not in text.casefold():
+        raise ValueError(f"Samsung 2Q26 {label} anchor is missing")
+
+
 def parse_samsung_2026q2(
     spec: OfficialIrDocumentSpec,
     data: bytes,
     pages: tuple[str, ...],
 ) -> ParsedOfficialIrDocument:
-    if spec.parser_id != "samsung_earnings_presentation_2026q2_v1":
+    if spec.parser_id != "samsung_earnings_presentation_2026q2_v2":
         raise ValueError("Samsung 2Q26 parser received the wrong parser_id")
     if len(pages) != spec.expected_page_count:
         raise ValueError(
@@ -333,12 +338,20 @@ def parse_samsung_2026q2(
 
     memory_page = _normalized(pages[6])
     foundry_page = _normalized(pages[7])
-    if "Scaled up HBM4 sales".casefold() not in memory_page.casefold():
-        raise ValueError("Samsung 2Q26 HBM outlook anchor is missing")
-    if "Higher utilization, stronger advanced node demand".casefold() not in whole.casefold():
-        raise ValueError("Samsung 2Q26 foundry utilization anchor is missing")
-    if "2nm Gen 2 mobile ramp-up".casefold() not in foundry_page.casefold():
-        raise ValueError("Samsung 2Q26 foundry ramp anchor is missing")
+    sdc_page = _normalized(pages[8])
+    dx_page = _normalized(pages[9])
+    consumer_page = _normalized(pages[10])
+
+    _require_anchor(memory_page, "Scaled up HBM4 sales", "HBM outlook")
+    _require_anchor(whole, "Higher utilization, stronger advanced node demand", "foundry utilization")
+    _require_anchor(foundry_page, "2nm Gen 2 mobile ramp-up", "foundry ramp")
+    _require_anchor(foundry_page, "next-generation flagship SoC", "System LSI demand")
+    _require_anchor(dx_page, "flagship-centric sales acceleration", "DX smartphone mix")
+    _require_anchor(dx_page, "impact of rising costs", "DX component cost")
+    _require_anchor(consumer_page, "seasonal demand", "DX TV demand")
+    _require_anchor(sdc_page, "8.6G IT OLED", "SDC OLED volume")
+    _require_anchor(sdc_page, "new model demand", "SDC customer product cycle")
+    _require_anchor(consumer_page, "high-growth auto segments", "Harman auto demand")
 
     claims = (
         _forward_claim(
@@ -369,6 +382,76 @@ def parse_samsung_2026q2(
                 "Samsung outlined 2nm Gen 2 mobile and 4nm LPU/Base-Die ramps for H2 2026."
             ),
         ),
+        _forward_claim(
+            spec,
+            document_sha256,
+            block_id="ds_foundry_system_lsi",
+            metric_id="system_lsi_demand",
+            statement=(
+                "Samsung plans next-generation flagship SoC sales growth and expansion into "
+                "custom SoC, image-sensor, and power-IC applications in H2 2026."
+            ),
+        ),
+        _forward_claim(
+            spec,
+            document_sha256,
+            block_id="dx",
+            metric_id="smartphone_mix",
+            statement=(
+                "Samsung plans flagship-centric smartphone sales acceleration and a richer "
+                "premium mix across the Galaxy ecosystem in H2 2026."
+            ),
+        ),
+        _forward_claim(
+            spec,
+            document_sha256,
+            block_id="dx",
+            metric_id="component_cost",
+            statement=(
+                "Samsung identifies rising component costs as a profitability pressure and "
+                "plans efficiency actions to mitigate that cost burden in H2 2026."
+            ),
+        ),
+        _forward_claim(
+            spec,
+            document_sha256,
+            block_id="dx",
+            metric_id="tv_appliance_demand",
+            statement=(
+                "Samsung plans to capture seasonal TV demand and expand sales of AI-enabled "
+                "home-appliance products in H2 2026."
+            ),
+        ),
+        _forward_claim(
+            spec,
+            document_sha256,
+            block_id="sdc",
+            metric_id="oled_panel_volume",
+            statement=(
+                "Samsung Display plans timely mass production of its 8.6G IT OLED line and "
+                "expanded differentiated-product supply in H2 2026."
+            ),
+        ),
+        _forward_claim(
+            spec,
+            document_sha256,
+            block_id="sdc",
+            metric_id="customer_product_cycle",
+            statement=(
+                "Samsung Display expects new-model demand for premium mobile products to drive "
+                "its H2 2026 small-and-medium display product cycle."
+            ),
+        ),
+        _forward_claim(
+            spec,
+            document_sha256,
+            block_id="harman",
+            metric_id="auto_end_demand",
+            statement=(
+                "Harman plans to address demand in high-growth automotive segments including "
+                "central compute units in H2 2026."
+            ),
+        ),
     )
     return ParsedOfficialIrDocument(
         spec=spec,
@@ -385,7 +468,7 @@ def parse_official_ir_document(
     data: bytes,
 ) -> ParsedOfficialIrDocument:
     pages = extract_pdf_pages(data)
-    if spec.parser_id == "samsung_earnings_presentation_2026q2_v1":
+    if spec.parser_id == "samsung_earnings_presentation_2026q2_v2":
         return parse_samsung_2026q2(spec, data, pages)
     raise ValueError(f"Official IR parser is not implemented: {spec.parser_id}")
 
