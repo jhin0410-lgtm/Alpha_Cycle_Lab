@@ -10,6 +10,7 @@ The final package decision wrapper preserves the calibrated chain through
 ``decision_semiconductor_operating_assumption_calibrated``,
 ``decision_semiconductor_baseline_reconciliation_calibrated``,
 ``decision_semiconductor_accounting_identity_calibrated``,
+``decision_semiconductor_company_actual_calibrated``,
 ``decision_expectation_gap_calibrated``, ``decision_catalyst_horizon_calibrated``,
 and finally ``decision_scenario_expected_return_calibrated``. These
 evidence/readiness layers remain non-scoring: missing evidence is surfaced as a
