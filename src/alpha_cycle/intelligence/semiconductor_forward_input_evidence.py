@@ -1,9 +1,10 @@
 """Source-bounded forward-input evidence for issuer-specific semiconductor models.
 
-This layer is deliberately stricter than structural commentary. It records which
-baseline metrics and forward drivers are actually supported for each issuer model
-block and distinguishes qualitative evidence from numeric model inputs. Numeric
-forecast readiness is never inferred from historical correlations or field names.
+This layer records which baseline metrics and forward drivers are supported for each
+issuer model block. Source identity is never caller-declared: every claim must bind
+to the existing semiconductor structural-source registry, which fixes role, domain,
+and primary-source status. Qualitative evidence may improve descriptive coverage but
+cannot become a numeric model input.
 """
 
 from __future__ import annotations
@@ -12,28 +13,42 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import date
-from typing import cast
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pandas as pd
 
 from alpha_cycle.intelligence.semiconductor_forward_operating_model_contract import (
     SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS,
+    ForwardModelBlock,
+)
+from alpha_cycle.intelligence.semiconductor_structural_evidence import (
+    SemiconductorStructuralSource,
+    load_structural_source_registry,
 )
 
+DEFAULT_FORWARD_INPUT_SOURCE_REGISTRY = Path("config/semiconductor_structural_sources.yaml")
 _ALLOWED_CLAIM_TYPES = frozenset({"baseline", "forward_driver"})
 _ALLOWED_KINDS = frozenset({"qualitative", "numeric"})
-_ALLOWED_SOURCE_ROLES = frozenset(
+_DIRECT_FORWARD_SOURCE_ROLES = frozenset({"issuer_ir", "peer_ir", "customer_ir"})
+_ISSUER_SOURCE_IDS = {"000660": "sk_hynix_ir", "005930": "samsung_ir"}
+_PEER_MEMORY_DRIVER_METRICS = frozenset(
     {
-        "issuer_ir",
-        "peer_ir",
-        "customer_ir",
-        "government",
-        "exchange",
-        "official_statistics",
-        "certified_or_licensed_data",
+        "dram_bit_shipment_growth",
+        "dram_asp_change",
+        "dram_product_mix",
+        "hbm_volume_growth",
+        "hbm_generation_mix",
+        "hbm_capacity",
+        "hbm_yield",
+        "advanced_packaging_capacity",
+        "nand_bit_shipment_growth",
+        "nand_asp_change",
+        "enterprise_ssd_mix",
+        "inventory",
     }
 )
+_CUSTOMER_DRIVER_METRICS = frozenset({"hbm_volume_growth", "customer_qualification"})
 
 
 @dataclass(frozen=True)
@@ -49,6 +64,7 @@ class SemiconductorForwardInputClaim:
     unit: str | None
     period_start: date | None
     period_end: date | None
+    source_id: str
     source_role: str
     source_url: str
     source_published_date: date
@@ -57,6 +73,7 @@ class SemiconductorForwardInputClaim:
     source_vintage_certified: bool
     reuse_or_license_basis_documented: bool
     primary_source: bool
+    numeric_model_input_eligible: bool
     decision_score_enabled: bool = False
 
     def __post_init__(self) -> None:
@@ -70,8 +87,8 @@ class SemiconductorForwardInputClaim:
             raise ValueError("Forward-input claim_type is invalid")
         if self.evidence_kind not in _ALLOWED_KINDS:
             raise ValueError("Forward-input evidence_kind is invalid")
-        if self.source_role not in _ALLOWED_SOURCE_ROLES:
-            raise ValueError("Forward-input source_role is invalid")
+        if not self.source_id.strip() or not self.source_role.strip():
+            raise ValueError("Forward-input source identity cannot be blank")
         if not self.statement.strip() or not self.metric_id.strip():
             raise ValueError("Forward-input metric/statement cannot be blank")
         if not self.source_url.startswith("https://") or not urlparse(self.source_url).hostname:
@@ -83,16 +100,10 @@ class SemiconductorForwardInputClaim:
         if self.evidence_kind == "numeric":
             if self.numeric_value is None or not self.unit:
                 raise ValueError("Numeric forward-input evidence requires value and unit")
-            if not self.semantics_certified or not self.source_vintage_certified:
-                raise ValueError(
-                    "Numeric forward-input evidence requires certified semantics and source vintage"
-                )
-            if not self.primary_source and not self.reuse_or_license_basis_documented:
-                raise ValueError(
-                    "Non-primary numeric forward-input evidence requires documented reuse/license basis"
-                )
         elif self.numeric_value is not None:
             raise ValueError("Qualitative forward-input evidence cannot publish numeric_value")
+        if self.numeric_model_input_eligible and self.evidence_kind != "numeric":
+            raise ValueError("Only numeric evidence may be a numeric model input")
         if self.decision_score_enabled:
             raise ValueError("Forward-input evidence must remain non-scoring")
 
@@ -108,7 +119,9 @@ class SemiconductorForwardInputEvidence:
     decision_score_enabled: bool = False
 
     def __post_init__(self) -> None:
-        if len(self.evidence_id) != 64:
+        if len(self.evidence_id) != 64 or any(
+            char not in "0123456789abcdef" for char in self.evidence_id
+        ):
             raise ValueError("Forward-input evidence_id must be SHA-256")
         if not self.claims or self.block_coverage.empty or self.issuer_coverage.empty:
             raise ValueError("Forward-input evidence requires claims and coverage")
@@ -129,7 +142,7 @@ def _date_or_none(value: object) -> date | None:
     return date.fromisoformat(text) if text else None
 
 
-def _block_contract(ticker: str, block_id: str) -> object:
+def _block_contract(ticker: str, block_id: str) -> ForwardModelBlock:
     contract = SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS[ticker]
     for block in contract.blocks:
         if block.block_id == block_id:
@@ -137,8 +150,60 @@ def _block_contract(ticker: str, block_id: str) -> object:
     raise ValueError(f"Forward-input block is not registered: {ticker}/{block_id}")
 
 
+def _host_allowed(source: SemiconductorStructuralSource, url: str) -> bool:
+    host = (urlparse(url).hostname or "").casefold()
+    return bool(host) and any(
+        host == domain or host.endswith("." + domain) for domain in source.domains
+    )
+
+
+def _validate_source_metric_scope(
+    *,
+    ticker: str,
+    claim_type: str,
+    metric_id: str,
+    source: SemiconductorStructuralSource,
+) -> None:
+    if source.role not in _DIRECT_FORWARD_SOURCE_ROLES:
+        raise ValueError(
+            f"Source role cannot directly support issuer forward-input claims: {source.role}"
+        )
+    if source.role == "issuer_ir":
+        if source.source_id != _ISSUER_SOURCE_IDS[ticker]:
+            raise ValueError(
+                f"Issuer IR source does not belong to ticker {ticker}: {source.source_id}"
+            )
+        return
+    if claim_type != "forward_driver":
+        raise ValueError("Peer/customer IR cannot support issuer baseline metrics")
+    if source.role == "peer_ir" and metric_id not in _PEER_MEMORY_DRIVER_METRICS:
+        raise ValueError(f"Peer IR cannot support forward metric {metric_id}")
+    if source.role == "customer_ir" and metric_id not in _CUSTOMER_DRIVER_METRICS:
+        raise ValueError(f"Customer IR cannot support forward metric {metric_id}")
+
+
+def _numeric_model_input_eligible(
+    *,
+    ticker: str,
+    claim_type: str,
+    kind: str,
+    period_end: date | None,
+    source: SemiconductorStructuralSource,
+    semantics_certified: bool,
+    source_vintage_certified: bool,
+) -> bool:
+    if kind != "numeric" or source.source_id != _ISSUER_SOURCE_IDS[ticker]:
+        return False
+    if not semantics_certified or not source_vintage_certified or period_end is None:
+        return False
+    if claim_type == "baseline":
+        return period_end <= date.max
+    return period_end > date.min
+
+
 def validate_forward_input_claim(
     raw: dict[str, object],
+    registry: dict[str, SemiconductorStructuralSource],
     *,
     evaluation_date: date,
 ) -> SemiconductorForwardInputClaim:
@@ -150,9 +215,9 @@ def validate_forward_input_claim(
     claim_type = str(raw.get("claim_type", "")).strip()
     metric_id = str(raw.get("metric_id", "")).strip()
     if claim_type == "baseline":
-        allowed = set(cast(object, block).required_baseline_metrics)
+        allowed = set(block.required_baseline_metrics)
     elif claim_type == "forward_driver":
-        allowed = set(cast(object, block).required_forward_drivers)
+        allowed = set(block.required_forward_drivers)
     else:
         raise ValueError("Forward-input claim_type is invalid")
     if metric_id not in allowed:
@@ -160,11 +225,58 @@ def validate_forward_input_claim(
             f"Forward-input metric is outside issuer block contract: {ticker}/{block_id}/{metric_id}"
         )
 
+    source_id = str(raw.get("source_id", "")).strip()
+    if source_id not in registry:
+        raise ValueError(f"Unknown forward-input source_id: {source_id}")
+    source = registry[source_id]
+    source_url = str(raw.get("source_url", "")).strip()
+    if not source_url.startswith("https://") or not _host_allowed(source, source_url):
+        raise ValueError(f"Forward-input source URL is outside registered domains: {source_id}")
+    _validate_source_metric_scope(
+        ticker=ticker,
+        claim_type=claim_type,
+        metric_id=metric_id,
+        source=source,
+    )
+
     kind = str(raw.get("evidence_kind", "qualitative")).strip()
+    if kind not in _ALLOWED_KINDS:
+        raise ValueError("Forward-input evidence_kind is invalid")
     numeric_raw = raw.get("numeric_value")
     numeric_value = None if numeric_raw is None else float(str(numeric_raw))
     unit = str(raw.get("unit", "")).strip() or None
     published = date.fromisoformat(str(raw.get("source_published_date", "")))
+    period_start = _date_or_none(raw.get("period_start"))
+    period_end = _date_or_none(raw.get("period_end"))
+    semantics_certified = bool(raw.get("semantics_certified", False))
+    source_vintage_certified = bool(raw.get("source_vintage_certified", False))
+    reuse_documented = bool(raw.get("reuse_or_license_basis_documented", False))
+    if kind == "numeric" and (numeric_value is None or not unit):
+        raise ValueError("Numeric forward-input evidence requires value and unit")
+    if kind == "numeric" and not source.primary_source and not reuse_documented:
+        raise ValueError(
+            "Non-primary numeric forward-input evidence requires documented reuse/license basis"
+        )
+    if kind == "qualitative" and numeric_value is not None:
+        raise ValueError("Qualitative forward-input evidence cannot publish numeric_value")
+
+    model_input_eligible = _numeric_model_input_eligible(
+        ticker=ticker,
+        claim_type=claim_type,
+        kind=kind,
+        period_end=period_end,
+        source=source,
+        semantics_certified=semantics_certified,
+        source_vintage_certified=source_vintage_certified,
+    )
+    if model_input_eligible:
+        if claim_type == "baseline" and (period_end is None or period_end > evaluation_date):
+            model_input_eligible = False
+        if claim_type == "forward_driver" and (
+            period_end is None or period_end <= evaluation_date
+        ):
+            model_input_eligible = False
+
     payload: dict[str, object] = {
         "ticker": ticker,
         "block_id": block_id,
@@ -174,18 +286,18 @@ def validate_forward_input_claim(
         "statement": str(raw.get("statement", "")).strip(),
         "numeric_value": numeric_value,
         "unit": unit,
-        "period_start": str(raw.get("period_start", "")).strip() or None,
-        "period_end": str(raw.get("period_end", "")).strip() or None,
-        "source_role": str(raw.get("source_role", "")).strip(),
-        "source_url": str(raw.get("source_url", "")).strip(),
+        "period_start": period_start.isoformat() if period_start else None,
+        "period_end": period_end.isoformat() if period_end else None,
+        "source_id": source.source_id,
+        "source_role": source.role,
+        "source_url": source_url,
         "source_published_date": published.isoformat(),
         "evaluation_date": evaluation_date.isoformat(),
-        "semantics_certified": bool(raw.get("semantics_certified", False)),
-        "source_vintage_certified": bool(raw.get("source_vintage_certified", False)),
-        "reuse_or_license_basis_documented": bool(
-            raw.get("reuse_or_license_basis_documented", False)
-        ),
-        "primary_source": bool(raw.get("primary_source", False)),
+        "semantics_certified": semantics_certified,
+        "source_vintage_certified": source_vintage_certified,
+        "reuse_or_license_basis_documented": reuse_documented,
+        "primary_source": source.primary_source,
+        "numeric_model_input_eligible": model_input_eligible,
         "decision_score_enabled": False,
     }
     return SemiconductorForwardInputClaim(
@@ -198,21 +310,25 @@ def validate_forward_input_claim(
         statement=str(payload["statement"]),
         numeric_value=numeric_value,
         unit=unit,
-        period_start=_date_or_none(payload["period_start"]),
-        period_end=_date_or_none(payload["period_end"]),
-        source_role=str(payload["source_role"]),
-        source_url=str(payload["source_url"]),
+        period_start=period_start,
+        period_end=period_end,
+        source_id=source.source_id,
+        source_role=source.role,
+        source_url=source_url,
         source_published_date=published,
         evaluation_date=evaluation_date,
-        semantics_certified=bool(payload["semantics_certified"]),
-        source_vintage_certified=bool(payload["source_vintage_certified"]),
-        reuse_or_license_basis_documented=bool(payload["reuse_or_license_basis_documented"]),
-        primary_source=bool(payload["primary_source"]),
+        semantics_certified=semantics_certified,
+        source_vintage_certified=source_vintage_certified,
+        reuse_or_license_basis_documented=reuse_documented,
+        primary_source=source.primary_source,
+        numeric_model_input_eligible=model_input_eligible,
         decision_score_enabled=False,
     )
 
 
-def _coverage(claims: tuple[SemiconductorForwardInputClaim, ...]) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _coverage(
+    claims: tuple[SemiconductorForwardInputClaim, ...],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     block_rows: list[dict[str, object]] = []
     for ticker, contract in SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS.items():
         ticker_claims = [claim for claim in claims if claim.ticker == ticker]
@@ -224,28 +340,38 @@ def _coverage(claims: tuple[SemiconductorForwardInputClaim, ...]) -> tuple[pd.Da
             driver_seen = {
                 claim.metric_id for claim in block_claims if claim.claim_type == "forward_driver"
             }
+            numeric_baseline_seen = {
+                claim.metric_id
+                for claim in block_claims
+                if claim.claim_type == "baseline" and claim.numeric_model_input_eligible
+            }
             numeric_driver_seen = {
                 claim.metric_id
                 for claim in block_claims
-                if claim.claim_type == "forward_driver" and claim.evidence_kind == "numeric"
+                if claim.claim_type == "forward_driver" and claim.numeric_model_input_eligible
             }
             required_baselines = set(block.required_baseline_metrics)
             required_drivers = set(block.required_forward_drivers)
+            descriptive_baseline_complete = required_baselines.issubset(baseline_seen)
+            descriptive_driver_complete = required_drivers.issubset(driver_seen)
+            numeric_baseline_complete = required_baselines.issubset(numeric_baseline_seen)
+            numeric_driver_complete = required_drivers.issubset(numeric_driver_seen)
             block_rows.append(
                 {
                     "ticker": ticker,
                     "block_id": block.block_id,
                     "required_baseline_count": len(required_baselines),
                     "covered_baseline_count": len(required_baselines & baseline_seen),
+                    "numeric_baseline_count": len(required_baselines & numeric_baseline_seen),
                     "required_forward_driver_count": len(required_drivers),
                     "covered_forward_driver_count": len(required_drivers & driver_seen),
                     "numeric_forward_driver_count": len(required_drivers & numeric_driver_seen),
-                    "baseline_complete": required_baselines.issubset(baseline_seen),
-                    "descriptive_driver_complete": required_drivers.issubset(driver_seen),
-                    "numeric_driver_complete": required_drivers.issubset(numeric_driver_seen),
+                    "baseline_complete": descriptive_baseline_complete,
+                    "numeric_baseline_complete": numeric_baseline_complete,
+                    "descriptive_driver_complete": descriptive_driver_complete,
+                    "numeric_driver_complete": numeric_driver_complete,
                     "numeric_model_input_ready": (
-                        required_baselines.issubset(baseline_seen)
-                        and required_drivers.issubset(numeric_driver_seen)
+                        numeric_baseline_complete and numeric_driver_complete
                     ),
                     "decision_score_enabled": False,
                 }
@@ -261,7 +387,10 @@ def _coverage(claims: tuple[SemiconductorForwardInputClaim, ...]) -> tuple[pd.Da
                 "ticker": str(ticker),
                 "required_block_count": required_blocks,
                 "descriptive_ready_block_count": int(
-                    group["descriptive_driver_complete"].astype(bool).sum()
+                    (
+                        group["baseline_complete"].astype(bool)
+                        & group["descriptive_driver_complete"].astype(bool)
+                    ).sum()
                 ),
                 "numeric_input_ready_block_count": int(
                     group["numeric_model_input_ready"].astype(bool).sum()
@@ -283,11 +412,20 @@ def _coverage(claims: tuple[SemiconductorForwardInputClaim, ...]) -> tuple[pd.Da
 
 def build_semiconductor_forward_input_evidence(
     raw_claims: list[dict[str, object]],
+    registry: dict[str, SemiconductorStructuralSource] | None = None,
     *,
     evaluation_date: date,
 ) -> SemiconductorForwardInputEvidence:
+    source_registry = registry or load_structural_source_registry(
+        DEFAULT_FORWARD_INPUT_SOURCE_REGISTRY
+    )
     claims = tuple(
-        validate_forward_input_claim(raw, evaluation_date=evaluation_date) for raw in raw_claims
+        validate_forward_input_claim(
+            raw,
+            source_registry,
+            evaluation_date=evaluation_date,
+        )
+        for raw in raw_claims
     )
     if not claims:
         raise ValueError("Forward-input evidence requires at least one claim")
@@ -315,6 +453,7 @@ def build_semiconductor_forward_input_evidence(
 
 
 __all__ = [
+    "DEFAULT_FORWARD_INPUT_SOURCE_REGISTRY",
     "SemiconductorForwardInputClaim",
     "SemiconductorForwardInputEvidence",
     "build_semiconductor_forward_input_evidence",
