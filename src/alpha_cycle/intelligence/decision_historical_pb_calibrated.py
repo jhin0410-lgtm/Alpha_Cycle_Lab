@@ -22,6 +22,12 @@ from alpha_cycle.intelligence.historical_pb_decision_evidence import (
     load_historical_pb_decision_evidence,
     sync_record_historical_pb_fields,
 )
+from alpha_cycle.intelligence.pb_roe_valuation_regime import (
+    append_pb_roe_regime_report,
+    attach_pb_roe_regime_to_scorecards,
+    build_pb_roe_valuation_regime_evidence,
+    sync_record_pb_roe_regime_fields,
+)
 
 DEFAULT_HISTORICAL_PB_POINTER = Path(
     "data/private/live-research/historical-pb-evidence/"
@@ -166,14 +172,47 @@ def build_investment_decision_snapshot(
     records = sync_record_historical_pb_fields(snapshot.decision_records, scorecards)
     base_report = _reconcile_report_gaps(snapshot.report_markdown, evidence)
     report = append_historical_pb_report(base_report, evidence)
+    warnings = list(snapshot.warnings)
+
+    regime_evidence = None
+    if snapshot.valuation_snapshot_id is None:
+        warnings.append("pb_roe_regime_unavailable:valuation_snapshot_missing")
+    else:
+        try:
+            regime_evidence = build_pb_roe_valuation_regime_evidence(
+                snapshot.financial_history,
+                evidence,
+                evaluation_date=snapshot.evaluation_date,
+                valuation_snapshot_id=snapshot.valuation_snapshot_id,
+            )
+        except (TypeError, ValueError) as exc:
+            warnings.append(f"pb_roe_regime_unavailable:{type(exc).__name__}")
+
+    if regime_evidence is not None:
+        scorecards = attach_pb_roe_regime_to_scorecards(scorecards, regime_evidence)
+        records = sync_record_pb_roe_regime_fields(records, scorecards)
+        report = append_pb_roe_regime_report(report, regime_evidence)
+        available = int(
+            regime_evidence.rows["regime_evidence_available"].astype(bool).sum()
+        )
+        warnings.extend(
+            [
+                f"pb_roe_regime_evidence:{regime_evidence.evidence_id[:12]}",
+                f"pb_roe_regime_available:{available}/{len(regime_evidence.rows)}",
+                "pb_roe_regime_descriptive_non_scoring",
+                "pb_roe_regime_no_forward_roe_or_cost_of_equity",
+            ]
+        )
+
     usable = int(evidence.symbols["current_observational_band_usable"].astype(bool).sum())
-    warnings = [
-        *snapshot.warnings,
-        f"historical_pb_evidence:{evidence.artifact_id[:12]}",
-        f"historical_pb_current_usable:{usable}/{len(evidence.symbols)}",
-        "historical_pb_own_history_observational_non_scoring",
-        "historical_pb_historical_vintage_not_certified",
-    ]
+    warnings.extend(
+        [
+            f"historical_pb_evidence:{evidence.artifact_id[:12]}",
+            f"historical_pb_current_usable:{usable}/{len(evidence.symbols)}",
+            "historical_pb_own_history_observational_non_scoring",
+            "historical_pb_historical_vintage_not_certified",
+        ]
+    )
     return replace(
         snapshot,
         scorecards=scorecards,
