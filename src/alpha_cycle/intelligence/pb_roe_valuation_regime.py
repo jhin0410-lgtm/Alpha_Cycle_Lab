@@ -57,6 +57,16 @@ class PbRoeValuationRegimeEvidence:
             raise ValueError("P/B-ROE backtest eligibility must remain disabled")
 
 
+def _finite_float(value: object, field: str) -> float:
+    try:
+        number = float(str(value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"P/B-ROE {field} must be numeric") from exc
+    if not np.isfinite(number):
+        raise ValueError(f"P/B-ROE {field} must be finite")
+    return number
+
+
 def _ticker_series(values: pd.Series) -> pd.Series:
     normalized = values.astype("string").str.strip().str.zfill(6)
     if normalized.isna().any() or (~normalized.str.fullmatch(r"[0-9]{6}")).any():
@@ -91,7 +101,9 @@ def _normalize_financial_history(
         raise ValueError(f"P/B-ROE financial history missing columns: {sorted(missing)}")
     result = financial_history.copy()
     result["ticker"] = _ticker_series(result["ticker"])
-    result["business_year"] = pd.to_numeric(result["business_year"], errors="raise").astype(int)
+    result["business_year"] = pd.to_numeric(
+        result["business_year"], errors="raise"
+    ).astype(int)
     result["period_label"] = result["period_label"].astype("string").str.strip()
     result["period_end"] = pd.to_datetime(result["period_end"], errors="raise")
     result["available_date"] = pd.to_datetime(result["available_date"], errors="raise")
@@ -128,7 +140,9 @@ def _equity_for_period(
 
 def _quarter_sequence(window: pd.DataFrame) -> list[int]:
     return [
-        int(raw["business_year"]) * 4 + _QUARTER_NUMBER[str(raw["period_label"])] - 1
+        int(str(raw["business_year"])) * 4
+        + _QUARTER_NUMBER[str(raw["period_label"])]
+        - 1
         for raw in window.to_dict(orient="records")
     ]
 
@@ -155,7 +169,10 @@ def _ttm_roe_history(
     for end_index in range(3, len(quarterly)):
         window = quarterly.iloc[end_index - 3 : end_index + 1].copy()
         sequence = _quarter_sequence(window)
-        if any(right - left != 1 for left, right in zip(sequence, sequence[1:], strict=True)):
+        if any(
+            right - left != 1
+            for left, right in zip(sequence, sequence[1:], strict=False)
+        ):
             continue
         end_period = cast(pd.Timestamp, window["period_end"].iloc[-1])
         start_period = end_period - pd.DateOffset(years=1)
@@ -164,11 +181,14 @@ def _ttm_roe_history(
         end_equity = _equity_for_period(equity_rows, end_period, as_of)
         if start_equity is None or end_equity is None:
             continue
-        ttm_net_income = float(pd.to_numeric(window["net_income"], errors="raise").sum())
-        beginning_equity = float(start_equity["equity"])
-        ending_equity = float(end_equity["equity"])
+        ttm_net_income = _finite_float(
+            pd.to_numeric(window["net_income"], errors="raise").sum(),
+            "TTM net income",
+        )
+        beginning_equity = _finite_float(start_equity["equity"], "beginning equity")
+        ending_equity = _finite_float(end_equity["equity"], "ending equity")
         average_equity = (beginning_equity + ending_equity) / 2.0
-        if not np.isfinite(ttm_net_income) or average_equity <= 0:
+        if average_equity <= 0:
             continue
         observations.append(
             {
@@ -230,18 +250,20 @@ def build_pb_roe_valuation_regime_evidence(
         ticker = str(pb_raw["ticker"]).zfill(6)
         roe_history = _ttm_roe_history(normalized, ticker)
         usable_pb = bool(pb_raw.get("current_observational_band_usable"))
+        pb_latest = _finite_float(pb_raw["latest_pb"], "latest P/B")
+        pb_median = _finite_float(pb_raw["pb_median"], "median P/B")
+        pb_percentile = _finite_float(
+            pb_raw["latest_pb_percentile"], "P/B percentile"
+        )
         base: dict[str, object] = {
             "ticker": ticker,
             "historical_pb_artifact_id": historical_pb.artifact_id,
             "valuation_snapshot_id": valuation_snapshot_id,
-            "pb_latest": float(pb_raw["latest_pb"]),
-            "pb_median": float(pb_raw["pb_median"]),
-            "pb_percentile": float(pb_raw["latest_pb_percentile"]),
+            "pb_latest": pb_latest,
+            "pb_median": pb_median,
+            "pb_percentile": pb_percentile,
             "pb_current_usable": usable_pb,
-            "pb_premium_to_median_pct": (
-                float(pb_raw["latest_pb"]) / float(pb_raw["pb_median"]) - 1.0
-            )
-            * 100.0,
+            "pb_premium_to_median_pct": (pb_latest / pb_median - 1.0) * 100.0,
             "decision_score_enabled": False,
             "fair_value_estimate_enabled": False,
             "target_price_enabled": False,
@@ -258,7 +280,7 @@ def build_pb_roe_valuation_regime_evidence(
             )
             continue
         current = roe_history.iloc[-1]
-        current_roe = float(current["ttm_roe"])
+        current_roe = _finite_float(current["ttm_roe"], "current TTM ROE")
         roe_values = pd.to_numeric(roe_history["ttm_roe"], errors="raise")
         roe_percentile = _percentile(roe_values, current_roe)
         roe_available_date = cast(pd.Timestamp, current["ttm_available_date"])
@@ -266,20 +288,21 @@ def build_pb_roe_valuation_regime_evidence(
             {
                 **base,
                 "regime_evidence_available": usable_pb,
-                "regime_status": "descriptive_non_scoring" if usable_pb else "pb_unavailable",
+                "regime_status": (
+                    "descriptive_non_scoring" if usable_pb else "pb_unavailable"
+                ),
                 "ttm_roe": current_roe,
                 "ttm_roe_percentile": roe_percentile,
-                "ttm_roe_p25": float(roe_values.quantile(0.25)),
-                "ttm_roe_median": float(roe_values.median()),
-                "ttm_roe_p75": float(roe_values.quantile(0.75)),
+                "ttm_roe_p25": _finite_float(roe_values.quantile(0.25), "ROE P25"),
+                "ttm_roe_median": _finite_float(roe_values.median(), "ROE median"),
+                "ttm_roe_p75": _finite_float(roe_values.quantile(0.75), "ROE P75"),
                 "ttm_roe_observation_count": int(len(roe_values)),
                 "ttm_period_end": cast(pd.Timestamp, current["ttm_period_end"]).date(),
                 "ttm_available_date": roe_available_date.date(),
                 "ttm_roe_lag_days": int(
                     (evaluation_date - roe_available_date.date()).days
                 ),
-                "pb_minus_roe_percentile_pp": float(pb_raw["latest_pb_percentile"])
-                - roe_percentile,
+                "pb_minus_roe_percentile_pp": pb_percentile - roe_percentile,
             }
         )
     frame = pd.DataFrame(rows).sort_values("ticker", kind="stable").reset_index(drop=True)
@@ -389,23 +412,24 @@ def append_pb_roe_regime_report(
         "|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for raw in evidence.rows.to_dict(orient="records"):
-        if not bool(raw.get("regime_evidence_available")) or pd.isna(raw.get("ttm_roe")):
+        current_roe = raw.get("ttm_roe")
+        if not bool(raw.get("regime_evidence_available")) or pd.isna(current_roe):
             lines.append(
-                f"| {raw['ticker']} | {float(raw['pb_latest']):.2f}x | "
-                f"{float(raw['pb_percentile']):.1f}% | "
-                f"{float(raw['pb_premium_to_median_pct']):+.1f}% | N/A | N/A | "
-                f"{int(raw.get('ttm_roe_observation_count', 0))} | N/A | N/A | "
-                f"{raw['regime_status']} |"
+                f"| {raw['ticker']} | {_finite_float(raw['pb_latest'], 'report P/B'):.2f}x | "
+                f"{_finite_float(raw['pb_percentile'], 'report P/B percentile'):.1f}% | "
+                f"{_finite_float(raw['pb_premium_to_median_pct'], 'report P/B premium'):+.1f}% | "
+                f"N/A | N/A | {int(raw.get('ttm_roe_observation_count', 0))} | "
+                f"N/A | N/A | {raw['regime_status']} |"
             )
             continue
         lines.append(
-            f"| {raw['ticker']} | {float(raw['pb_latest']):.2f}x | "
-            f"{float(raw['pb_percentile']):.1f}% | "
-            f"{float(raw['pb_premium_to_median_pct']):+.1f}% | "
-            f"{float(raw['ttm_roe']) * 100.0:.1f}% | "
-            f"{float(raw['ttm_roe_percentile']):.1f}% | "
-            f"{int(raw['ttm_roe_observation_count'])} | "
-            f"{float(raw['pb_minus_roe_percentile_pp']):+.1f}%p | "
+            f"| {raw['ticker']} | {_finite_float(raw['pb_latest'], 'report P/B'):.2f}x | "
+            f"{_finite_float(raw['pb_percentile'], 'report P/B percentile'):.1f}% | "
+            f"{_finite_float(raw['pb_premium_to_median_pct'], 'report P/B premium'):+.1f}% | "
+            f"{_finite_float(current_roe, 'report TTM ROE') * 100.0:.1f}% | "
+            f"{_finite_float(raw['ttm_roe_percentile'], 'report ROE percentile'):.1f}% | "
+            f"{int(str(raw['ttm_roe_observation_count']))} | "
+            f"{_finite_float(raw['pb_minus_roe_percentile_pp'], 'report percentile gap'):+.1f}%p | "
             f"{raw['ttm_period_end']} | {raw['regime_status']} |"
         )
     return "\n".join(lines).rstrip() + "\n"
