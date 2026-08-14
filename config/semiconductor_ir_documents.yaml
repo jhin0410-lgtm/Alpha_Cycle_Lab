@@ -1,0 +1,33 @@
+schema_version: 1
+issuers:
+  "005930":
+    issuer_name: Samsung Electronics
+    documents:
+      samsung_005930_2026q2_earnings:
+        source_id: samsung_ir
+        document_role: earnings_presentation
+        content_type: pdf
+        source_url: https://images.samsung.com/is/content/samsung/assets/global/ir/docs/2026_2Q_conference_eng.pdf
+        source_published_date: 2026-07-30
+        period_start: 2026-04-01
+        period_end: 2026-06-30
+        parser_id: samsung_earnings_presentation_2026q2_v1
+        expected_page_count: 16
+        required_identity_anchors:
+          - 2Q 2026 Earnings Call
+          - Appendix 2: Results by Business Segment
+        baseline_fact_scope:
+          - dx
+          - ds_memory
+          - sdc
+          - harman
+        forward_claim_scope:
+          - ds_memory
+          - ds_foundry_system_lsi
+
+  "000660":
+    issuer_name: SK hynix
+    documents: {}
+    unresolved_latest_official_document_reason: >-
+      No 2Q26 official earnings presentation document URL is registered yet.
+      Do not substitute secondary reporting or infer an unverified URL.
