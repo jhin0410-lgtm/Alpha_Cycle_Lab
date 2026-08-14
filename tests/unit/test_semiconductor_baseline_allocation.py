@@ -73,8 +73,10 @@ def _verified_ids() -> set[str]:
         _id("company_revenue"),
         _id("dram_share"),
         _id("nand_share"),
+        _id("other_share"),
         _id("dram_method_evidence"),
         _id("nand_method_evidence"),
+        _id("other_method_evidence"),
     }
 
 
@@ -114,6 +116,17 @@ def _ready_methods() -> tuple[BaselineAllocationMethod, BaselineAllocationMethod
         verified_evidence_ids=verified,
     )
     return dram, nand
+
+
+def _other_method() -> BaselineAllocationMethod:
+    return validate_baseline_allocation_method(
+        _method_raw(
+            "other_products_services",
+            "other_products_services_revenue_bridge",
+            "other",
+        ),
+        verified_evidence_ids=_verified_ids(),
+    )
 
 
 def test_derived_revenue_is_explicitly_not_a_source_fact() -> None:
@@ -230,7 +243,7 @@ def test_v1_refuses_profitability_and_non_additive_hbm_allocation() -> None:
         )
 
 
-def test_ready_dram_and_nand_revenue_allocations_reconcile_to_company_total() -> None:
+def test_dram_and_nand_only_never_certify_company_revenue_without_other_block() -> None:
     company, dram_share, nand_share = _ready_inputs()
     dram_method, nand_method = _ready_methods()
     dram = build_direct_share_revenue_allocation(
@@ -250,15 +263,68 @@ def test_ready_dram_and_nand_revenue_allocations_reconcile_to_company_total() ->
         reported_company_revenue=company,
     )
 
-    assert reconciliation.required_revenue_blocks == ("dram_total", "nand_and_solutions")
-    assert reconciliation.missing_revenue_blocks == ()
+    assert reconciliation.required_revenue_blocks == (
+        "dram_total",
+        "nand_and_solutions",
+        "other_products_services",
+    )
+    assert reconciliation.allocated_revenue_blocks == ("dram_total", "nand_and_solutions")
+    assert reconciliation.missing_revenue_blocks == ("other_products_services",)
     assert reconciliation.allocated_revenue_total == pytest.approx(100.0)
     assert reconciliation.reconciliation_delta == pytest.approx(0.0)
-    assert reconciliation.revenue_reconciliation_certified is True
-    assert reconciliation.revenue_model_input_ready is True
+    assert reconciliation.revenue_reconciliation_certified is False
+    assert reconciliation.revenue_model_input_ready is False
     assert reconciliation.profitability_baseline_certified is False
     assert reconciliation.full_baseline_certified is False
     assert reconciliation.residual_derivation_enabled is False
+
+
+def test_all_three_explicit_revenue_blocks_can_reconcile_company_total() -> None:
+    verified = _verified_ids()
+    company = validate_source_bound_allocation_input(
+        _input_raw("reported_company_revenue", 100.0, "KRW_trillion", "company_revenue"),
+        verified_evidence_ids=verified,
+    )
+    dram_share = validate_source_bound_allocation_input(
+        _input_raw("dram_revenue_share", 60.0, "percent", "dram_share"),
+        verified_evidence_ids=verified,
+    )
+    nand_share = validate_source_bound_allocation_input(
+        _input_raw("nand_revenue_share", 30.0, "percent", "nand_share"),
+        verified_evidence_ids=verified,
+    )
+    other_share = validate_source_bound_allocation_input(
+        _input_raw("other_products_services_revenue_share", 10.0, "percent", "other_share"),
+        verified_evidence_ids=verified,
+    )
+    dram_method, nand_method = _ready_methods()
+    allocations = (
+        build_direct_share_revenue_allocation(
+            total_input=company,
+            share_input=dram_share,
+            method=dram_method,
+        ),
+        build_direct_share_revenue_allocation(
+            total_input=company,
+            share_input=nand_share,
+            method=nand_method,
+        ),
+        build_direct_share_revenue_allocation(
+            total_input=company,
+            share_input=other_share,
+            method=_other_method(),
+        ),
+    )
+    reconciliation = reconcile_company_revenue(
+        ticker="000660",
+        allocations=allocations,
+        reported_company_revenue=company,
+    )
+    assert reconciliation.missing_revenue_blocks == ()
+    assert reconciliation.allocated_revenue_total == pytest.approx(100.0)
+    assert reconciliation.revenue_reconciliation_certified is True
+    assert reconciliation.revenue_model_input_ready is True
+    assert reconciliation.full_baseline_certified is False
     assert reconciliation.numeric_forecast_enabled is False
     assert reconciliation.decision_score_enabled is False
 
@@ -295,9 +361,13 @@ def test_company_reconciliation_mismatch_or_missing_block_remains_blocked() -> N
 
     assert mismatch.allocated_revenue_total == pytest.approx(90.0)
     assert mismatch.reconciliation_delta == pytest.approx(-10.0)
+    assert mismatch.missing_revenue_blocks == ("other_products_services",)
     assert mismatch.revenue_reconciliation_certified is False
     assert mismatch.revenue_model_input_ready is False
-    assert missing.missing_revenue_blocks == ("nand_and_solutions",)
+    assert missing.missing_revenue_blocks == (
+        "nand_and_solutions",
+        "other_products_services",
+    )
     assert missing.revenue_reconciliation_certified is False
 
 

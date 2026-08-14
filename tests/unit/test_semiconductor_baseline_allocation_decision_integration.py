@@ -45,12 +45,12 @@ def test_unavailable_allocation_is_explicit_and_does_not_touch_direct_baseline()
     assert bool(row["semiconductor_baseline_allocation_decision_score_enabled"]) is False
 
 
-def test_certified_derived_revenue_does_not_unlock_expectation_gap_baseline_gate() -> None:
+def test_even_complete_three_block_derived_revenue_cannot_unlock_expectation_gap() -> None:
     attached = _attach(
         _scorecard(),
         evidence_id="a" * 64,
-        required_block_count=2,
-        allocated_block_count=2,
+        required_block_count=3,
+        allocated_block_count=3,
         missing_block_count=0,
         reconciliation_delta=0.0,
         revenue_reconciliation_certified=True,

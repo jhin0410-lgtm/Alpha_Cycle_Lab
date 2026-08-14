@@ -22,6 +22,7 @@ EVALUATION_DATE = date(2026, 8, 14)
 PERIOD_START = date(2026, 4, 1)
 PERIOD_END = date(2026, 6, 30)
 RESOLVER_ID = "test_skhynix_2026q2_official_numeric_v1"
+CALIBRATION_ID = hashlib.sha256(b"historical-method-calibration").hexdigest()
 
 
 def _id(label: str) -> str:
@@ -69,6 +70,7 @@ def _resolver(
             _input("dram_revenue_share", 70.0, "percent", _id("dram_share")),
             _input("nand_revenue_share", 30.0, "percent", _id("nand_share")),
         ),
+        method_support_evidence_ids=(CALIBRATION_ID,),
     )
 
 
@@ -87,6 +89,7 @@ def _changed_resolver(
             _input("dram_revenue_share", 69.0, "percent", _id("dram_share")),
             _input("nand_revenue_share", 31.0, "percent", _id("nand_share")),
         ),
+        method_support_evidence_ids=bundle.method_support_evidence_ids,
     )
 
 
@@ -103,7 +106,31 @@ def test_production_allocation_resolver_registry_is_intentionally_empty(tmp_path
         )
 
 
-def test_source_resolver_can_certify_revenue_only_without_widening_gates(tmp_path: Path) -> None:
+def test_source_bundle_requires_distinct_method_calibration_evidence(tmp_path: Path) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"source-bounded-inputs")
+    company = _input(
+        "reported_company_revenue",
+        100.0,
+        "KRW_trillion",
+        _id("company_revenue"),
+    )
+    with pytest.raises(ValueError, match="separate from inputs"):
+        VerifiedAllocationSourceBundle(
+            resolver_id=RESOLVER_ID,
+            ticker="000660",
+            evaluation_date=EVALUATION_DATE,
+            source_reference_id=hashlib.sha256(source.read_bytes()).hexdigest(),
+            inputs=(
+                company,
+                _input("dram_revenue_share", 70.0, "percent", _id("dram_share")),
+                _input("nand_revenue_share", 30.0, "percent", _id("nand_share")),
+            ),
+            method_support_evidence_ids=(company.source_evidence_id,),
+        )
+
+
+def test_dram_nand_allocation_stays_partial_without_explicit_other_revenue(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"source-bounded-inputs")
 
@@ -115,13 +142,18 @@ def test_source_resolver_can_certify_revenue_only_without_widening_gates(tmp_pat
     )
 
     reconciliation = evidence.reconciliation
-    assert reconciliation.required_revenue_blocks == ("dram_total", "nand_and_solutions")
+    assert evidence.method_support_evidence_ids == (CALIBRATION_ID,)
+    assert reconciliation.required_revenue_blocks == (
+        "dram_total",
+        "nand_and_solutions",
+        "other_products_services",
+    )
     assert reconciliation.allocated_revenue_blocks == ("dram_total", "nand_and_solutions")
-    assert reconciliation.missing_revenue_blocks == ()
+    assert reconciliation.missing_revenue_blocks == ("other_products_services",)
     assert reconciliation.allocated_revenue_total == pytest.approx(100.0)
     assert reconciliation.reconciliation_delta == pytest.approx(0.0)
-    assert reconciliation.revenue_reconciliation_certified is True
-    assert reconciliation.revenue_model_input_ready is True
+    assert reconciliation.revenue_reconciliation_certified is False
+    assert reconciliation.revenue_model_input_ready is False
     assert reconciliation.profitability_baseline_certified is False
     assert reconciliation.full_baseline_certified is False
     assert evidence.source_fact is False
@@ -130,9 +162,12 @@ def test_source_resolver_can_certify_revenue_only_without_widening_gates(tmp_pat
     assert evidence.numeric_forecast_enabled is False
     assert evidence.decision_score_enabled is False
     assert all(allocation.source_fact is False for allocation in evidence.allocations)
+    assert all(allocation.allocation_ready is True for allocation in evidence.allocations)
 
 
-def test_capture_and_loader_reconstruct_from_source_resolver(tmp_path: Path) -> None:
+def test_capture_and_loader_reconstruct_partial_allocation_from_source_resolver(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"stable-source-bytes")
     output = tmp_path / "allocation"
@@ -153,8 +188,10 @@ def test_capture_and_loader_reconstruct_from_source_resolver(tmp_path: Path) -> 
     )
 
     assert captured["evidence_id"] == loaded.evidence_id
-    assert loaded.reconciliation.revenue_reconciliation_certified is True
-    assert loaded.reconciliation.revenue_model_input_ready is True
+    assert captured["method_support_evidence_ids"] == [CALIBRATION_ID]
+    assert loaded.reconciliation.revenue_reconciliation_certified is False
+    assert loaded.reconciliation.revenue_model_input_ready is False
+    assert loaded.reconciliation.missing_revenue_blocks == ("other_products_services",)
     assert loaded.reconciliation.full_baseline_certified is False
 
     pointer_payload = json.loads(pointer.read_text(encoding="utf-8"))
@@ -179,7 +216,7 @@ def test_loader_rejects_tampered_persisted_revenue_readiness(tmp_path: Path) -> 
     )
     payload_path = Path(str(captured["baseline_allocation_path"]))
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
-    payload["revenue_model_input_ready"] = False
+    payload["revenue_model_input_ready"] = True
     payload_path.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ValueError, match="persisted field mismatch"):

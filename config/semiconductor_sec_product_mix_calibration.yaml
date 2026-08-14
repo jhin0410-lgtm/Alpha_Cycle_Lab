@@ -1,0 +1,27 @@
+schema_version: 1
+issuers:
+  "000660":
+    issuer_name: SK hynix
+    filings:
+      skhynix_000660_2026q1_sec_424b4_product_mix:
+        source_id: sec_edgar
+        cik: "0002120882"
+        form: 424B4
+        filing_date: 2026-07-10
+        expected_accession_number: "0001193125-26-299963"
+        expected_primary_document: d32785d424b4.htm
+        period_start: 2026-01-01
+        period_end: 2026-03-31
+        parser_id: skhynix_sec_424b4_2026q1_product_mix_v1
+        historical_calibration_only: true
+        current_baseline_eligible: false
+        q2_allocation_eligible: false
+        required_identity_anchors:
+          - "The following table presents a breakdown of our revenue by principal product category"
+          - "first quarter of 2026"
+          - "DRAM"
+          - "NAND flash"
+          - "Other products"
+          - "Total revenue"
+          - "Sales of DRAMs accounted for 77.3% of our total revenue in the first quarter of 2026"
+          - "Sales of NAND flash products accounted for 22.0% of our total revenue in the first quarter of 2026"
