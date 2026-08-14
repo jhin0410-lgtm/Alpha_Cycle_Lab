@@ -2,8 +2,9 @@
 
 Market expectation levels/revisions and the internal operating view are certified
 independently. Current KIS estimate-perform semantics remain blocked. The internal
-side distinguishes source-input coverage, explicit scenario assumptions, baseline
-reconciliation, and final model certification; historical correlations are never forecasts.
+side distinguishes source-input coverage, explicit scenario assumptions, verified
+baseline reconciliation, and final model certification; historical correlations are
+never forecasts.
 """
 
 from __future__ import annotations
@@ -68,13 +69,19 @@ def kis_expectation_semantics(
     )
 
 
+def _baseline_certified(row: dict[str, object]) -> bool:
+    return _bool(row.get("semiconductor_baseline_reconciliation_certified")) or _bool(
+        row.get("semiconductor_assumption_baseline_reconciliation_certified")
+    )
+
+
 def _internal_forward_status(row: dict[str, object]) -> tuple[str, tuple[str, ...]]:
     if _bool(row.get("semiconductor_assumption_internal_forward_model_certified")):
         return "certified_forward_operating_view", ()
 
     if _bool(row.get("semiconductor_assumption_all_scenario_assumptions_model_use_ready")):
         blockers: list[str] = []
-        if not _bool(row.get("semiconductor_assumption_baseline_reconciliation_certified")):
+        if not _baseline_certified(row):
             blockers.append("baseline_reconciliation_not_certified")
         if not _bool(row.get("semiconductor_assumption_output_method_certified")):
             blockers.append("output_method_not_certified")
@@ -88,26 +95,24 @@ def _internal_forward_status(row: dict[str, object]) -> tuple[str, tuple[str, ..
         )
 
     if _bool(row.get("semiconductor_assumption_all_scenario_assumptions_documented")):
-        return (
-            "scenario_assumptions_documented_not_model_ready",
-            (
-                "scenario_assumption_method_or_evidence_not_model_use_ready",
-                "baseline_reconciliation_not_certified",
+        blockers = ["scenario_assumption_method_or_evidence_not_model_use_ready"]
+        if not _baseline_certified(row):
+            blockers.append("baseline_reconciliation_not_certified")
+        blockers.extend(
+            [
                 "output_method_not_certified",
                 "company_reconciliation_not_certified",
                 "model_version_not_frozen",
-            ),
+            ]
         )
+        return "scenario_assumptions_documented_not_model_ready", tuple(blockers)
 
     if "semiconductor_assumption_horizon_quarters" in row:
-        return (
-            "operating_assumption_coverage_incomplete",
-            (
-                "bull_base_bear_driver_quarter_coverage_incomplete",
-                "baseline_reconciliation_not_certified",
-                "internal_forward_model_not_certified",
-            ),
-        )
+        blockers = ["bull_base_bear_driver_quarter_coverage_incomplete"]
+        if not _baseline_certified(row):
+            blockers.append("baseline_reconciliation_not_certified")
+        blockers.append("internal_forward_model_not_certified")
+        return "operating_assumption_coverage_incomplete", tuple(blockers)
 
     if _bool(row.get("semiconductor_forward_internal_forward_model_certified")):
         return "certified_forward_operating_view", ()
@@ -242,9 +247,9 @@ def append_expectation_gap_report(
             "사용하지 않습니다."
         ),
         (
-            "- source-input coverage와 내부 Bull/Base/Bear assumptions는 별도 계층입니다. "
-            "baseline bridge·output method·company reconciliation·model freeze가 끝나기 "
-            "전에는 numeric forecast가 아닙니다."
+            "- source-input coverage, 내부 Bull/Base/Bear assumptions, archived official "
+            "baseline bridges는 별도 계층입니다. output method·company reconciliation·"
+            "model freeze가 끝나기 전에는 numeric forecast가 아닙니다."
         ),
         (
             "- certified market expectation level과 certified internal forward view가 "
