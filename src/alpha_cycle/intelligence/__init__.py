@@ -2,7 +2,9 @@
 
 The final package decision wrapper preserves the existing chain through
 ``decision_industry_evidence_calibrated`` and ``decision_forward_estimate_calibrated``
-before attaching optional non-scoring own-history P/B evidence.
+before attaching optional non-scoring own-history P/B evidence. Valuation still
+passes through ``valuation_resilient`` before the final latest-observable-equity
+P/B basis correction.
 """
 
 from alpha_cycle.intelligence.decision import (
@@ -47,7 +49,7 @@ from alpha_cycle.intelligence.valuation import (
     load_security_mappings,
     write_valuation_evidence_snapshot,
 )
-from alpha_cycle.intelligence.valuation_resilient import (
+from alpha_cycle.intelligence.valuation_latest_equity_resilient import (
     build_valuation_evidence_snapshot,
 )
 
