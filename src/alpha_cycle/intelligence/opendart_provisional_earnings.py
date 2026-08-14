@@ -17,7 +17,6 @@ from datetime import date
 from pathlib import Path
 from typing import cast
 
-import pandas as pd
 import yaml
 
 from alpha_cycle.providers.opendart import CorpCode, OpenDartReadOnlyClient
