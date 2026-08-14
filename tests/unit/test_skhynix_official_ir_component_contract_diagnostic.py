@@ -32,7 +32,7 @@ COMPONENT_BYTES = (
     '{seq:this.seq},function(e){return e})}},render:function(){return '
     't.board.cdnPath+t.lastOne.fileUrl2+t.board.cdnPath+line.fileUrl3};'
     'var code={"실적발표":105};'
-).encode("utf-8")
+).encode()
 
 
 def _patch_sources(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,10 +75,10 @@ def test_scan_component_contracts_extracts_exact_routes_and_file_bindings() -> N
 
 def test_identifier_only_text_never_becomes_execute_route() -> None:
     data = (
-        'name:"IR",methods:{queryBoardList:function(){'
-        'var attachmentId=row.attachmentId;'
-        'var routeName="/performance/list";return routeName}}'
-    ).encode("utf-8")
+        b'name:"IR",methods:{queryBoardList:function(){'
+        b"var attachmentId=row.attachmentId;"
+        b'var routeName="/performance/list";return routeName}}'
+    )
     execute, bcodes, mappings, cdns, bindings, windows = scan_component_contracts(
         source_file="script.js",
         source_url=SOURCE_URL,
