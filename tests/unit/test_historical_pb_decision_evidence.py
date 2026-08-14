@@ -11,6 +11,10 @@ from alpha_cycle.intelligence import decision_historical_pb_calibrated as wrappe
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_scoring import DecisionPolicy
 
+_OLD_GAP = "글로벌 비교기업과 과거 밸류에이션 밴드 미연결"
+_NEW_GAP = "글로벌 비교기업 미연결 (자사 역사 P/B 밴드 연결됨, 비점수)"
+_PEER_GAP = "상대 밸류에이션 비교기업 수 부족 (2개/최소 5개)"
+
 
 def _write_pb_artifact(tmp_path: Path) -> Path:
     artifact_id = "a" * 64
@@ -89,6 +93,7 @@ def _write_pb_artifact(tmp_path: Path) -> Path:
 
 
 def _base_snapshot() -> InvestmentDecisionSnapshot:
+    gaps = json.dumps([_OLD_GAP, _PEER_GAP], ensure_ascii=False)
     scorecards = pd.DataFrame(
         [
             {
@@ -97,6 +102,7 @@ def _base_snapshot() -> InvestmentDecisionSnapshot:
                 "score_coverage": 0.85,
                 "valuation_score": pd.NA,
                 "valuation_status": "complete_unscored",
+                "evidence_gaps": gaps,
             },
             {
                 "ticker": "005930",
@@ -104,10 +110,13 @@ def _base_snapshot() -> InvestmentDecisionSnapshot:
                 "score_coverage": 0.85,
                 "valuation_score": pd.NA,
                 "valuation_status": "complete_unscored",
+                "evidence_gaps": gaps,
             },
         ]
     )
-    records = scorecards.loc[:, ["ticker", "composite_score", "score_coverage"]].copy()
+    records = scorecards.loc[
+        :, ["ticker", "composite_score", "score_coverage", "evidence_gaps"]
+    ].copy()
     empty = pd.DataFrame()
     return InvestmentDecisionSnapshot(
         captured_at=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
@@ -127,7 +136,7 @@ def _base_snapshot() -> InvestmentDecisionSnapshot:
         financial_history=empty,
         scorecards=scorecards,
         decision_records=records,
-        report_markdown="# Base report\n",
+        report_markdown=f"# Base report\n- {_OLD_GAP}\n- {_PEER_GAP}\n",
         warnings=(),
     )
 
@@ -166,6 +175,18 @@ def test_historical_pb_wrapper_attaches_current_bands_without_changing_scores(
     assert float(samsung["historical_pb_latest_pb"]) == pytest.approx(3.0862)
     assert float(samsung["historical_pb_latest_pb_percentile"]) == pytest.approx(85.1103)
     assert not after.scorecards["historical_pb_decision_score_enabled"].astype(bool).any()
+
+    for raw_gaps in after.scorecards["evidence_gaps"]:
+        parsed = json.loads(str(raw_gaps))
+        assert _NEW_GAP in parsed
+        assert _OLD_GAP not in parsed
+        assert _PEER_GAP in parsed
+    assert after.decision_records["evidence_gaps"].tolist() == after.scorecards[
+        "evidence_gaps"
+    ].tolist()
+    assert _NEW_GAP in after.report_markdown
+    assert _OLD_GAP not in after.report_markdown
+    assert _PEER_GAP in after.report_markdown
     assert "## 자사 역사 P/B 증거 (비점수)" in after.report_markdown
     assert "6.16x" in after.report_markdown
     assert "85.1%" in after.report_markdown
@@ -173,7 +194,7 @@ def test_historical_pb_wrapper_attaches_current_bands_without_changing_scores(
     assert "historical_pb_latest_pb" in after.decision_records.columns
 
 
-def test_historical_pb_wrapper_rejects_mismatched_evaluation_date(
+def test_historical_pb_wrapper_reports_exact_mismatched_evaluation_date(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -182,7 +203,7 @@ def test_historical_pb_wrapper_rejects_mismatched_evaluation_date(
     changed = InvestmentDecisionSnapshot(
         **{
             **before.__dict__,
-            "evaluation_date": date(2026, 8, 9),
+            "evaluation_date": date(2026, 8, 14),
         }
     )
     monkeypatch.setattr(wrapper, "_build_forward_snapshot", lambda *args, **kwargs: changed)
@@ -193,6 +214,12 @@ def test_historical_pb_wrapper_rejects_mismatched_evaluation_date(
         historical_pb_pointer=pointer,
     )
 
+    reason = (
+        "historical_pb_evaluation_date_mismatch:"
+        "evidence=2026-08-10:decision=2026-08-14"
+    )
     assert after.scorecards.equals(changed.scorecards)
-    assert "historical_pb_evidence_unavailable:ValueError" in after.warnings
+    assert reason in after.warnings
+    assert reason in after.report_markdown
+    assert "refresh_historical_pb.cmd" in after.report_markdown
     assert "## 자사 역사 P/B 증거 (사용 불가)" in after.report_markdown
