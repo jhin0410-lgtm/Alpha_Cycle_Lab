@@ -5,13 +5,12 @@ from datetime import date
 
 import pytest
 
+import alpha_cycle.sec_post_earnings_product_mix_scout_report_cli as report_cli
 from alpha_cycle.intelligence.sec_post_earnings_product_mix_scout import (
     SecPostEarningsFiling,
     SecPostEarningsScoutEvidence,
     SecPostEarningsScoutResult,
 )
-import alpha_cycle.sec_post_earnings_product_mix_scout_report_cli as report_cli
-
 
 _SHA = "a" * 64
 
