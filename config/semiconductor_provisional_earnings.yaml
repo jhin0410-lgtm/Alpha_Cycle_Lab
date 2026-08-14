@@ -1,0 +1,21 @@
+schema_version: 1
+issuers:
+  "000660":
+    issuer_name: SK hynix
+    disclosures:
+      skhynix_000660_2026q2_provisional:
+        source_id: opendart
+        report_name_exact: "연결재무제표기준영업(잠정)실적(공정공시)"
+        receipt_date: 2026-07-29
+        period_start: 2026-04-01
+        period_end: 2026-06-30
+        parser_id: skhynix_opendart_provisional_2026q2_v1
+        consolidated_only: true
+        audited: false
+        product_baseline_eligible: false
+        expected_identity_anchors:
+          - "연결재무제표기준영업(잠정)실적(공정공시)"
+          - "매출액"
+          - "영업이익"
+          - "당기순이익"
+          - "당해실적"
