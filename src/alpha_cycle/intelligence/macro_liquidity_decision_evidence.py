@@ -1,6 +1,6 @@
 """Integrate official U.S. macro/liquidity evidence with existing Korea context.
 
-The evidence is a transmission map, not a universal macro score.  It keeps real
+The evidence is a transmission map, not a universal macro score. It keeps real
 rates, broad dollar, financial conditions, Fed balance sheet, reserve balances,
 Korean policy rate/FX, investor flow, and semiconductor risk appetite separate.
 """
@@ -8,6 +8,7 @@ Korean policy rate/FX, investor flow, and semiconductor risk appetite separate.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -78,6 +79,16 @@ def _require_false(payload: Mapping[str, object], flags: tuple[str, ...]) -> Non
     for key in flags:
         if payload.get(key) is not False:
             raise ValueError(f"Macro liquidity evidence requires {key}=false")
+
+
+def _finite_number(value: object, field: str) -> float:
+    converted = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(converted):
+        raise ValueError(f"Macro liquidity {field} must be numeric")
+    result = float(cast(float, converted))
+    if not math.isfinite(result):
+        raise ValueError(f"Macro liquidity {field} must be finite")
+    return result
 
 
 def _load_pointer(
@@ -151,12 +162,12 @@ def _flow_status(scorecards: pd.DataFrame) -> tuple[str, str]:
     verified = (
         scorecards["investor_flow_evidence_verified"].fillna(False).astype(bool)
         if "investor_flow_evidence_verified" in scorecards.columns
-        else pd.Series(False, index=scorecards.index)
+        else pd.Series(False, index=scorecards.index, dtype="bool")
     )
     available = (
         scorecards["investor_flow_available"].fillna(False).astype(bool)
         if "investor_flow_available" in scorecards.columns
-        else pd.Series(False, index=scorecards.index)
+        else pd.Series(False, index=scorecards.index, dtype="bool")
     )
     if bool(verified.all()) and len(verified) > 0:
         return "available", "same-session investor-flow evidence가 모든 대상에서 검증됐습니다."
@@ -202,31 +213,38 @@ def build_macro_liquidity_decision_evidence(
         _coverage_row(
             "us_real_discount_rate",
             "available",
-            f"DFII10 {float(dfii10['latest_value']):.2f}% / 20관측 변화 {float(dfii10['change_20_observations']):+.2f}%p.",
+            f"DFII10 {_finite_number(dfii10['latest_value'], 'DFII10 latest'):.2f}% / "
+            f"20관측 변화 {_finite_number(dfii10['change_20_observations'], 'DFII10 change'):+.2f}%p.",
             "FRED/Board_of_Governors_DFII10",
         ),
         _coverage_row(
             "broad_us_dollar",
             "available",
-            f"DTWEXBGS {float(dollar['latest_value']):.2f} / 20관측 변화 {float(dollar['change_20_observations']):+.2f}.",
+            f"DTWEXBGS {_finite_number(dollar['latest_value'], 'DTWEXBGS latest'):.2f} / "
+            f"20관측 변화 {_finite_number(dollar['change_20_observations'], 'DTWEXBGS change'):+.2f}.",
             "FRED/Board_of_Governors_DTWEXBGS",
         ),
         _coverage_row(
             "us_financial_conditions",
             "available",
-            f"NFCI {float(nfci['latest_value']):+.3f} / 공식 level state={nfci['level_state']}.",
+            f"NFCI {_finite_number(nfci['latest_value'], 'NFCI latest'):+.3f} / "
+            f"공식 level state={str(nfci['level_state'])}.",
             "FRED/Chicago_Fed_NFCI",
         ),
         _coverage_row(
             "fed_balance_sheet",
             "partial",
-            f"WALCL {float(walcl['latest_value']):,.0f} {walcl['unit']} / 4관측 변화 {float(walcl['change_4_observations']):+,.0f}; 단독 순유동성 score로 사용하지 않습니다.",
+            f"WALCL {_finite_number(walcl['latest_value'], 'WALCL latest'):,.0f} {str(walcl['unit'])} / "
+            f"4관측 변화 {_finite_number(walcl['change_4_observations'], 'WALCL change'):+,.0f}; "
+            "단독 순유동성 score로 사용하지 않습니다.",
             "FRED/Board_of_Governors_WALCL",
         ),
         _coverage_row(
             "fed_reserve_balances",
             "partial",
-            f"WRESBAL {float(reserves['latest_value']):,.0f} {reserves['unit']} / 4관측 변화 {float(reserves['change_4_observations']):+,.0f}; balance-sheet leg와 별개로 유지합니다.",
+            f"WRESBAL {_finite_number(reserves['latest_value'], 'WRESBAL latest'):,.0f} {str(reserves['unit'])} / "
+            f"4관측 변화 {_finite_number(reserves['change_4_observations'], 'WRESBAL change'):+,.0f}; "
+            "balance-sheet leg와 별개로 유지합니다.",
             "FRED/Board_of_Governors_WRESBAL",
         ),
     ]
@@ -246,7 +264,8 @@ def build_macro_liquidity_decision_evidence(
             _coverage_row(
                 "korea_policy_rate",
                 "available",
-                f"한국 기준금리 {float(kr_rate['latest_value']):.2f} / regime={kr_rate['regime']}.",
+                f"한국 기준금리 {_finite_number(kr_rate['latest_value'], 'KR base rate'):.2f} / "
+                f"regime={str(kr_rate['regime'])}.",
                 "BOK_ECOS",
             )
         )
@@ -266,7 +285,8 @@ def build_macro_liquidity_decision_evidence(
             _coverage_row(
                 "usd_krw",
                 "available",
-                f"USD/KRW {float(usd_krw['latest_value']):.2f} / regime={usd_krw['regime']}.",
+                f"USD/KRW {_finite_number(usd_krw['latest_value'], 'USD/KRW'):.2f} / "
+                f"regime={str(usd_krw['regime'])}.",
                 "BOK_ECOS",
             )
         )
