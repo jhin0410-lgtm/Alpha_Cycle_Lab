@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_package_routes_final_decision_builder_through_transmission_wrapper() -> None:
+def test_package_routes_final_decision_builder_through_structural_wrapper() -> None:
     package = Path("src/alpha_cycle/intelligence/__init__.py").read_text(encoding="utf-8")
+    structural = Path(
+        "src/alpha_cycle/intelligence/decision_semiconductor_structural_calibrated.py"
+    ).read_text(encoding="utf-8")
     transmission = Path(
         "src/alpha_cycle/intelligence/decision_semiconductor_transmission_calibrated.py"
     ).read_text(encoding="utf-8")
@@ -17,11 +20,15 @@ def test_package_routes_final_decision_builder_through_transmission_wrapper() ->
     assert "decision_historical_pb_calibrated" in package
     assert "decision_sector_vertical_calibrated" in package
     assert "decision_semiconductor_transmission_calibrated" in package
+    assert "decision_semiconductor_structural_calibrated" in package
     assert (
-        "from alpha_cycle.intelligence.decision_semiconductor_transmission_calibrated import"
+        "from alpha_cycle.intelligence.decision_semiconductor_structural_calibrated import"
         in package
     )
-    assert "build_investment_decision_snapshot" in package
+
+    assert "decision_semiconductor_transmission_calibrated" in structural
+    assert "_build_transmission_snapshot" in structural
+    assert "load_structural_decision_evidence" in structural
 
     assert "decision_sector_vertical_calibrated" in transmission
     assert "_build_sector_vertical_snapshot" in transmission

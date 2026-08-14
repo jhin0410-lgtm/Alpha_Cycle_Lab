@@ -1,0 +1,109 @@
+schema_version: 1
+sources:
+  samsung_ir:
+    owner: Samsung Electronics
+    role: issuer_ir
+    primary_source: true
+    domains:
+      - samsung.com
+      - news.samsung.com
+    allowed_dimensions:
+      - end_demand
+      - hbm_demand_mix
+      - hbm_capacity_yield
+      - competitive_position
+      - memory_pricing_direction
+      - business_mix
+      - capex_supply
+      - catalyst
+    numeric_memory_price_eligible: false
+
+  sk_hynix_ir:
+    owner: SK hynix
+    role: issuer_ir
+    primary_source: true
+    domains:
+      - skhynix.com
+      - news.skhynix.com
+    allowed_dimensions:
+      - end_demand
+      - hbm_demand_mix
+      - hbm_capacity_yield
+      - competitive_position
+      - memory_pricing_direction
+      - business_mix
+      - capex_supply
+      - catalyst
+    numeric_memory_price_eligible: false
+
+  micron_ir:
+    owner: Micron Technology
+    role: peer_ir
+    primary_source: true
+    domains:
+      - micron.com
+      - investors.micron.com
+    allowed_dimensions:
+      - end_demand
+      - hbm_demand_mix
+      - hbm_capacity_yield
+      - competitive_position
+      - memory_pricing_direction
+      - capex_supply
+      - industry_supply
+      - catalyst
+    numeric_memory_price_eligible: false
+
+  nvidia_ir:
+    owner: NVIDIA
+    role: customer_ir
+    primary_source: true
+    domains:
+      - nvidia.com
+      - investor.nvidia.com
+      - nvidianews.nvidia.com
+    allowed_dimensions:
+      - end_demand
+      - hbm_demand_mix
+      - qualification
+      - customer_platform
+      - catalyst
+    numeric_memory_price_eligible: false
+
+  amd_ir:
+    owner: AMD
+    role: customer_ir
+    primary_source: true
+    domains:
+      - amd.com
+      - ir.amd.com
+    allowed_dimensions:
+      - end_demand
+      - hbm_demand_mix
+      - qualification
+      - customer_platform
+      - catalyst
+    numeric_memory_price_eligible: false
+
+  us_bis:
+    owner: U.S. Bureau of Industry and Security
+    role: government_regulation
+    primary_source: true
+    domains:
+      - bis.gov
+    allowed_dimensions:
+      - export_control
+      - geopolitical_policy
+    numeric_memory_price_eligible: false
+
+  certified_memory_price:
+    owner: external certified or licensed price provider
+    role: certified_price_data
+    primary_source: false
+    domains: []
+    allowed_dimensions:
+      - memory_numeric_price
+    numeric_memory_price_eligible: true
+    requires_semantics_certification: true
+    requires_unit_and_product_scope: true
+    requires_license_or_public_reuse_basis: true
