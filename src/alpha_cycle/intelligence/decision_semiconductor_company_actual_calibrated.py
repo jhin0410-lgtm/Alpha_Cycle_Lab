@@ -1,4 +1,4 @@
-"""Attach verified company-level provisional actuals after accounting identities."""
+"""Attach verified company-level provisional actuals after derived revenue allocation."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import pandas as pd
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_scoring import CompanyExposure, DecisionPolicy
-from alpha_cycle.intelligence.decision_semiconductor_accounting_identity_calibrated import (
-    build_investment_decision_snapshot as _build_accounting_identity_snapshot,
+from alpha_cycle.intelligence.decision_semiconductor_baseline_allocation_calibrated import (
+    build_investment_decision_snapshot as _build_baseline_allocation_snapshot,
 )
 from alpha_cycle.intelligence.opendart_provisional_earnings_decision_evidence import (
     DEFAULT_PROVISIONAL_EARNINGS_POINTER,
@@ -98,15 +98,16 @@ def build_investment_decision_snapshot(
     semiconductor_operating_assumption_pointer: str | Path | None = None,
     semiconductor_baseline_reconciliation_pointer: str | Path | None = None,
     semiconductor_accounting_identity_pointer: str | Path | None = None,
+    semiconductor_baseline_allocation_pointer: str | Path | None = None,
     opendart_provisional_earnings_pointer: str | Path | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
     policy: DecisionPolicy | None = None,
     now: datetime | None = None,
 ) -> InvestmentDecisionSnapshot:
-    """Build through company accounting identity, then attach company actual evidence."""
+    """Build through derived revenue allocation, then attach company actual evidence."""
 
-    snapshot = _build_accounting_identity_snapshot(
+    snapshot = _build_baseline_allocation_snapshot(
         research_snapshot,
         market_snapshot,
         valuation_snapshot=valuation_snapshot,
@@ -123,6 +124,7 @@ def build_investment_decision_snapshot(
             semiconductor_baseline_reconciliation_pointer
         ),
         semiconductor_accounting_identity_pointer=semiconductor_accounting_identity_pointer,
+        semiconductor_baseline_allocation_pointer=semiconductor_baseline_allocation_pointer,
         benchmark=benchmark,
         exposures=exposures,
         policy=policy,
