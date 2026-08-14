@@ -96,6 +96,7 @@ def test_numeric_issuer_guidance_requires_certification_and_future_period_to_be_
     assert uncertified.numeric_model_input_eligible is False
 
     raw = _claim(kind="numeric")
+    raw["period_start"] = "2026-04-01"
     raw["period_end"] = "2026-06-30"
     historical = validate_forward_input_claim(raw, REGISTRY, evaluation_date=EVALUATION)
     assert historical.numeric_model_input_eligible is False
