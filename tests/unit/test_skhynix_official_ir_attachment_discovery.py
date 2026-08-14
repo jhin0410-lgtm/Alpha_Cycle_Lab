@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import alpha_cycle.intelligence.sk_hynix_official_ir_attachment_discovery as discovery
+from alpha_cycle.intelligence import sk_hynix_official_ir_attachment_discovery as discovery
 from alpha_cycle.intelligence.sk_hynix_official_ir_attachment_discovery import (
     DEFAULT_DISCOVERY_POINTER,
     SK_HYNIX_IR_EARNINGS_URL,
@@ -47,10 +47,10 @@ def test_explicit_pdf_extraction_never_promotes_third_party_or_guesses_ids() -> 
 
 def test_script_extraction_stays_on_issuer_controlled_resources() -> None:
     page = (
-        '<script src="/assets/ir-page.js"></script>'
-        '<script src="https://cdn.example.com/foreign.js"></script>'
-        '<script src="/assets/not-javascript.css"></script>'
-    ).encode()
+        b'<script src="/assets/ir-page.js"></script>'
+        b'<script src="https://cdn.example.com/foreign.js"></script>'
+        b'<script src="/assets/not-javascript.css"></script>'
+    )
     assert extract_explicit_script_urls(page) == (OFFICIAL_SCRIPT,)
 
 
