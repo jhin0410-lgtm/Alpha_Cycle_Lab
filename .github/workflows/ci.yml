@@ -50,28 +50,4 @@ jobs:
         run: .venv-ci/bin/mypy
 
       - name: Pytest
-        shell: bash
-        run: |
-          set +e
-          .venv-ci/bin/pytest --junitxml=.pytest-results.xml
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            python3 - <<'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-          path = Path('.pytest-results.xml')
-          if path.is_file():
-              root = ET.parse(path).getroot()
-              for case in root.iter('testcase'):
-                  failure = case.find('failure')
-                  error = case.find('error')
-                  node = failure if failure is not None else error
-                  if node is None:
-                      continue
-                  file_path = case.attrib.get('file', 'tests')
-                  name = case.attrib.get('name', 'unknown')
-                  text = ' '.join((node.text or node.attrib.get('message', '')).split())
-                  print(f'::error file={file_path}::pytest {name}: {text[:3500]}')
-          PY
-          fi
-          exit "$status"
+        run: .venv-ci/bin/pytest
