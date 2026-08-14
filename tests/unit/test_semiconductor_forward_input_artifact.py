@@ -14,7 +14,7 @@ from alpha_cycle.semiconductor_forward_input_cli import capture_forward_input_ev
 EVALUATION = date(2026, 8, 14)
 
 
-def _claims() -> list[dict[str, object]]:
+def _claims(source_document: Path) -> list[dict[str, object]]:
     return [
         {
             "ticker": "000660",
@@ -33,14 +33,18 @@ def _claims() -> list[dict[str, object]]:
             "semantics_certified": False,
             "source_vintage_certified": False,
             "reuse_or_license_basis_documented": False,
+            "source_document_path": str(source_document),
+            "parser_id": "synthetic_forward_input_test_v1",
         }
     ]
 
 
 def _capture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
+    source_document = tmp_path / "synthetic-sk-hynix-ir.pdf"
+    source_document.write_bytes(b"%PDF-synthetic-forward-input-source")
     output = tmp_path / "forward-input"
     result = capture_forward_input_evidence(
-        _claims(),
+        _claims(source_document),
         evaluation_date=EVALUATION,
         output=output,
     )
