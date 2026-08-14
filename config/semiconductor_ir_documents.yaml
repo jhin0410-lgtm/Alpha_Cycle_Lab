@@ -13,7 +13,6 @@ issuers:
         period_end: 2026-06-30
         parser_id: samsung_earnings_presentation_2026q2_v2
         expected_page_count: 16
-        refresh_eligible: true
         required_identity_anchors:
           - "2Q 2026 Earnings Call"
           - "Appendix 2: Results by Business Segment"
@@ -31,28 +30,7 @@ issuers:
 
   "000660":
     issuer_name: SK hynix
-    documents:
-      skhynix_000660_2026q1_newsroom:
-        source_id: sk_hynix_ir
-        document_role: earnings_release
-        content_type: html
-        source_url: https://news.skhynix.com/q1-2026-business-results/
-        source_published_date: 2026-04-22
-        period_start: 2026-01-01
-        period_end: 2026-03-31
-        parser_id: skhynix_newsroom_2026q1_v1
-        expected_page_count: 1
-        refresh_eligible: false
-        required_identity_anchors:
-          - "SK hynix Announces 1Q26 Financial Results"
-          - "52.5763 trillion won in revenue"
-          - "37.6103 trillion won in operating profit"
-        baseline_fact_scope: []
-        forward_claim_scope:
-          - dram_total
-          - hbm_mix_overlay
-          - nand_and_solutions
+    documents: {}
     unresolved_latest_official_document_reason: >-
-      The verified 1Q26 Newsroom release is historical-only and is not eligible for current refresh.
-      No 2Q26 official earnings document URL is registered yet; do not substitute secondary
-      redistribution or infer an unverified official file URL.
+      No 2Q26 official earnings presentation document URL is registered yet.
+      Do not substitute secondary reporting or infer an unverified URL.
