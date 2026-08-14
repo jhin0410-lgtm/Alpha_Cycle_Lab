@@ -33,6 +33,7 @@ _METRIC_LABELS = (
     "Profit (Loss) for the Period",
     "Attributable To: Controlling Interests",
 )
+_METRIC_LABELS_CASEFOLD = frozenset(item.casefold() for item in _METRIC_LABELS)
 
 
 @dataclass(frozen=True)
@@ -292,7 +293,7 @@ def download_sec_bytes(url: str, *, user_agent: str, timeout_seconds: float = 20
         },
     )
     with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
-        return response.read()
+        return cast(bytes, response.read())
 
 
 def discover_sec_company_actual(
@@ -385,7 +386,7 @@ def _metric_current_value(parts: tuple[str, ...], label: str) -> float:
         (
             index
             for index in range(start + 1, len(parts))
-            if parts[index].casefold() in {item.casefold() for item in _METRIC_LABELS}
+            if parts[index].casefold() in _METRIC_LABELS_CASEFOLD
         ),
         len(parts),
     )
