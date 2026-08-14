@@ -191,14 +191,15 @@ def _numeric_model_input_eligible(
     source: SemiconductorStructuralSource,
     semantics_certified: bool,
     source_vintage_certified: bool,
+    evaluation_date: date,
 ) -> bool:
     if kind != "numeric" or source.source_id != _ISSUER_SOURCE_IDS[ticker]:
         return False
     if not semantics_certified or not source_vintage_certified or period_end is None:
         return False
     if claim_type == "baseline":
-        return period_end <= date.max
-    return period_end > date.min
+        return period_end <= evaluation_date
+    return period_end > evaluation_date
 
 
 def validate_forward_input_claim(
@@ -268,14 +269,8 @@ def validate_forward_input_claim(
         source=source,
         semantics_certified=semantics_certified,
         source_vintage_certified=source_vintage_certified,
+        evaluation_date=evaluation_date,
     )
-    if model_input_eligible:
-        if claim_type == "baseline" and (period_end is None or period_end > evaluation_date):
-            model_input_eligible = False
-        if claim_type == "forward_driver" and (
-            period_end is None or period_end <= evaluation_date
-        ):
-            model_input_eligible = False
 
     payload: dict[str, object] = {
         "ticker": ticker,
@@ -380,11 +375,11 @@ def _coverage(
         ["ticker", "block_id"], kind="stable"
     ).reset_index(drop=True)
     issuer_rows: list[dict[str, object]] = []
-    for ticker, group in block_frame.groupby("ticker", sort=True):
+    for ticker_key, group in block_frame.groupby("ticker", sort=True):
         required_blocks = len(group)
         issuer_rows.append(
             {
-                "ticker": str(ticker),
+                "ticker": str(ticker_key),
                 "required_block_count": required_blocks,
                 "descriptive_ready_block_count": int(
                     (
@@ -407,7 +402,8 @@ def _coverage(
                 "decision_score_enabled": False,
             }
         )
-    return block_frame, pd.DataFrame(issuer_rows).sort_values("ticker").reset_index(drop=True)
+    issuer_frame = pd.DataFrame(issuer_rows).sort_values("ticker").reset_index(drop=True)
+    return block_frame, issuer_frame
 
 
 def build_semiconductor_forward_input_evidence(
