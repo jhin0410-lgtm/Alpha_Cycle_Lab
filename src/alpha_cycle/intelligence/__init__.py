@@ -5,12 +5,14 @@ The final package decision wrapper preserves the calibrated chain through
 ``decision_historical_pb_calibrated``, ``decision_sector_vertical_calibrated``,
 ``decision_semiconductor_transmission_calibrated``,
 ``decision_semiconductor_structural_calibrated``,
-``decision_macro_liquidity_calibrated``, ``decision_expectation_gap_calibrated``,
-``decision_catalyst_horizon_calibrated``, and finally
-``decision_scenario_expected_return_calibrated``. These evidence/readiness layers
-remain non-scoring: missing evidence is surfaced as a research gap rather than
-converted into a zero factor score. Valuation still passes through
-``valuation_resilient`` before the final latest-observable-equity P/B correction.
+``decision_macro_liquidity_calibrated``,
+``decision_semiconductor_forward_input_calibrated``,
+``decision_expectation_gap_calibrated``, ``decision_catalyst_horizon_calibrated``,
+and finally ``decision_scenario_expected_return_calibrated``. These
+ evidence/readiness layers remain non-scoring: missing evidence is surfaced as a
+research gap rather than converted into a zero factor score. Valuation still
+passes through ``valuation_resilient`` before the final latest-observable-equity
+P/B correction.
 """
 
 from alpha_cycle.intelligence.decision import (
