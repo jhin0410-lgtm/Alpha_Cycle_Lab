@@ -5,11 +5,15 @@ from datetime import date
 
 import pytest
 
+from alpha_cycle.intelligence import official_semiconductor_ir_parser_dispatch as dispatch
 from alpha_cycle.intelligence.official_semiconductor_ir_collector import (
     DEFAULT_IR_DOCUMENT_REGISTRY,
     OfficialIrDocumentSpec,
     ParsedOfficialIrDocument,
     load_official_ir_document_registry,
+)
+from alpha_cycle.intelligence.official_semiconductor_ir_parser_dispatch import (
+    validate_official_ir_source_policy,
 )
 from alpha_cycle.intelligence.semiconductor_forward_input_evidence import (
     DEFAULT_FORWARD_INPUT_SOURCE_REGISTRY,
@@ -67,10 +71,40 @@ def _claims_by_metric() -> tuple[ParsedOfficialIrDocument, dict[str, dict[str, o
     return parsed, claims
 
 
-def test_candidate_parser_remains_dormant_until_official_document_is_registered() -> None:
+def test_candidate_parser_remains_unregistered_until_official_document_is_verified() -> None:
     specs = load_official_ir_document_registry(DEFAULT_IR_DOCUMENT_REGISTRY)
 
     assert all(spec.ticker != "000660" for spec in specs.values())
+
+
+def test_guarded_dispatch_supports_parser_without_registering_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(dispatch, "extract_pdf_pages", lambda data: _pages())
+
+    parsed = dispatch.parse_official_ir_document(_spec(), b"%PDF-synthetic")
+
+    assert parsed.spec.ticker == "000660"
+    assert parsed.baseline_facts == ()
+    assert len(parsed.forward_input_claims) == 4
+
+
+def test_sk_hynix_source_policy_allows_only_issuer_or_registered_official_cdn() -> None:
+    validate_official_ir_source_policy(_spec())
+    validate_official_ir_source_policy(
+        replace(
+            _spec(),
+            source_url=(
+                "https://mis-prod-koce-homepage-cdn-01-blob-ep.azureedge.net/"
+                "web/attach/synthetic.pdf"
+            ),
+        )
+    )
+
+    with pytest.raises(ValueError, match="issuer site or its registered official CDN"):
+        validate_official_ir_source_policy(
+            replace(_spec(), source_url="https://example.com/2Q26_SKH.pdf")
+        )
 
 
 def test_sk_hynix_parser_is_forward_only_and_emits_only_supported_metrics() -> None:

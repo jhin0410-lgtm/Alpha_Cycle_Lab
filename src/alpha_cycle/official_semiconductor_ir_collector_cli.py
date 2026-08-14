@@ -13,7 +13,10 @@ from alpha_cycle.intelligence.official_semiconductor_ir_collector import (
     OfficialIrDocumentSpec,
     download_official_ir_document,
     load_official_ir_document_registry,
+)
+from alpha_cycle.intelligence.official_semiconductor_ir_parser_dispatch import (
     parse_official_ir_document,
+    validate_official_ir_source_policy,
 )
 
 DEFAULT_OUTPUT = Path("data/private/live-research/official-semiconductor-ir")
@@ -58,6 +61,9 @@ def capture_official_ir_document(
     spec = specs[document_id]
     if spec.source_published_date > evaluation_date or spec.period_end > evaluation_date:
         raise ValueError("Official IR document is not observable by evaluation date")
+    # Reject an invalid issuer/source binding before any network or local-document bytes
+    # are consumed by the production capture route.
+    validate_official_ir_source_policy(spec)
     data = _source_bytes(
         spec,
         Path(local_document) if local_document is not None else None,

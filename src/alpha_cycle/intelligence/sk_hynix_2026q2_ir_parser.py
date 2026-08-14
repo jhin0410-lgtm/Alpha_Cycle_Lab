@@ -1,8 +1,9 @@
-"""Dormant parser contract for the SK hynix FY2026 Q2 earnings presentation.
+"""Parser contract for the SK hynix FY2026 Q2 earnings presentation.
 
-This module deliberately does not register a production document or wire itself into
-the live official-IR dispatcher.  It defines the parsing semantics that may be activated
-only after an exact official source URL and source bytes are independently verified.
+The parser is available to the source-guarded official-IR dispatch path, but no SK hynix
+2Q26 production document is registered.  Capture therefore remains impossible until an
+exact official source URL and source bytes are independently verified and added to the
+checked-in registry.
 
 The candidate presentation provides useful forward operating guidance but does not
 directly disclose the product-level profitability facts required by Alpha Cycle's
@@ -79,11 +80,7 @@ def parse_sk_hynix_2026q2(
     data: bytes,
     pages: tuple[str, ...],
 ) -> ParsedOfficialIrDocument:
-    """Parse only source-bounded forward guidance from the candidate 2Q26 deck.
-
-    The production registry and live dispatcher intentionally do not call this parser
-    until an independently verified official document URL is registered.
-    """
+    """Parse only source-bounded forward guidance from the candidate 2Q26 deck."""
 
     if spec.parser_id != _PARSER_ID:
         raise ValueError("SK hynix 2Q26 parser received the wrong parser_id")

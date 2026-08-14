@@ -32,5 +32,6 @@ issuers:
     issuer_name: SK hynix
     documents: {}
     unresolved_latest_official_document_reason: >-
-      No 2Q26 official earnings presentation document URL is registered yet.
-      Do not substitute secondary reporting or infer an unverified URL.
+      The official Earnings Release page exposes the issuer's official Azure Edge CDN,
+      but the exact 2Q26 attachment URL/source bytes have not been independently resolved.
+      Do not substitute a secondary copy or infer the numeric CDN attachment path.
