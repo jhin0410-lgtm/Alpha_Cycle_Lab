@@ -183,6 +183,7 @@ def sync_record_historical_pb_fields(
 
     fields = [
         "ticker",
+        "evidence_gaps",
         "historical_pb_evidence_available",
         "historical_pb_artifact_id",
         "historical_pb_observation_count",
