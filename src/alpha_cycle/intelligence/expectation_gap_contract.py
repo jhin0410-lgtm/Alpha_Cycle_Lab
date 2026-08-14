@@ -3,7 +3,7 @@
 Expectation *levels* and expectation *revisions* are different capabilities.
 A provider can expose forward-looking rows without those rows being safe to call
 consensus, without their target periods being known, and without two snapshots
-being comparable enough to call the difference a revision.  Alpha Cycle therefore
+being comparable enough to call the difference a revision. Alpha Cycle therefore
 certifies each capability separately and fails closed when semantics are missing.
 """
 
@@ -54,7 +54,8 @@ class ExpectationReadiness:
             raise ValueError("Numeric expectation revision requires available readiness")
         if self.expectation_gap_enabled:
             raise ValueError(
-                "Expectation gap requires an independently certified internal forward operating view"
+                "Expectation gap requires an independently certified internal "
+                "forward operating view"
             )
         if self.decision_score_enabled:
             raise ValueError("Expectation readiness must remain non-scoring")
