@@ -1,0 +1,18 @@
+schema_version: 1
+documents:
+  skhynix_000660_2026q1_newsroom:
+    ticker: "000660"
+    issuer_name: SK hynix
+    source_id: sk_hynix_ir
+    document_role: earnings_release
+    content_type: html
+    source_url: https://news.skhynix.com/q1-2026-business-results/
+    source_published_date: 2026-04-22
+    period_start: 2026-01-01
+    period_end: 2026-03-31
+    parser_id: skhynix_newsroom_2026q1_v1
+    current_refresh_eligible: false
+    required_identity_anchors:
+      - "SK hynix Announces 1Q26 Financial Results"
+      - "52.5763 trillion won in revenue"
+      - "37.6103 trillion won in operating profit"
