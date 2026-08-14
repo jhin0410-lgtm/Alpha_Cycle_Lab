@@ -8,7 +8,7 @@ from pathlib import Path
 from alpha_cycle.intelligence.sk_hynix_official_ir_attachment_discovery import (
     DEFAULT_DISCOVERY_POINTER,
 )
-from alpha_cycle.intelligence.sk_hynix_official_ir_board_api_capture import (
+from alpha_cycle.intelligence.sk_hynix_official_ir_board_api_pipeline import (
     DEFAULT_BOARD_API_OUTPUT,
     DEFAULT_BOARD_API_POINTER,
     build_api_transport_contract,
