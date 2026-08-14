@@ -1,7 +1,7 @@
 """Internal Bull/Base/Bear operating assumptions for semiconductor forward models.
 
-Source evidence and model assumptions are different objects.  This module records the
-numeric assumptions Alpha Cycle chooses to make after reviewing source evidence.  An
+Source evidence and model assumptions are different objects. This module records the
+numeric assumptions Alpha Cycle chooses to make after reviewing source evidence. An
 assumption is never represented as a source fact, scenario probabilities remain disabled,
 and assumption completeness alone cannot certify an issuer forward forecast.
 """
@@ -149,10 +149,10 @@ def validate_operating_assumption(
     scenario = str(raw.get("scenario", "")).strip().casefold()
     if scenario not in _ALLOWED_SCENARIOS:
         raise ValueError("Operating assumption scenario is invalid")
-    quarter_index = int(raw.get("quarter_index", 0))
+    quarter_index = int(str(raw.get("quarter_index", 0)))
     if not 1 <= quarter_index <= horizon_quarters:
         raise ValueError("Operating assumption quarter_index is outside model horizon")
-    value = float(raw.get("value", "nan"))
+    value = float(str(raw.get("value", "nan")))
     unit = str(raw.get("unit", "")).strip()
     method_id = str(raw.get("method_id", "")).strip()
     method_version = str(raw.get("method_version", "")).strip()
@@ -161,9 +161,13 @@ def validate_operating_assumption(
     raw_support = raw.get("supporting_evidence_ids", [])
     if not isinstance(raw_support, list):
         raise ValueError("Operating assumption supporting_evidence_ids must be an array")
-    supporting_ids = tuple(dict.fromkeys(str(item).strip() for item in raw_support if str(item).strip()))
+    supporting_ids = tuple(
+        dict.fromkeys(str(item).strip() for item in raw_support if str(item).strip())
+    )
     known = verified_evidence_ids
-    support_verified = bool(known is not None and supporting_ids and set(supporting_ids).issubset(known))
+    support_verified = bool(
+        known is not None and supporting_ids and set(supporting_ids).issubset(known)
+    )
     rationale = str(raw.get("rationale", "")).strip()
     invalidation = str(raw.get("invalidation_condition", "")).strip()
     model_use_ready = bool(
