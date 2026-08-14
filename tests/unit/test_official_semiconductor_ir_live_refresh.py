@@ -1,7 +1,4 @@
-from __future__ import annotations
-
 from pathlib import Path
-
 
 BOOTSTRAP = Path("scripts/run_live_pipeline_bootstrap.ps1")
 REFRESH = Path("scripts/refresh_official_semiconductor_ir.ps1")
@@ -26,7 +23,8 @@ def test_official_ir_refresh_is_best_effort_and_uses_pipeline_evaluation_date() 
     assert "--document-output $DocumentOutput" in text
     assert "--baseline-output $BaselineOutput" in text
     assert "--forward-output $ForwardOutput" in text
-    assert "live pipeline will continue without treating stale official IR evidence as current" in text
+    warning = "live pipeline will continue without treating stale official IR evidence as current"
+    assert warning in text
     assert text.rstrip().endswith("exit 0")
 
 
