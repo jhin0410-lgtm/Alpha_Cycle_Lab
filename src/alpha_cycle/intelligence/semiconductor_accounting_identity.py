@@ -162,7 +162,8 @@ def build_samsung_accounting_identity_from_official_ir(
         raise ValueError(f"Accounting identity source bytes not found: {source_path}") from exc
     source_hash = hashlib.sha256(source_bytes).hexdigest()
     expected_hash = str(pointer.get("source_document_sha256", ""))
-    if source_hash != expected_hash or source_hash != str(manifest.get("source_document_sha256", "")):
+    manifest_hash = str(manifest.get("source_document_sha256", ""))
+    if source_hash != expected_hash or source_hash != manifest_hash:
         raise ValueError("Accounting identity source document hash mismatch")
 
     pages = extract_pdf_pages(source_bytes)
@@ -173,7 +174,11 @@ def build_samsung_accounting_identity_from_official_ir(
     financial_page = _normalized(pages[11])
     appendix = _normalized(pages[12])
     _require(result_page, "Based on consolidated financial statements", "consolidated basis")
-    _require(segment_page, "sales of business units include intersegment sales", "intersegment footnote")
+    _require(
+        segment_page,
+        "sales of business units include intersegment sales",
+        "intersegment footnote",
+    )
     _require(appendix, "Appendix 2: Results by Business Segment", "segment appendix")
     _require(financial_page, "Appendix 1: 2Q 2026 Results & Financial Data", "financial appendix")
 
