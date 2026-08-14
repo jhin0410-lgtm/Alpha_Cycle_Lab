@@ -4,7 +4,9 @@ import json
 
 import pandas as pd
 
-from alpha_cycle.intelligence.expectation_gap_contract import evaluate_expectation_readiness
+from alpha_cycle.intelligence.expectation_gap_contract import (
+    evaluate_expectation_readiness,
+)
 from alpha_cycle.intelligence.expectation_gap_decision_evidence import (
     append_expectation_gap_report,
     build_expectation_gap_decision_evidence,
