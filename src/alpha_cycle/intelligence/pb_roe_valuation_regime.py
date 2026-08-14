@@ -1,10 +1,8 @@
 """Describe whether own-history P/B expansion is accompanied by observable TTM ROE.
 
-This layer is deliberately non-scoring. It compares the current own-history P/B
-percentile with a point-in-time-observable TTM ROE distribution reconstructed
-from OpenDART financial-history rows already present in the decision snapshot.
-It does not infer fair value because cost of equity, sustainable growth, and
-forward earnings/ROE are not certified inputs.
+The evidence is descriptive and non-scoring. TTM ROE uses the OpenDART
+consolidated profit/loss field over average total equity, so the report calls it
+a ROE proxy rather than a certified owners-of-parent ROE measure.
 """
 
 from __future__ import annotations
@@ -27,8 +25,6 @@ _QUARTER_NUMBER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
 
 @dataclass(frozen=True)
 class PbRoeValuationRegimeEvidence:
-    """Current descriptive P/B-versus-ROE regime evidence."""
-
     evidence_id: str
     evaluation_date: date
     valuation_snapshot_id: str
@@ -68,13 +64,13 @@ def _finite_float(value: object, field: str) -> float:
 
 
 def _ticker_series(values: pd.Series) -> pd.Series:
-    normalized = values.astype("string").str.strip().str.zfill(6)
-    if normalized.isna().any() or (~normalized.str.fullmatch(r"[0-9]{6}")).any():
+    result = values.astype("string").str.strip().str.zfill(6)
+    if result.isna().any() or (~result.str.fullmatch(r"[0-9]{6}")).any():
         raise ValueError("P/B-ROE financial history contains invalid ticker")
-    return normalized
+    return result
 
 
-def _boolean_series(values: pd.Series) -> pd.Series:
+def _bool_series(values: pd.Series) -> pd.Series:
     return values.map(
         lambda value: value
         if isinstance(value, bool)
@@ -82,10 +78,7 @@ def _boolean_series(values: pd.Series) -> pd.Series:
     )
 
 
-def _normalize_financial_history(
-    financial_history: pd.DataFrame,
-    evaluation_date: date,
-) -> pd.DataFrame:
+def _normalize_history(history: pd.DataFrame, evaluation_date: date) -> pd.DataFrame:
     required = {
         "ticker",
         "business_year",
@@ -96,10 +89,10 @@ def _normalize_financial_history(
         "net_income",
         "equity",
     }
-    missing = required - set(financial_history.columns)
+    missing = required - set(history.columns)
     if missing:
         raise ValueError(f"P/B-ROE financial history missing columns: {sorted(missing)}")
-    result = financial_history.copy()
+    result = history.copy()
     result["ticker"] = _ticker_series(result["ticker"])
     result["business_year"] = pd.to_numeric(
         result["business_year"], errors="raise"
@@ -107,7 +100,7 @@ def _normalize_financial_history(
     result["period_label"] = result["period_label"].astype("string").str.strip()
     result["period_end"] = pd.to_datetime(result["period_end"], errors="raise")
     result["available_date"] = pd.to_datetime(result["available_date"], errors="raise")
-    result["derived"] = _boolean_series(result["derived"])
+    result["derived"] = _bool_series(result["derived"])
     result["net_income"] = pd.to_numeric(result["net_income"], errors="coerce")
     result["equity"] = pd.to_numeric(result["equity"], errors="coerce")
     cutoff = pd.Timestamp(evaluation_date)
@@ -122,11 +115,11 @@ def _normalize_financial_history(
     ).reset_index(drop=True)
 
 
-def _equity_for_period(
+def _equity_at(
     equity_rows: pd.DataFrame,
     period_end: pd.Timestamp,
     as_of: pd.Timestamp,
-) -> dict[str, object] | None:
+) -> float | None:
     eligible = equity_rows.loc[
         equity_rows["period_end"].eq(period_end)
         & equity_rows["available_date"].le(as_of)
@@ -134,8 +127,8 @@ def _equity_for_period(
     ]
     if eligible.empty:
         return None
-    selected = eligible.sort_values("available_date", kind="stable").iloc[-1]
-    return {str(key): value for key, value in selected.to_dict().items()}
+    value = eligible.sort_values("available_date", kind="stable").iloc[-1]["equity"]
+    return _finite_float(value, "equity")
 
 
 def _quarter_sequence(window: pd.DataFrame) -> list[int]:
@@ -147,11 +140,8 @@ def _quarter_sequence(window: pd.DataFrame) -> list[int]:
     ]
 
 
-def _ttm_roe_history(
-    normalized: pd.DataFrame,
-    ticker: str,
-) -> pd.DataFrame:
-    company = normalized.loc[normalized["ticker"].astype(str).eq(ticker)].copy()
+def _ttm_roe_history(history: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    company = history.loc[history["ticker"].astype(str).eq(ticker)].copy()
     quarterly = company.loc[
         company["period_label"].isin(_QUARTER_NUMBER)
         & company["net_income"].notna()
@@ -161,13 +151,13 @@ def _ttm_roe_history(
     if quarterly.duplicated(["business_year", "period_label"]).any():
         raise ValueError(f"P/B-ROE quarterly flow rows are duplicated: {ticker}")
     quarterly = quarterly.sort_values("period_end", kind="stable").reset_index(drop=True)
-
     equity_rows = company.loc[
         ~company["derived"].astype(bool) & company["equity"].gt(0)
     ].copy()
+
     observations: list[dict[str, object]] = []
-    for end_index in range(3, len(quarterly)):
-        window = quarterly.iloc[end_index - 3 : end_index + 1].copy()
+    for index in range(3, len(quarterly)):
+        window = quarterly.iloc[index - 3 : index + 1].copy()
         sequence = _quarter_sequence(window)
         if any(
             right - left != 1
@@ -177,19 +167,17 @@ def _ttm_roe_history(
         end_period = cast(pd.Timestamp, window["period_end"].iloc[-1])
         start_period = end_period - pd.DateOffset(years=1)
         as_of = cast(pd.Timestamp, window["available_date"].max())
-        start_equity = _equity_for_period(equity_rows, start_period, as_of)
-        end_equity = _equity_for_period(equity_rows, end_period, as_of)
-        if start_equity is None or end_equity is None:
+        beginning_equity = _equity_at(equity_rows, start_period, as_of)
+        ending_equity = _equity_at(equity_rows, end_period, as_of)
+        if beginning_equity is None or ending_equity is None:
+            continue
+        average_equity = (beginning_equity + ending_equity) / 2.0
+        if average_equity <= 0:
             continue
         ttm_net_income = _finite_float(
             pd.to_numeric(window["net_income"], errors="raise").sum(),
             "TTM net income",
         )
-        beginning_equity = _finite_float(start_equity["equity"], "beginning equity")
-        ending_equity = _finite_float(end_equity["equity"], "ending equity")
-        average_equity = (beginning_equity + ending_equity) / 2.0
-        if average_equity <= 0:
-            continue
         observations.append(
             {
                 "ticker": ticker,
@@ -205,8 +193,7 @@ def _ttm_roe_history(
     if not observations:
         return pd.DataFrame()
     return pd.DataFrame(observations).sort_values(
-        ["ttm_available_date", "ttm_period_end"],
-        kind="stable",
+        ["ttm_available_date", "ttm_period_end"], kind="stable"
     ).reset_index(drop=True)
 
 
@@ -217,20 +204,20 @@ def _percentile(values: pd.Series, current: float) -> float:
     return float(numeric.le(current).mean() * 100.0)
 
 
-def _row_payload(row: dict[str, object]) -> dict[str, object]:
-    payload: dict[str, object] = {}
+def _serializable_row(row: dict[str, object]) -> dict[str, object]:
+    result: dict[str, object] = {}
     for key, value in row.items():
         if isinstance(value, (pd.Timestamp, date)):
-            payload[key] = value.isoformat()
+            result[key] = value.isoformat()
         elif isinstance(value, np.generic):
-            payload[key] = value.item()
+            result[key] = value.item()
         elif value is pd.NA or value is pd.NaT:
-            payload[key] = None
+            result[key] = None
         elif isinstance(value, float) and np.isnan(value):
-            payload[key] = None
+            result[key] = None
         else:
-            payload[key] = value
-    return payload
+            result[key] = value
+    return result
 
 
 def build_pb_roe_valuation_regime_evidence(
@@ -240,21 +227,18 @@ def build_pb_roe_valuation_regime_evidence(
     evaluation_date: date,
     valuation_snapshot_id: str,
 ) -> PbRoeValuationRegimeEvidence:
-    """Build descriptive current P/B versus observable TTM ROE context."""
-
     if historical_pb.evaluation_date != evaluation_date:
         raise ValueError("P/B-ROE regime requires current historical P/B evidence")
-    normalized = _normalize_financial_history(financial_history, evaluation_date)
+    history = _normalize_history(financial_history, evaluation_date)
     rows: list[dict[str, object]] = []
     for pb_raw in historical_pb.symbols.to_dict(orient="records"):
         ticker = str(pb_raw["ticker"]).zfill(6)
-        roe_history = _ttm_roe_history(normalized, ticker)
-        usable_pb = bool(pb_raw.get("current_observational_band_usable"))
         pb_latest = _finite_float(pb_raw["latest_pb"], "latest P/B")
         pb_median = _finite_float(pb_raw["pb_median"], "median P/B")
         pb_percentile = _finite_float(
             pb_raw["latest_pb_percentile"], "P/B percentile"
         )
+        usable_pb = bool(pb_raw.get("current_observational_band_usable"))
         base: dict[str, object] = {
             "ticker": ticker,
             "historical_pb_artifact_id": historical_pb.artifact_id,
@@ -264,11 +248,13 @@ def build_pb_roe_valuation_regime_evidence(
             "pb_percentile": pb_percentile,
             "pb_current_usable": usable_pb,
             "pb_premium_to_median_pct": (pb_latest / pb_median - 1.0) * 100.0,
+            "roe_basis": "consolidated_profitloss_over_average_total_equity",
             "decision_score_enabled": False,
             "fair_value_estimate_enabled": False,
             "target_price_enabled": False,
             "point_in_time_backtest_eligible": False,
         }
+        roe_history = _ttm_roe_history(history, ticker)
         if roe_history.empty:
             rows.append(
                 {
@@ -283,7 +269,7 @@ def build_pb_roe_valuation_regime_evidence(
         current_roe = _finite_float(current["ttm_roe"], "current TTM ROE")
         roe_values = pd.to_numeric(roe_history["ttm_roe"], errors="raise")
         roe_percentile = _percentile(roe_values, current_roe)
-        roe_available_date = cast(pd.Timestamp, current["ttm_available_date"])
+        available_date = cast(pd.Timestamp, current["ttm_available_date"])
         rows.append(
             {
                 **base,
@@ -298,25 +284,24 @@ def build_pb_roe_valuation_regime_evidence(
                 "ttm_roe_p75": _finite_float(roe_values.quantile(0.75), "ROE P75"),
                 "ttm_roe_observation_count": int(len(roe_values)),
                 "ttm_period_end": cast(pd.Timestamp, current["ttm_period_end"]).date(),
-                "ttm_available_date": roe_available_date.date(),
-                "ttm_roe_lag_days": int(
-                    (evaluation_date - roe_available_date.date()).days
-                ),
+                "ttm_available_date": available_date.date(),
+                "ttm_roe_lag_days": (evaluation_date - available_date.date()).days,
                 "pb_minus_roe_percentile_pp": pb_percentile - roe_percentile,
             }
         )
+
     frame = pd.DataFrame(rows).sort_values("ticker", kind="stable").reset_index(drop=True)
     if frame["ticker"].duplicated().any():
         raise ValueError("P/B-ROE regime evidence contains duplicate tickers")
-    id_payload = {
+    payload = {
         "evaluation_date": evaluation_date.isoformat(),
         "valuation_snapshot_id": valuation_snapshot_id,
         "historical_pb_artifact_id": historical_pb.artifact_id,
-        "rows": [_row_payload(raw) for raw in frame.to_dict(orient="records")],
+        "rows": [_serializable_row(raw) for raw in frame.to_dict(orient="records")],
     }
     evidence_id = hashlib.sha256(
         json.dumps(
-            id_payload,
+            payload,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -335,20 +320,17 @@ def attach_pb_roe_regime_to_scorecards(
     scorecards: pd.DataFrame,
     evidence: PbRoeValuationRegimeEvidence,
 ) -> pd.DataFrame:
-    """Attach descriptive regime fields without changing any score columns."""
-
     if "ticker" not in scorecards.columns:
         raise ValueError("scorecards must contain ticker")
     result = scorecards.copy()
     result["ticker"] = result["ticker"].astype("string").str.zfill(6)
-    supplement = evidence.rows.copy()
-    supplement = supplement.rename(
+    supplement = evidence.rows.rename(
         columns={
             column: f"pb_roe_regime_{column}"
-            for column in supplement.columns
+            for column in evidence.rows.columns
             if column != "ticker"
         }
-    )
+    ).copy()
     supplement["pb_roe_regime_evidence_id"] = evidence.evidence_id
     return result.merge(supplement, on="ticker", how="left", validate="one_to_one")
 
@@ -357,8 +339,6 @@ def sync_record_pb_roe_regime_fields(
     records: pd.DataFrame,
     scorecards: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Copy compact regime fields into decision records."""
-
     fields = [
         "ticker",
         "pb_roe_regime_evidence_id",
@@ -368,6 +348,7 @@ def sync_record_pb_roe_regime_fields(
         "pb_roe_regime_pb_median",
         "pb_roe_regime_pb_percentile",
         "pb_roe_regime_pb_premium_to_median_pct",
+        "pb_roe_regime_roe_basis",
         "pb_roe_regime_ttm_roe",
         "pb_roe_regime_ttm_roe_percentile",
         "pb_roe_regime_ttm_roe_median",
@@ -395,41 +376,52 @@ def append_pb_roe_regime_report(
     report: str,
     evidence: PbRoeValuationRegimeEvidence,
 ) -> str:
-    """Append a non-scoring P/B-versus-TTM-ROE section."""
-
+    header = (
+        "| 종목 | P/B | P/B 역사% | P/B 중앙값 대비 | TTM ROE proxy | "
+        "ROE 역사% | ROE 관측치 | P/B%-ROE% | ROE 기준분기 | 상태 |"
+    )
     lines = [
         report.rstrip(),
         "",
         "## P/B-ROE 밸류에이션 레짐 (비점수)",
         "",
         f"- evidence: `{evidence.evidence_id[:12]}`",
-        "- TTM ROE = 최근 관측 가능한 4개 단일분기 순이익 / 시작·종료 자본 평균입니다.",
-        "- Q4 순이익은 FY 누계와 Q3 누계 차이로 만든 단일분기 flow를 사용할 수 있지만, 자본은 non-derived OpenDART 행만 사용합니다.",
-        "- P/B와 ROE percentile 비교는 기술적 진단일 뿐이며 cost of equity·지속성장률·forward ROE가 없어 fair value나 목표가를 산출하지 않습니다.",
+        (
+            "- TTM ROE proxy = 최근 4개 단일분기 연결 당기순이익 / "
+            "시작·종료 자본총계 평균입니다."
+        ),
+        (
+            "- Q4는 FY 누계-Q3 누계로 만든 단일분기 flow를 허용하지만, "
+            "자본은 non-derived OpenDART 행만 사용합니다."
+        ),
+        (
+            "- P/B·ROE percentile은 기술적 진단이며 cost of equity·지속성장률·"
+            "forward ROE가 없어 fair value나 목표가를 산출하지 않습니다."
+        ),
         "- 현재 의사결정 점수에는 반영하지 않습니다.",
         "",
-        "| 종목 | P/B | P/B 역사% | P/B 중앙값 대비 | TTM ROE | ROE 역사% | ROE 관측치 | P/B%-ROE% | ROE 기준분기 | 상태 |",
+        header,
         "|---|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for raw in evidence.rows.to_dict(orient="records"):
         current_roe = raw.get("ttm_roe")
         if not bool(raw.get("regime_evidence_available")) or pd.isna(current_roe):
             lines.append(
-                f"| {raw['ticker']} | {_finite_float(raw['pb_latest'], 'report P/B'):.2f}x | "
-                f"{_finite_float(raw['pb_percentile'], 'report P/B percentile'):.1f}% | "
-                f"{_finite_float(raw['pb_premium_to_median_pct'], 'report P/B premium'):+.1f}% | "
+                f"| {raw['ticker']} | {_finite_float(raw['pb_latest'], 'P/B'):.2f}x | "
+                f"{_finite_float(raw['pb_percentile'], 'P/B percentile'):.1f}% | "
+                f"{_finite_float(raw['pb_premium_to_median_pct'], 'P/B premium'):+.1f}% | "
                 f"N/A | N/A | {int(raw.get('ttm_roe_observation_count', 0))} | "
                 f"N/A | N/A | {raw['regime_status']} |"
             )
             continue
         lines.append(
-            f"| {raw['ticker']} | {_finite_float(raw['pb_latest'], 'report P/B'):.2f}x | "
-            f"{_finite_float(raw['pb_percentile'], 'report P/B percentile'):.1f}% | "
-            f"{_finite_float(raw['pb_premium_to_median_pct'], 'report P/B premium'):+.1f}% | "
-            f"{_finite_float(current_roe, 'report TTM ROE') * 100.0:.1f}% | "
-            f"{_finite_float(raw['ttm_roe_percentile'], 'report ROE percentile'):.1f}% | "
+            f"| {raw['ticker']} | {_finite_float(raw['pb_latest'], 'P/B'):.2f}x | "
+            f"{_finite_float(raw['pb_percentile'], 'P/B percentile'):.1f}% | "
+            f"{_finite_float(raw['pb_premium_to_median_pct'], 'P/B premium'):+.1f}% | "
+            f"{_finite_float(current_roe, 'TTM ROE') * 100.0:.1f}% | "
+            f"{_finite_float(raw['ttm_roe_percentile'], 'ROE percentile'):.1f}% | "
             f"{int(str(raw['ttm_roe_observation_count']))} | "
-            f"{_finite_float(raw['pb_minus_roe_percentile_pp'], 'report percentile gap'):+.1f}%p | "
+            f"{_finite_float(raw['pb_minus_roe_percentile_pp'], 'percentile gap'):+.1f}%p | "
             f"{raw['ttm_period_end']} | {raw['regime_status']} |"
         )
     return "\n".join(lines).rstrip() + "\n"
