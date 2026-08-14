@@ -60,6 +60,25 @@ Artifacts are written under:
 data/private/research/sec-post-earnings-product-mix-scout
 ```
 
-The output includes the exact candidate accession numbers and archived primary document
-bytes. The command is intentionally a research one-shot and is not part of the live
-decision pipeline.
+The initial scout output intentionally stays compact. If the result has zero candidates or
+you need to audit why filings were rejected, run the local verified report without making
+another SEC network request:
+
+```powershell
+.\scripts\report_sec_post_earnings_product_mix_scout.ps1
+```
+
+The report first reverifies the archived submissions JSON and every archived primary filing
+byte through the scout verifier. It then prints:
+
+- classification counts,
+- every accession number, filing date, form, and primary document,
+- Q2 / DRAM / NAND / Other-products / revenue anchor flags,
+- the filing-level classification and manual-review flag.
+
+This makes `candidate_count=0` auditable without weakening the original evidence identity or
+changing classifier rules after capture. If a false negative is demonstrated, the classifier
+must be versioned separately rather than silently changing the semantics of an existing
+artifact.
+
+Both commands are research one-shots and are not part of the live decision pipeline.
