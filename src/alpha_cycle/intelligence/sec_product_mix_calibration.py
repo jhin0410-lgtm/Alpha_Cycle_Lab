@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -37,6 +38,7 @@ DEFAULT_SEC_PRODUCT_MIX_POINTER = (
     DEFAULT_SEC_PRODUCT_MIX_OUTPUT / "latest_sec_product_mix_calibration.json"
 )
 _SHARE_METHOD_RELATIVE_TOLERANCE = 0.001
+_KOREA_TIME_ZONE = ZoneInfo("Asia/Seoul")
 
 
 def _sha_bytes(data: bytes) -> str:
@@ -351,6 +353,24 @@ def _number(section: str, pattern: str, label: str) -> float:
     return float(match.group(1).replace(",", ""))
 
 
+def _product_row_amount_and_share(
+    section: str,
+    *,
+    row_pattern: str,
+    label: str,
+) -> tuple[float, float]:
+    match = re.search(
+        rf"\b{row_pattern}\s+(?:W\s+)?([0-9][0-9,]*)\s+([0-9]+(?:\.[0-9]+)?)\s*%?",
+        section,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        raise ValueError(f"SEC product-mix revenue/share row is missing: {label}")
+    amount = float(match.group(1).replace(",", ""))
+    share = float(match.group(2))
+    return amount, share
+
+
 def parse_sec_product_mix_html(
     spec: SecProductMixCalibrationSpec,
     filing_bytes: bytes,
@@ -360,53 +380,75 @@ def parse_sec_product_mix_html(
     text = _joined_visible_text(filing_bytes)
     for anchor in spec.required_identity_anchors:
         _require_anchor(text, anchor)
-    start_anchor = (
+
+    amount_table_anchor = (
         "The following table presents a breakdown of our revenue by principal product "
         "category and changes therein for the first quarter of 2026 and the first quarter of 2025."
     )
-    start = text.casefold().find(start_anchor.casefold())
-    if start < 0:
+    amount_start = text.casefold().find(amount_table_anchor.casefold())
+    if amount_start < 0:
         raise ValueError("SEC product-mix 1Q26 revenue table start is missing")
-    end = text.casefold().find("our revenue increased by", start)
-    if end < 0:
+    amount_end = text.casefold().find("our revenue increased by", amount_start)
+    if amount_end < 0:
         raise ValueError("SEC product-mix 1Q26 revenue table end is missing")
-    section = text[start:end]
-    metrics = SecProductMixMetrics(
-        unit="KRW_billion",
-        dram_revenue=_number(section, r"\bDRAM\s+(?:W\s+)?([0-9][0-9,]*)", "dram_revenue"),
-        nand_revenue=_number(
-            section,
-            r"\bNAND\s+flash\s+(?:W\s+)?([0-9][0-9,]*)",
-            "nand_revenue",
-        ),
-        other_products_revenue=_number(
-            section,
-            r"\bOther\s+products(?:\s*\([^)]*\))?\s+(?:W\s+)?([0-9][0-9,]*)",
-            "other_products_revenue",
-        ),
-        total_revenue=_number(
-            section,
-            r"\bTotal\s+revenue\s+(?:W\s+)?([0-9][0-9,]*)",
-            "total_revenue",
-        ),
-        dram_share_percent=_number(
-            text,
-            (
-                r"Sales\s+of\s+DRAMs\s+accounted\s+for\s+([0-9.]+)%\s+of\s+our\s+"
-                r"total\s+revenue\s+in\s+the\s+first\s+quarter\s+of\s+2026"
-            ),
-            "dram_share_percent",
-        ),
-        nand_share_percent=_number(
-            text,
-            (
-                r"Sales\s+of\s+NAND\s+flash\s+products\s+accounted\s+for\s+([0-9.]+)%\s+"
-                r"of\s+our\s+total\s+revenue\s+in\s+the\s+first\s+quarter\s+of\s+2026"
-            ),
-            "nand_share_percent",
-        ),
+    amount_section = text[amount_start:amount_end]
+
+    dram_revenue = _number(
+        amount_section,
+        r"\bDRAM\s+(?:W\s+)?([0-9][0-9,]*)",
+        "dram_revenue",
     )
-    return metrics
+    nand_revenue = _number(
+        amount_section,
+        r"\bNAND\s+flash\s+(?:W\s+)?([0-9][0-9,]*)",
+        "nand_revenue",
+    )
+    other_products_revenue = _number(
+        amount_section,
+        r"\bOther\s+products(?:\s*\([^)]*\))?\s+(?:W\s+)?([0-9][0-9,]*)",
+        "other_products_revenue",
+    )
+    total_revenue = _number(
+        amount_section,
+        r"\bTotal\s+revenue\s+(?:W\s+)?([0-9][0-9,]*)",
+        "total_revenue",
+    )
+
+    share_table_anchor = (
+        "The following table sets forth our revenue by principal product category and the "
+        "related percentage data for the periods indicated."
+    )
+    share_start = text.casefold().find(share_table_anchor.casefold())
+    if share_start < 0:
+        raise ValueError("SEC product-mix revenue/share table start is missing")
+    share_end = text.casefold().find("drams are a type", share_start)
+    if share_end < 0:
+        raise ValueError("SEC product-mix revenue/share table end is missing")
+    share_section = text[share_start:share_end]
+    share_dram_revenue, dram_share_percent = _product_row_amount_and_share(
+        share_section,
+        row_pattern="DRAM",
+        label="dram",
+    )
+    share_nand_revenue, nand_share_percent = _product_row_amount_and_share(
+        share_section,
+        row_pattern=r"NAND\s+Flash",
+        label="nand",
+    )
+    if abs(share_dram_revenue - dram_revenue) > 1e-9:
+        raise ValueError("SEC DRAM revenue differs between official product tables")
+    if abs(share_nand_revenue - nand_revenue) > 1e-9:
+        raise ValueError("SEC NAND revenue differs between official product tables")
+
+    return SecProductMixMetrics(
+        unit="KRW_billion",
+        total_revenue=total_revenue,
+        dram_revenue=dram_revenue,
+        nand_revenue=nand_revenue,
+        other_products_revenue=other_products_revenue,
+        dram_share_percent=dram_share_percent,
+        nand_share_percent=nand_share_percent,
+    )
 
 
 def build_sec_product_mix_calibration_evidence(
@@ -547,8 +589,8 @@ def capture_sec_product_mix_calibration(
     captured = captured_at or datetime.now(UTC)
     if captured.tzinfo is None or captured.utcoffset() is None:
         raise ValueError("captured_at must be timezone-aware")
-    if captured.date() < observed_date:
-        raise ValueError("captured_at cannot precede observed_date")
+    if captured.astimezone(_KOREA_TIME_ZONE).date() < observed_date:
+        raise ValueError("captured_at cannot precede observed_date in Asia/Seoul")
     root = Path(output)
     root.mkdir(parents=True, exist_ok=True)
     directory = root / (
