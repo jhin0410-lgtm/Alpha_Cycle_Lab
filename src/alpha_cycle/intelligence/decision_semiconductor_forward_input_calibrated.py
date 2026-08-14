@@ -116,11 +116,11 @@ def build_investment_decision_snapshot(
     )
     if not pointer.is_file():
         reason = "semiconductor_forward_input_evidence_missing"
-        warnings = tuple(dict.fromkeys((*snapshot.warnings, reason)))
+        missing_warnings = tuple(dict.fromkeys((*snapshot.warnings, reason)))
         if explicit_pointer or pointer == DEFAULT_FORWARD_INPUT_POINTER:
             return replace(
                 snapshot,
-                warnings=warnings,
+                warnings=missing_warnings,
                 report_markdown=_unavailable_report(snapshot.report_markdown, reason),
             )
         return snapshot
@@ -140,8 +140,8 @@ def build_investment_decision_snapshot(
     scorecards = _attach(snapshot.scorecards, evidence.issuer_coverage)
     records = _sync_records(snapshot.decision_records, scorecards)
     report = append_semiconductor_forward_input_report(snapshot.report_markdown, evidence)
-    warnings = list(snapshot.warnings)
-    warnings.extend(
+    attached_warnings = list(snapshot.warnings)
+    attached_warnings.extend(
         [
             f"semiconductor_forward_input_evidence:{evidence.evidence_id[:12]}",
             "semiconductor_forward_input_source_bounded",
@@ -155,7 +155,7 @@ def build_investment_decision_snapshot(
         scorecards=scorecards,
         decision_records=records,
         report_markdown=report,
-        warnings=tuple(dict.fromkeys(warnings)),
+        warnings=tuple(dict.fromkeys(attached_warnings)),
     )
 
 
