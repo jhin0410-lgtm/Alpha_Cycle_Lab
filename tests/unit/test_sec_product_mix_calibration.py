@@ -53,8 +53,18 @@ def _filing_html() -> bytes:
       <tr><td>Total revenue</td><td>W</td><td>52,576</td><td>17,639</td></tr>
     </table>
     <p>Our revenue increased by 198.1% in the first quarter of 2026.</p>
-    <p>Sales of DRAMs accounted for 77.3% of our total revenue in the first quarter of 2026.</p>
-    <p>Sales of NAND flash products accounted for 22.0% of our total revenue in the first quarter of 2026.</p>
+    <p>The following table sets forth our revenue by principal product category and the
+    related percentage data for the periods indicated.</p>
+    <table>
+      <tr><td>DRAM</td><td>W</td><td>40,659</td><td>77.3</td><td>%</td>
+          <td>W</td><td>14,037</td><td>79.6</td><td>%</td></tr>
+      <tr><td>NAND Flash</td><td>11,574</td><td>22.0</td><td>%</td>
+          <td>3,229</td><td>18.3</td><td>%</td></tr>
+      <tr><td>Other Products</td><td>343</td><td>0.7</td><td>%</td>
+          <td>373</td><td>2.1</td><td>%</td></tr>
+      <tr><td>Total</td><td>W</td><td>52,576</td><td>100.0</td><td>%</td></tr>
+    </table>
+    <p>DRAMs are a type of random access memory semiconductor.</p>
     </body></html>"""
 
 
@@ -68,6 +78,8 @@ def test_registry_pins_final_official_424b4_and_keeps_it_historical_only() -> No
     assert spec.historical_calibration_only is True
     assert spec.current_baseline_eligible is False
     assert spec.q2_allocation_eligible is False
+    assert any("related percentage data" in item for item in spec.required_identity_anchors)
+    assert all("Sales of NAND" not in item for item in spec.required_identity_anchors)
 
 
 def test_discovery_requires_exact_pinned_sec_filing() -> None:
@@ -78,7 +90,7 @@ def test_discovery_requires_exact_pinned_sec_filing() -> None:
         discover_sec_product_mix_filing(_spec(), json.dumps(payload).encode("utf-8"))
 
 
-def test_parser_reads_direct_product_revenue_and_reported_shares() -> None:
+def test_parser_reads_direct_product_revenue_and_reported_share_table() -> None:
     metrics = parse_sec_product_mix_html(_spec(), _filing_html())
     assert metrics.unit == "KRW_billion"
     assert metrics.total_revenue == 52_576
@@ -119,12 +131,12 @@ def test_parser_rejects_table_or_share_drift() -> None:
     with pytest.raises(ValueError, match="direct revenue table does not reconcile"):
         parse_sec_product_mix_html(
             _spec(),
-            _filing_html().replace(b">343<", b">999<"),
+            _filing_html().replace(b">343<", b">999<", 1),
         )
-    with pytest.raises(ValueError, match="identity anchor is missing"):
+    with pytest.raises(ValueError, match="DRAM share is inconsistent"):
         parse_sec_product_mix_html(
             _spec(),
-            _filing_html().replace(b"77.3%", b"70.0%"),
+            _filing_html().replace(b">77.3<", b">70.0<", 1),
         )
 
 
@@ -156,11 +168,49 @@ def test_capture_and_loader_reparse_archived_official_bytes(
     assert loaded.metrics.other_products_revenue == 343
 
     filing_path = Path(str(captured["filing_path"]))
-    filing_path.write_bytes(_filing_html().replace(b">343<", b">999<"))
+    filing_path.write_bytes(_filing_html().replace(b">343<", b">999<", 1))
     with pytest.raises(ValueError, match="direct revenue table does not reconcile"):
         load_sec_product_mix_calibration_evidence(
             pointer,
             evaluation_date=OBSERVED_DATE,
+        )
+
+
+def test_capture_accepts_new_korea_date_before_utc_midnight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_download(url: str, *, user_agent: str, timeout_seconds: float = 20.0) -> bytes:
+        del user_agent, timeout_seconds
+        return _submissions() if "submissions" in url else _filing_html()
+
+    monkeypatch.setattr(calibration_module, "download_sec_bytes", fake_download)
+    result = capture_sec_product_mix_calibration(
+        _spec(),
+        observed_date=OBSERVED_DATE,
+        user_agent="AlphaCycleLab research@example.com",
+        output=tmp_path / "kst-boundary",
+        captured_at=datetime(2026, 8, 14, 16, 0, tzinfo=UTC),
+    )
+    assert result["observed_date"] == "2026-08-15"
+
+
+def test_capture_rejects_before_observed_date_in_korea(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_download(url: str, *, user_agent: str, timeout_seconds: float = 20.0) -> bytes:
+        del user_agent, timeout_seconds
+        return _submissions() if "submissions" in url else _filing_html()
+
+    monkeypatch.setattr(calibration_module, "download_sec_bytes", fake_download)
+    with pytest.raises(ValueError, match="Asia/Seoul"):
+        capture_sec_product_mix_calibration(
+            _spec(),
+            observed_date=OBSERVED_DATE,
+            user_agent="AlphaCycleLab research@example.com",
+            output=tmp_path / "too-early",
+            captured_at=datetime(2026, 8, 14, 14, 59, tzinfo=UTC),
         )
 
 
