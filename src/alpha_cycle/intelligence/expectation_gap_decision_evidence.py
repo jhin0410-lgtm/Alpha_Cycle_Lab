@@ -1,10 +1,9 @@
 """Decision-facing Expectation Gap v1 readiness.
 
-The current live system has a raw KIS estimate-perform artifact and observational
-industry-to-earnings transmission, but neither side is a certified forward
-expectation gap. This module maps the KIS trust boundary into the provider-
-agnostic expectation contract and makes the missing internal forward operating
-view explicit instead of inventing a forecast from historical correlations.
+Market expectation levels/revisions and the internal operating view are certified
+independently. Current KIS estimate-perform semantics remain blocked. The internal
+side now reads explicit issuer/block forward-input coverage before falling back to
+historical transmission diagnostics; historical correlations are never forecasts.
 """
 
 from __future__ import annotations
@@ -70,8 +69,37 @@ def kis_expectation_semantics(
 
 
 def _internal_forward_status(row: dict[str, object]) -> tuple[str, tuple[str, ...]]:
-    transmission_ready = _bool(row.get("semiconductor_transmission_history_ready"))
-    if transmission_ready:
+    if _bool(row.get("semiconductor_forward_internal_forward_model_certified")):
+        return "certified_forward_operating_view", ()
+    if _bool(row.get("semiconductor_forward_all_numeric_inputs_covered")):
+        return (
+            "numeric_inputs_complete_model_certification_pending",
+            (
+                "output_method_not_certified",
+                "company_reconciliation_not_certified",
+                "model_version_not_frozen",
+            ),
+        )
+    if _bool(row.get("semiconductor_forward_all_descriptive_inputs_covered")):
+        return (
+            "descriptive_forward_inputs_only",
+            (
+                "numeric_forward_drivers_incomplete",
+                "output_method_not_certified",
+                "company_reconciliation_not_certified",
+                "model_version_not_frozen",
+            ),
+        )
+    if "semiconductor_forward_required_block_count" in row:
+        return (
+            "forward_input_coverage_incomplete",
+            (
+                "issuer_block_baseline_or_driver_coverage_incomplete",
+                "numeric_forward_drivers_incomplete",
+                "internal_forward_model_not_certified",
+            ),
+        )
+    if _bool(row.get("semiconductor_transmission_history_ready")):
         return (
             "historical_transmission_only_not_forward_model",
             (
@@ -160,8 +188,8 @@ def append_expectation_gap_report(
         "## Expectation Gap v1 (인증상태·비점수)",
         "",
         (
-            "- 시장 forward expectation의 '수준'과 'revision'을 별도 "
-            "capability로 인증합니다."
+            "- 시장 forward expectation의 '수준'과 'revision', 내부 forward "
+            "operating view를 서로 독립적으로 인증합니다."
         ),
         (
             "- 현재 KIS raw estimate-perform는 forward 기간·metric·집계·"
@@ -169,8 +197,8 @@ def append_expectation_gap_report(
             "사용하지 않습니다."
         ),
         (
-            "- 과거 산업→실적 transmission은 내부 forward forecast가 아니므로 "
-            "시장 기대와의 numeric gap으로 변환하지 않습니다."
+            "- issuer/block forward-input coverage가 있어도 output method·company "
+            "reconciliation·model version이 인증되기 전에는 numeric forecast가 아닙니다."
         ),
         (
             "- 이 섹션은 composite/valuation score, fair value, target price를 "
