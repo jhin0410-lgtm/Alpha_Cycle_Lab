@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+
+import pandas as pd
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_forward_estimate_calibrated import (
@@ -13,6 +16,7 @@ from alpha_cycle.intelligence.decision_forward_estimate_calibrated import (
 )
 from alpha_cycle.intelligence.decision_scoring import CompanyExposure, DecisionPolicy
 from alpha_cycle.intelligence.historical_pb_decision_evidence import (
+    HistoricalPbDecisionEvidence,
     append_historical_pb_report,
     attach_historical_pb_to_scorecards,
     load_historical_pb_decision_evidence,
@@ -23,14 +27,68 @@ DEFAULT_HISTORICAL_PB_POINTER = Path(
     "data/private/live-research/historical-pb-evidence/"
     "latest_historical_pb_evidence.json"
 )
+_GENERIC_HISTORICAL_VALUATION_GAP = "글로벌 비교기업과 과거 밸류에이션 밴드 미연결"
+_OWN_HISTORY_CONNECTED_GAP = (
+    "글로벌 비교기업 미연결 (자사 역사 P/B 밴드 연결됨, 비점수)"
+)
 
 
 def _unavailable_report(report: str, reason: str) -> str:
+    remediation = ""
+    if reason.startswith("historical_pb_evaluation_date_mismatch:"):
+        remediation = (
+            "- 조치: 현재 live run 완료 후 `./scripts/refresh_historical_pb.cmd`로 "
+            "P/B 증거를 갱신한 뒤 live pipeline을 다시 실행하세요.\n"
+        )
     return (
         report.rstrip()
         + "\n\n## 자사 역사 P/B 증거 (사용 불가)\n\n"
         + f"- 상태: `{reason}`\n"
+        + remediation
         + "- peer 상대가치·기존 valuation 점수와 의사결정 점수는 변경하지 않습니다.\n"
+    )
+
+
+def _reconcile_scorecard_gaps(scorecards: pd.DataFrame) -> pd.DataFrame:
+    required = {"historical_pb_evidence_available", "evidence_gaps"}
+    if not required.issubset(scorecards.columns):
+        return scorecards.copy()
+    result = scorecards.copy()
+    reconciled: list[object] = []
+    for raw in result.to_dict(orient="records"):
+        gaps = raw.get("evidence_gaps")
+        if not bool(raw.get("historical_pb_evidence_available")) or not isinstance(gaps, str):
+            reconciled.append(gaps)
+            continue
+        try:
+            parsed = json.loads(gaps)
+        except (TypeError, ValueError):
+            reconciled.append(gaps)
+            continue
+        if not isinstance(parsed, list):
+            reconciled.append(gaps)
+            continue
+        updated = [
+            _OWN_HISTORY_CONNECTED_GAP
+            if str(item) == _GENERIC_HISTORICAL_VALUATION_GAP
+            else str(item)
+            for item in parsed
+        ]
+        reconciled.append(json.dumps(list(dict.fromkeys(updated)), ensure_ascii=False))
+    result["evidence_gaps"] = pd.Series(reconciled, index=result.index, dtype="object")
+    return result
+
+
+def _reconcile_report_gaps(
+    report: str,
+    evidence: HistoricalPbDecisionEvidence,
+) -> str:
+    usable = evidence.symbols["current_observational_band_usable"].astype(bool)
+    if not bool(usable.all()):
+        return report
+    return report.replace(
+        _GENERIC_HISTORICAL_VALUATION_GAP,
+        _OWN_HISTORY_CONNECTED_GAP,
     )
 
 
@@ -83,10 +141,6 @@ def build_investment_decision_snapshot(
 
     try:
         evidence = load_historical_pb_decision_evidence(pointer)
-        if evidence.evaluation_date != snapshot.evaluation_date:
-            raise ValueError(
-                "historical P/B evidence evaluation date does not match decision date"
-            )
     except (OSError, TypeError, ValueError) as exc:
         reason = f"historical_pb_evidence_unavailable:{type(exc).__name__}"
         return replace(
@@ -95,9 +149,23 @@ def build_investment_decision_snapshot(
             report_markdown=_unavailable_report(snapshot.report_markdown, reason),
         )
 
+    if evidence.evaluation_date != snapshot.evaluation_date:
+        reason = (
+            "historical_pb_evaluation_date_mismatch:"
+            f"evidence={evidence.evaluation_date.isoformat()}:"
+            f"decision={snapshot.evaluation_date.isoformat()}"
+        )
+        return replace(
+            snapshot,
+            warnings=tuple(dict.fromkeys((*snapshot.warnings, reason))),
+            report_markdown=_unavailable_report(snapshot.report_markdown, reason),
+        )
+
     scorecards = attach_historical_pb_to_scorecards(snapshot.scorecards, evidence)
+    scorecards = _reconcile_scorecard_gaps(scorecards)
     records = sync_record_historical_pb_fields(snapshot.decision_records, scorecards)
-    report = append_historical_pb_report(snapshot.report_markdown, evidence)
+    base_report = _reconcile_report_gaps(snapshot.report_markdown, evidence)
+    report = append_historical_pb_report(base_report, evidence)
     usable = int(evidence.symbols["current_observational_band_usable"].astype(bool).sum())
     warnings = [
         *snapshot.warnings,
