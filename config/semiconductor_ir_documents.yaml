@@ -11,7 +11,7 @@ issuers:
         source_published_date: 2026-07-30
         period_start: 2026-04-01
         period_end: 2026-06-30
-        parser_id: samsung_earnings_presentation_2026q2_v1
+        parser_id: samsung_earnings_presentation_2026q2_v2
         expected_page_count: 16
         required_identity_anchors:
           - "2Q 2026 Earnings Call"
@@ -24,6 +24,9 @@ issuers:
         forward_claim_scope:
           - ds_memory
           - ds_foundry_system_lsi
+          - dx
+          - sdc
+          - harman
 
   "000660":
     issuer_name: SK hynix
