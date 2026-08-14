@@ -87,8 +87,10 @@ class ParsedOfficialIrDocument:
             raise ValueError("Official IR document hash must be SHA-256")
         if len(self.pages) != self.spec.expected_page_count:
             raise ValueError("Official IR parsed page count does not match registry")
-        if not self.baseline_facts:
-            raise ValueError("Official IR parser must emit at least one baseline fact")
+        if not self.baseline_facts and not self.forward_input_claims:
+            raise ValueError(
+                "Official IR parser must emit at least one baseline fact or forward-input claim"
+            )
         if not self.parser_semantics_certified:
             raise ValueError("Official IR parsed document semantics must be certified")
         if self.decision_score_enabled or self.numeric_forecast_enabled:
