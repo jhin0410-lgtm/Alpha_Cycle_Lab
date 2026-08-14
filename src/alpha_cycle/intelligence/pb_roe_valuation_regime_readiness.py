@@ -1,11 +1,8 @@
-"""Add history-depth readiness to descriptive P/B-versus-ROE evidence.
+"""Fail closed on shallow historical TTM ROE distributions.
 
-The underlying TTM ROE reconstruction remains unchanged. This wrapper only
-controls whether a historical ROE percentile is published. Quarterly TTM
-observations update at most four times per year, so twelve usable observations
-provide three years of quarterly history and roughly 8.3 percentage-point
-empirical-percentile resolution. The threshold is a data-resolution guard, not
-a return-fitted investment rule.
+Twelve quarterly TTM observations represent three years of update points and
+roughly 8.3 percentage-point empirical-percentile resolution. This is a data
+quality boundary, not a return-fitted investment threshold.
 """
 
 from __future__ import annotations
@@ -14,7 +11,6 @@ import hashlib
 import json
 from dataclasses import replace
 from datetime import date
-from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -24,21 +20,22 @@ from alpha_cycle.intelligence.historical_pb_decision_evidence import (
 )
 from alpha_cycle.intelligence.pb_roe_valuation_regime import (
     PbRoeValuationRegimeEvidence,
-)
-from alpha_cycle.intelligence.pb_roe_valuation_regime import (
     attach_pb_roe_regime_to_scorecards,
-)
-from alpha_cycle.intelligence.pb_roe_valuation_regime import (
     build_pb_roe_valuation_regime_evidence as _build_base_regime_evidence,
-)
-from alpha_cycle.intelligence.pb_roe_valuation_regime import (
     sync_record_pb_roe_regime_fields as _sync_base_record_fields,
 )
 
 MINIMUM_TTM_ROE_PERCENTILE_OBSERVATIONS = 12
+_DISTRIBUTION_COLUMNS = (
+    "ttm_roe_percentile",
+    "ttm_roe_p25",
+    "ttm_roe_median",
+    "ttm_roe_p75",
+    "pb_minus_roe_percentile_pp",
+)
 
 
-def _finite_float(value: object, field: str) -> float:
+def _number(value: object, field: str) -> float:
     converted = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     if pd.isna(converted) or not np.isfinite(float(converted)):
         raise ValueError(f"P/B-ROE readiness has invalid {field}")
@@ -48,7 +45,7 @@ def _finite_float(value: object, field: str) -> float:
 def _json_value(value: object) -> object:
     if value is None or value is pd.NA or value is pd.NaT:
         return None
-    if isinstance(value, (pd.Timestamp, date)):
+    if isinstance(value, (date, pd.Timestamp)):
         return value.isoformat()
     if isinstance(value, np.generic):
         return _json_value(value.item())
@@ -60,7 +57,7 @@ def _json_value(value: object) -> object:
     return value
 
 
-def _evidence_id(
+def _rehashed_id(
     evidence: PbRoeValuationRegimeEvidence,
     rows: pd.DataFrame,
 ) -> str:
@@ -90,22 +87,18 @@ def _evidence_id(
 def apply_pb_roe_history_readiness(
     evidence: PbRoeValuationRegimeEvidence,
 ) -> PbRoeValuationRegimeEvidence:
-    """Withhold distribution statistics until quarterly TTM history is deep enough."""
+    """Publish current ROE levels but withhold immature distribution statistics."""
 
     rows = evidence.rows.copy()
     if "ttm_roe_observation_count" not in rows.columns:
         raise ValueError("P/B-ROE evidence lacks TTM ROE observation counts")
-    for column in (
-        "ttm_roe_percentile",
-        "ttm_roe_p25",
-        "ttm_roe_median",
-        "ttm_roe_p75",
-        "pb_minus_roe_percentile_pp",
-    ):
+    for column in _DISTRIBUTION_COLUMNS:
         if column not in rows.columns:
             rows[column] = np.nan
 
-    counts = pd.to_numeric(rows["ttm_roe_observation_count"], errors="coerce").fillna(0)
+    counts = pd.to_numeric(
+        rows["ttm_roe_observation_count"], errors="coerce"
+    ).fillna(0)
     if (counts < 0).any():
         raise ValueError("P/B-ROE observation counts cannot be negative")
     rows["ttm_roe_history_minimum_observations"] = (
@@ -118,45 +111,33 @@ def apply_pb_roe_history_readiness(
         MINIMUM_TTM_ROE_PERCENTILE_OBSERVATIONS
     )
 
-    for index, raw in rows.iterrows():
+    for index in rows.index:
         count = int(counts.loc[index])
-        history_ready = bool(raw["ttm_roe_history_ready"])
-        current_roe = pd.to_numeric(
-            pd.Series([raw.get("ttm_roe")]), errors="coerce"
+        current = pd.to_numeric(
+            pd.Series([rows.at[index, "ttm_roe"]]), errors="coerce"
         ).iloc[0]
-        current_available = not pd.isna(current_roe)
-        pb_usable = bool(raw.get("pb_current_usable"))
+        current_available = not pd.isna(current)
+        pb_usable = bool(rows.at[index, "pb_current_usable"])
+        ready = bool(rows.at[index, "ttm_roe_history_ready"])
+        rows.at[index, "regime_evidence_available"] = current_available and pb_usable
         if not current_available:
-            rows.at[index, "regime_evidence_available"] = False
             rows.at[index, "regime_status"] = "ttm_roe_unavailable"
-            continue
-        rows.at[index, "regime_evidence_available"] = pb_usable
-        if not history_ready:
-            for column in (
-                "ttm_roe_percentile",
-                "ttm_roe_p25",
-                "ttm_roe_median",
-                "ttm_roe_p75",
-                "pb_minus_roe_percentile_pp",
-            ):
+        elif not ready:
+            for column in _DISTRIBUTION_COLUMNS:
                 rows.at[index, column] = np.nan
             rows.at[index, "regime_status"] = (
                 "descriptive_level_only_roe_history_insufficient"
                 if pb_usable
                 else "pb_unavailable"
             )
-            continue
-        if count < MINIMUM_TTM_ROE_PERCENTILE_OBSERVATIONS:
+        elif count >= MINIMUM_TTM_ROE_PERCENTILE_OBSERVATIONS:
+            rows.at[index, "regime_status"] = (
+                "descriptive_non_scoring" if pb_usable else "pb_unavailable"
+            )
+        else:
             raise AssertionError("P/B-ROE readiness state is inconsistent")
-        rows.at[index, "regime_status"] = (
-            "descriptive_non_scoring" if pb_usable else "pb_unavailable"
-        )
 
-    return replace(
-        evidence,
-        evidence_id=_evidence_id(evidence, rows),
-        rows=rows,
-    )
+    return replace(evidence, evidence_id=_rehashed_id(evidence, rows), rows=rows)
 
 
 def build_pb_roe_valuation_regime_evidence(
@@ -166,8 +147,6 @@ def build_pb_roe_valuation_regime_evidence(
     evaluation_date: date,
     valuation_snapshot_id: str,
 ) -> PbRoeValuationRegimeEvidence:
-    """Build base regime evidence and apply the history-depth publication guard."""
-
     base = _build_base_regime_evidence(
         financial_history,
         historical_pb,
@@ -181,7 +160,7 @@ def sync_record_pb_roe_regime_fields(
     records: pd.DataFrame,
     scorecards: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Copy base fields plus readiness metadata into compact decision records."""
+    """Copy base regime fields plus readiness metadata into compact records."""
 
     result = _sync_base_record_fields(records, scorecards)
     extra = [
@@ -191,7 +170,7 @@ def sync_record_pb_roe_regime_fields(
         "pb_roe_regime_ttm_roe_percentile_resolution_pct",
     ]
     available = [column for column in extra if column in scorecards.columns]
-    if available == ["ticker"] or not available:
+    if len(available) <= 1:
         return result
     supplement = scorecards.loc[:, available].copy()
     supplement["ticker"] = supplement["ticker"].astype("string").str.zfill(6)
@@ -208,7 +187,7 @@ def append_pb_roe_regime_report(
     report: str,
     evidence: PbRoeValuationRegimeEvidence,
 ) -> str:
-    """Render current ROE levels while withholding immature distribution statistics."""
+    """Render ROE level evidence and readiness-qualified distribution context."""
 
     lines = [
         report.rstrip(),
@@ -221,14 +200,8 @@ def append_pb_roe_regime_report(
             "시작·종료 자본총계 평균입니다."
         ),
         (
-            "- Q4는 FY 누계-Q3 누계로 만든 단일분기 flow를 허용하지만, "
-            "자본은 non-derived OpenDART 행만 사용합니다."
-        ),
-        (
-            "- ROE 역사 percentile은 분기 TTM 관측치가 최소 "
-            f"{MINIMUM_TTM_ROE_PERCENTILE_OBSERVATIONS}개일 때만 공개합니다. "
-            "이는 3년의 분기 관측과 약 8.3%p percentile 해상도를 확보하기 위한 "
-            "데이터 품질 기준이며 수익률에 맞춘 임계값이 아닙니다."
+            "- ROE 역사 percentile은 분기 TTM 관측치가 최소 12개일 때만 공개합니다. "
+            "12개는 3년 분기 관측과 약 8.3%p 해상도를 위한 품질 기준입니다."
         ),
         (
             "- cost of equity·지속성장률·forward ROE가 인증되지 않아 "
@@ -242,36 +215,31 @@ def append_pb_roe_regime_report(
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for raw_value in evidence.rows.to_dict(orient="records"):
-        raw = cast(dict[object, object], raw_value)
-        ticker = str(raw["ticker"])
-        pb = _finite_float(raw["pb_latest"], "P/B")
-        pb_percentile = _finite_float(raw["pb_percentile"], "P/B percentile")
-        pb_premium = _finite_float(raw["pb_premium_to_median_pct"], "P/B premium")
-        count = int(_finite_float(raw.get("ttm_roe_observation_count", 0), "ROE count"))
+        raw = {str(key): value for key, value in raw_value.items()}
+        pb = _number(raw["pb_latest"], "P/B")
+        pb_pct = _number(raw["pb_percentile"], "P/B percentile")
+        premium = _number(raw["pb_premium_to_median_pct"], "P/B premium")
+        count = int(_number(raw.get("ttm_roe_observation_count", 0), "ROE count"))
         current = pd.to_numeric(pd.Series([raw.get("ttm_roe")]), errors="coerce").iloc[0]
-        ready = bool(raw.get("ttm_roe_history_ready"))
         resolution_value = pd.to_numeric(
             pd.Series([raw.get("ttm_roe_percentile_resolution_pct")]), errors="coerce"
         ).iloc[0]
-        resolution = "N/A" if pd.isna(resolution_value) else f"{float(resolution_value):.1f}%p"
-        if pd.isna(current):
-            roe_text = "N/A"
+        roe_text = "N/A" if pd.isna(current) else f"{float(current) * 100.0:.1f}%"
+        resolution = (
+            "N/A" if pd.isna(resolution_value) else f"{float(resolution_value):.1f}%p"
+        )
+        if bool(raw.get("ttm_roe_history_ready")):
+            roe_pct = f"{_number(raw['ttm_roe_percentile'], 'ROE percentile'):.1f}%"
+            gap = f"{_number(raw['pb_minus_roe_percentile_pp'], 'gap'):+.1f}%p"
         else:
-            roe_text = f"{float(current) * 100.0:.1f}%"
-        if ready:
-            roe_percentile = _finite_float(raw["ttm_roe_percentile"], "ROE percentile")
-            gap = _finite_float(raw["pb_minus_roe_percentile_pp"], "percentile gap")
-            roe_percentile_text = f"{roe_percentile:.1f}%"
-            gap_text = f"{gap:+.1f}%p"
-        else:
-            roe_percentile_text = "N/A"
-            gap_text = "N/A"
+            roe_pct = "N/A"
+            gap = "N/A"
         period = raw.get("ttm_period_end")
         period_text = "N/A" if period is None or pd.isna(period) else str(period)
         lines.append(
-            f"| {ticker} | {pb:.2f}x | {pb_percentile:.1f}% | {pb_premium:+.1f}% | "
-            f"{roe_text} | {roe_percentile_text} | {count} | {resolution} | "
-            f"{gap_text} | {period_text} | {raw['regime_status']} |"
+            f"| {raw['ticker']} | {pb:.2f}x | {pb_pct:.1f}% | {premium:+.1f}% | "
+            f"{roe_text} | {roe_pct} | {count} | {resolution} | {gap} | "
+            f"{period_text} | {raw['regime_status']} |"
         )
     return "\n".join(lines).rstrip() + "\n"
 
