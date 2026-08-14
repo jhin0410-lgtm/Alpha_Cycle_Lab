@@ -301,7 +301,12 @@ def _quarterize_issuer(financial_history: pd.DataFrame, evaluation_date: date) -
 def _correlation(x: pd.Series, y: pd.Series, method: str) -> float | None:
     if len(x) < 2 or len(y) < 2:
         return None
-    value = x.corr(y, method=method)
+    if method == "pearson":
+        value = x.corr(y, method="pearson")
+    elif method == "spearman":
+        value = x.rank(method="average").corr(y.rank(method="average"), method="pearson")
+    else:
+        raise ValueError(f"Unsupported transmission correlation method: {method}")
     if pd.isna(value):
         return None
     result = float(value)
