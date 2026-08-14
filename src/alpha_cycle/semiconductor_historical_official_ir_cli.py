@@ -11,7 +11,9 @@ from urllib.request import Request, urlopen
 
 from alpha_cycle.intelligence.semiconductor_historical_official_ir import (
     DEFAULT_HISTORICAL_IR_REGISTRY,
+    HistoricalForwardClaim,
     HistoricalOfficialIrSpec,
+    ParsedHistoricalOfficialIr,
     load_historical_official_ir_registry,
     parse_historical_official_ir,
 )
@@ -33,7 +35,10 @@ def _download(spec: HistoricalOfficialIrSpec, *, timeout_seconds: float) -> byte
     return data
 
 
-def _claim_row(parsed, claim) -> dict[str, object]:
+def _claim_row(
+    parsed: ParsedHistoricalOfficialIr,
+    claim: HistoricalForwardClaim,
+) -> dict[str, object]:
     spec = parsed.spec
     return {
         "ticker": claim.ticker,
@@ -72,7 +77,11 @@ def capture_historical_official_ir(
     if document_id not in specs:
         raise ValueError(f"Historical official IR document is not registered: {document_id}")
     spec = specs[document_id]
-    data = source_bytes if source_bytes is not None else _download(spec, timeout_seconds=timeout_seconds)
+    data = (
+        source_bytes
+        if source_bytes is not None
+        else _download(spec, timeout_seconds=timeout_seconds)
+    )
     parsed = parse_historical_official_ir(spec, data)
     captured = captured_at or datetime.now(UTC)
     if captured.tzinfo is None or captured.utcoffset() is None:
@@ -193,7 +202,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="alpha-cycle-semiconductor-historical-official-ir",
         description=(
             "Archive a registered official historical issuer page for retrospective research; "
-            "the resulting evidence is never promoted to current live coverage or PIT history"
+            "the evidence is never promoted to current live coverage or PIT history"
         ),
     )
     parser.add_argument("--document-id", required=True)
