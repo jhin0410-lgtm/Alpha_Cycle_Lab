@@ -16,7 +16,8 @@ def test_live_bootstrap_runs_official_ir_refresh_before_pipeline() -> None:
 
 def test_official_ir_refresh_is_best_effort_and_uses_pipeline_evaluation_date() -> None:
     text = REFRESH.read_text(encoding="utf-8")
-    assert 'Get-OptionValue -Arguments $PipelineArguments -Name "--evaluation-date"' in text
+    assert 'Get-OptionValue -Arguments $Arguments -Name "--evaluation-date"' in text
+    assert "$EvaluationDate = Resolve-EvaluationDate -Arguments $PipelineArguments" in text
     assert "Korea Standard Time" in text
     assert "alpha_cycle.official_semiconductor_ir_refresh_cli" in text
     assert "--evaluation-date $EvaluationDate" in text
