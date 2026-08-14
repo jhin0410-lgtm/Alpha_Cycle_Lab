@@ -50,4 +50,21 @@ jobs:
         run: .venv-ci/bin/mypy
 
       - name: Pytest
-        run: .venv-ci/bin/pytest
+        shell: bash
+        run: |
+          set +e
+          .venv-ci/bin/pytest
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            python3 - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('.pytest_cache/v/cache/lastfailed')
+          if path.is_file():
+              payload = json.loads(path.read_text())
+              for nodeid in payload:
+                  file_path = nodeid.split('::', 1)[0]
+                  print(f'::error file={file_path}::pytest failed: {nodeid}')
+          PY
+          fi
+          exit "$status"
