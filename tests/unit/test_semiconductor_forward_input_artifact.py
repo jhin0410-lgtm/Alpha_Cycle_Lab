@@ -65,7 +65,8 @@ def test_forward_input_tampered_coverage_fails_closed(tmp_path: Path) -> None:
     pointer, result = _capture(tmp_path)
     coverage_path = Path(str(result["issuer_coverage_path"]))
     frame = pd.read_csv(coverage_path)
-    frame.loc[frame["ticker"].astype(str).str.zfill(6).eq("000660"), "all_numeric_inputs_covered"] = True
+    mask = frame["ticker"].astype(str).str.zfill(6).eq("000660")
+    frame.loc[mask, "all_numeric_inputs_covered"] = True
     frame.to_csv(coverage_path, index=False)
 
     with pytest.raises(ValueError, match="issuer coverage does not reproduce"):
@@ -78,7 +79,8 @@ def test_forward_input_tampered_coverage_fails_closed(tmp_path: Path) -> None:
 def test_forward_input_tampered_archived_registry_fails_closed(tmp_path: Path) -> None:
     pointer, result = _capture(tmp_path)
     registry_path = Path(str(result["source_registry_path"]))
-    registry_path.write_text(registry_path.read_text(encoding="utf-8") + "\n# tampered\n", encoding="utf-8")
+    tampered = registry_path.read_text(encoding="utf-8") + "\n# tampered\n"
+    registry_path.write_text(tampered, encoding="utf-8")
 
     with pytest.raises(ValueError, match="registry hash mismatch"):
         load_semiconductor_forward_input_decision_evidence(
