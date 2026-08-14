@@ -24,6 +24,7 @@ def test_official_ir_refresh_is_best_effort_and_uses_pipeline_evaluation_date() 
     assert "--document-output $DocumentOutput" in text
     assert "--baseline-output $BaselineOutput" in text
     assert "--forward-output $ForwardOutput" in text
+    assert "--accounting-output $AccountingOutput" in text
     warning = "live pipeline will continue without treating stale official IR evidence as current"
     assert warning in text
     assert text.rstrip().endswith("exit 0")
@@ -35,3 +36,4 @@ def test_official_ir_refresh_keeps_downstream_outputs_under_live_research_root()
     assert 'Join-Path $OutputRoot "official-semiconductor-ir-documents"' in text
     assert 'Join-Path $OutputRoot "semiconductor-baseline-reconciliation"' in text
     assert 'Join-Path $OutputRoot "semiconductor-forward-input-evidence"' in text
+    assert 'Join-Path $OutputRoot "semiconductor-accounting-identity"' in text
