@@ -1,8 +1,8 @@
 """Certified future catalyst horizon evidence.
 
-Recent disclosures and future catalysts are deliberately separated.  A disclosure
+Recent disclosures and future catalysts are deliberately separated. A disclosure
 that already happened may explain the current thesis but cannot be relabeled as a
-future 1/3/6/12-month event.  Future catalyst timing is published only when an
+future 1/3/6/12-month event. Future catalyst timing is published only when an
 official or otherwise source-bounded event date/window is supplied.
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date
 
@@ -21,6 +22,16 @@ _ALLOWED_PREREQUISITE = frozenset({"satisfied", "pending", "failed", "unknown"})
 _ALLOWED_SOURCE_ROLES = frozenset(
     {"issuer_ir", "customer_ir", "government", "exchange", "contract_disclosure", "regulator"}
 )
+
+
+def _add_calendar_months(value: date, months: int) -> date:
+    if months < 0:
+        raise ValueError("Catalyst horizon month offset cannot be negative")
+    month_index = value.month - 1 + months
+    year = value.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(value.day, monthrange(year, month)[1])
+    return date(year, month, day)
 
 
 @dataclass(frozen=True)
@@ -92,18 +103,18 @@ class CatalystEvent:
 
     @property
     def horizon_bucket(self) -> str:
-        days = self.horizon_days
-        if days is None:
+        target = self.event_date if self.event_date is not None else self.window_start
+        if target is None:
             return "unscheduled"
-        if days < 0:
+        if target < self.evaluation_date:
             return "past_not_future"
-        if days <= 31:
+        if target <= _add_calendar_months(self.evaluation_date, 1):
             return "1m"
-        if days <= 92:
+        if target <= _add_calendar_months(self.evaluation_date, 3):
             return "3m"
-        if days <= 183:
+        if target <= _add_calendar_months(self.evaluation_date, 6):
             return "6m"
-        if days <= 366:
+        if target <= _add_calendar_months(self.evaluation_date, 12):
             return "12m"
         return "beyond_12m"
 
