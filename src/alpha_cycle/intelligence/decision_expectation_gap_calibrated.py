@@ -1,4 +1,4 @@
-"""Attach provider-agnostic Expectation Gap v1 after forward-input coverage."""
+"""Attach provider-agnostic Expectation Gap v1 after operating assumptions."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import pandas as pd
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_scoring import CompanyExposure, DecisionPolicy
-from alpha_cycle.intelligence.decision_semiconductor_forward_input_calibrated import (
-    build_investment_decision_snapshot as _build_forward_input_snapshot,
+from alpha_cycle.intelligence.decision_semiconductor_operating_assumption_calibrated import (
+    build_investment_decision_snapshot as _build_operating_assumption_snapshot,
 )
 from alpha_cycle.intelligence.expectation_gap_decision_evidence import (
     append_expectation_gap_report,
@@ -75,6 +75,7 @@ def build_investment_decision_snapshot(
     semiconductor_structural_pointer: str | Path | None = None,
     macro_liquidity_pointer: str | Path | None = None,
     semiconductor_forward_input_pointer: str | Path | None = None,
+    semiconductor_operating_assumption_pointer: str | Path | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
     policy: DecisionPolicy | None = None,
@@ -82,7 +83,7 @@ def build_investment_decision_snapshot(
 ) -> InvestmentDecisionSnapshot:
     """Build existing chain, then attach expectation certification/readiness only."""
 
-    snapshot = _build_forward_input_snapshot(
+    snapshot = _build_operating_assumption_snapshot(
         research_snapshot,
         market_snapshot,
         valuation_snapshot=valuation_snapshot,
@@ -94,6 +95,7 @@ def build_investment_decision_snapshot(
         semiconductor_structural_pointer=semiconductor_structural_pointer,
         macro_liquidity_pointer=macro_liquidity_pointer,
         semiconductor_forward_input_pointer=semiconductor_forward_input_pointer,
+        semiconductor_operating_assumption_pointer=semiconductor_operating_assumption_pointer,
         benchmark=benchmark,
         exposures=exposures,
         policy=policy,
