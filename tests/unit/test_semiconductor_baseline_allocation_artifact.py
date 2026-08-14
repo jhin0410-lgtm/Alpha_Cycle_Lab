@@ -74,6 +74,54 @@ def _resolver(
     )
 
 
+def _official_q1_like_resolver(
+    source_reference: str | Path,
+    evaluation_date: date,
+) -> VerifiedAllocationSourceBundle:
+    source = Path(source_reference)
+    source_reference_id = hashlib.sha256(source.read_bytes()).hexdigest()
+    return VerifiedAllocationSourceBundle(
+        resolver_id=RESOLVER_ID,
+        ticker="000660",
+        evaluation_date=evaluation_date,
+        source_reference_id=source_reference_id,
+        inputs=(
+            _input(
+                "reported_company_revenue",
+                52_576.0,
+                "KRW_billion",
+                _id("q1_company_revenue"),
+            ),
+            _input("dram_revenue_share", 77.3, "percent", _id("q1_dram_share")),
+            _input("nand_revenue_share", 22.0, "percent", _id("q1_nand_share")),
+            _input(
+                "other_products_services_revenue",
+                343.0,
+                "KRW_billion",
+                _id("q1_other_revenue"),
+            ),
+        ),
+        method_support_evidence_ids=(CALIBRATION_ID,),
+        reconciliation_relative_tolerance=0.001,
+    )
+
+
+def _official_q1_like_exact_tolerance_resolver(
+    source_reference: str | Path,
+    evaluation_date: date,
+) -> VerifiedAllocationSourceBundle:
+    bundle = _official_q1_like_resolver(source_reference, evaluation_date)
+    return VerifiedAllocationSourceBundle(
+        resolver_id=bundle.resolver_id,
+        ticker=bundle.ticker,
+        evaluation_date=bundle.evaluation_date,
+        source_reference_id=bundle.source_reference_id,
+        inputs=bundle.inputs,
+        method_support_evidence_ids=bundle.method_support_evidence_ids,
+        reconciliation_relative_tolerance=0.0,
+    )
+
+
 def _changed_resolver(
     source_reference: str | Path,
     evaluation_date: date,
@@ -130,6 +178,45 @@ def test_source_bundle_requires_distinct_method_calibration_evidence(tmp_path: P
         )
 
 
+def test_positive_rounding_tolerance_requires_explicit_other_and_is_capped(tmp_path: Path) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"source-bounded-inputs")
+    source_id = hashlib.sha256(source.read_bytes()).hexdigest()
+    base_inputs = (
+        _input("reported_company_revenue", 100.0, "KRW_billion", _id("company_revenue")),
+        _input("dram_revenue_share", 70.0, "percent", _id("dram_share")),
+        _input("nand_revenue_share", 30.0, "percent", _id("nand_share")),
+    )
+    with pytest.raises(ValueError, match="requires explicit Other revenue"):
+        VerifiedAllocationSourceBundle(
+            resolver_id=RESOLVER_ID,
+            ticker="000660",
+            evaluation_date=EVALUATION_DATE,
+            source_reference_id=source_id,
+            inputs=base_inputs,
+            method_support_evidence_ids=(CALIBRATION_ID,),
+            reconciliation_relative_tolerance=0.001,
+        )
+    with pytest.raises(ValueError, match="exceeds v1 calibration"):
+        VerifiedAllocationSourceBundle(
+            resolver_id=RESOLVER_ID,
+            ticker="000660",
+            evaluation_date=EVALUATION_DATE,
+            source_reference_id=source_id,
+            inputs=(
+                *base_inputs,
+                _input(
+                    "other_products_services_revenue",
+                    1.0,
+                    "KRW_billion",
+                    _id("other_revenue"),
+                ),
+            ),
+            method_support_evidence_ids=(CALIBRATION_ID,),
+            reconciliation_relative_tolerance=0.0011,
+        )
+
+
 def test_dram_nand_allocation_stays_partial_without_explicit_other_revenue(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"source-bounded-inputs")
@@ -143,6 +230,7 @@ def test_dram_nand_allocation_stays_partial_without_explicit_other_revenue(tmp_p
 
     reconciliation = evidence.reconciliation
     assert evidence.method_support_evidence_ids == (CALIBRATION_ID,)
+    assert evidence.reconciliation_relative_tolerance == 0.0
     assert reconciliation.required_revenue_blocks == (
         "dram_total",
         "nand_and_solutions",
@@ -161,8 +249,53 @@ def test_dram_nand_allocation_stays_partial_without_explicit_other_revenue(tmp_p
     assert evidence.full_baseline_certified is False
     assert evidence.numeric_forecast_enabled is False
     assert evidence.decision_score_enabled is False
-    assert all(allocation.source_fact is False for allocation in evidence.allocations)
-    assert all(allocation.allocation_ready is True for allocation in evidence.allocations)
+
+
+def test_official_q1_shape_needs_calibrated_rounding_tolerance_to_reconcile(tmp_path: Path) -> None:
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"official-q1-calibration-shape")
+
+    exact = build_skhynix_revenue_allocation_evidence(
+        source,
+        evaluation_date=EVALUATION_DATE,
+        resolver_id=RESOLVER_ID,
+        resolvers={RESOLVER_ID: _official_q1_like_exact_tolerance_resolver},
+    )
+    assert exact.reconciliation.missing_revenue_blocks == ()
+    assert exact.reconciliation.reconciliation_delta == pytest.approx(-24.032)
+    assert exact.reconciliation.revenue_reconciliation_certified is False
+
+    calibrated = build_skhynix_revenue_allocation_evidence(
+        source,
+        evaluation_date=EVALUATION_DATE,
+        resolver_id=RESOLVER_ID,
+        resolvers={RESOLVER_ID: _official_q1_like_resolver},
+    )
+    reconciliation = calibrated.reconciliation
+    assert calibrated.reconciliation_relative_tolerance == pytest.approx(0.001)
+    assert reconciliation.allocated_revenue_blocks == (
+        "dram_total",
+        "nand_and_solutions",
+        "other_products_services",
+    )
+    assert reconciliation.missing_revenue_blocks == ()
+    assert reconciliation.allocated_revenue_total == pytest.approx(52_551.968)
+    assert reconciliation.reported_company_revenue == pytest.approx(52_576.0)
+    assert reconciliation.reconciliation_delta == pytest.approx(-24.032)
+    assert reconciliation.absolute_tolerance == pytest.approx(52.576)
+    assert reconciliation.revenue_reconciliation_certified is True
+    assert reconciliation.revenue_model_input_ready is True
+    assert reconciliation.profitability_baseline_certified is False
+    assert reconciliation.full_baseline_certified is False
+    assert reconciliation.numeric_forecast_enabled is False
+    assert reconciliation.decision_score_enabled is False
+    other = next(
+        item for item in calibrated.allocations if item.block_id == "other_products_services"
+    )
+    assert other.value == pytest.approx(343.0)
+    assert other.source_fact is False
+    assert other.derived_not_source_fact is True
+    assert other.residual_derivation_used is False
 
 
 def test_capture_and_loader_reconstruct_partial_allocation_from_source_resolver(
@@ -189,6 +322,7 @@ def test_capture_and_loader_reconstruct_partial_allocation_from_source_resolver(
 
     assert captured["evidence_id"] == loaded.evidence_id
     assert captured["method_support_evidence_ids"] == [CALIBRATION_ID]
+    assert captured["reconciliation_relative_tolerance"] == 0.0
     assert loaded.reconciliation.revenue_reconciliation_certified is False
     assert loaded.reconciliation.revenue_model_input_ready is False
     assert loaded.reconciliation.missing_revenue_blocks == ("other_products_services",)
