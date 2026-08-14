@@ -2,7 +2,7 @@
 
 Structural evidence covers HBM demand/mix, capacity/yield/packaging, customer
 qualification, competitive position, end-demand, memory-pricing direction, and
-export-control policy.  It is intentionally separate from numeric memory-price
+export-control policy. It is intentionally separate from numeric memory-price
 series: issuer/peer commentary may support a qualitative pricing claim but can
 never be promoted into a numeric DRAM/NAND/HBM price signal.
 """
@@ -69,7 +69,9 @@ class SemiconductorStructuralClaim:
     decision_score_enabled: bool = False
 
     def __post_init__(self) -> None:
-        if len(self.claim_id) != 64 or any(char not in "0123456789abcdef" for char in self.claim_id):
+        if len(self.claim_id) != 64 or any(
+            char not in "0123456789abcdef" for char in self.claim_id
+        ):
             raise ValueError("Structural claim_id must be SHA-256")
         if not self.subject.strip() or not self.dimension.strip() or not self.statement.strip():
             raise ValueError("Structural claim subject/dimension/statement cannot be blank")
@@ -94,7 +96,9 @@ class SemiconductorStructuralEvidenceBundle:
     decision_score_enabled: bool = False
 
     def __post_init__(self) -> None:
-        if len(self.bundle_id) != 64 or any(char not in "0123456789abcdef" for char in self.bundle_id):
+        if len(self.bundle_id) != 64 or any(
+            char not in "0123456789abcdef" for char in self.bundle_id
+        ):
             raise ValueError("Structural bundle_id must be SHA-256")
         if not self.claims:
             raise ValueError("Structural evidence bundle requires at least one claim")
@@ -104,6 +108,18 @@ class SemiconductorStructuralEvidenceBundle:
             raise ValueError("Structural evidence bundle must remain non-scoring")
         if self.numeric_memory_price_signal_enabled:
             raise ValueError("Numeric memory-price signal is not enabled by structural evidence")
+
+
+def _string_list(raw: object, field: str, *, casefold: bool = False) -> tuple[str, ...]:
+    if not isinstance(raw, list):
+        raise ValueError(f"Structural source {field} must be an array")
+    values: list[str] = []
+    for value in raw:
+        text = str(value).strip()
+        if not text:
+            continue
+        values.append(text.casefold() if casefold else text)
+    return tuple(values)
 
 
 def load_structural_source_registry(
@@ -124,12 +140,20 @@ def load_structural_source_registry(
             owner=str(raw.get("owner", "")).strip(),
             role=str(raw.get("role", "")).strip(),
             primary_source=bool(raw.get("primary_source", False)),
-            domains=tuple(str(value).strip().casefold() for value in raw.get("domains", []) if str(value).strip()),
-            allowed_dimensions=tuple(str(value).strip() for value in raw.get("allowed_dimensions", []) if str(value).strip()),
+            domains=_string_list(raw.get("domains", []), "domains", casefold=True),
+            allowed_dimensions=_string_list(
+                raw.get("allowed_dimensions", []), "allowed_dimensions"
+            ),
             numeric_memory_price_eligible=bool(raw.get("numeric_memory_price_eligible", False)),
-            requires_semantics_certification=bool(raw.get("requires_semantics_certification", False)),
-            requires_unit_and_product_scope=bool(raw.get("requires_unit_and_product_scope", False)),
-            requires_license_or_public_reuse_basis=bool(raw.get("requires_license_or_public_reuse_basis", False)),
+            requires_semantics_certification=bool(
+                raw.get("requires_semantics_certification", False)
+            ),
+            requires_unit_and_product_scope=bool(
+                raw.get("requires_unit_and_product_scope", False)
+            ),
+            requires_license_or_public_reuse_basis=bool(
+                raw.get("requires_license_or_public_reuse_basis", False)
+            ),
         )
     if not result:
         raise ValueError("Structural source registry is empty")
@@ -178,7 +202,9 @@ def validate_structural_claim(
 
     if dimension == "memory_numeric_price":
         if not source.numeric_memory_price_eligible:
-            raise ValueError("Company/customer/government commentary cannot become numeric memory price")
+            raise ValueError(
+                "Company/customer/government commentary cannot become numeric memory price"
+            )
         if kind != "numeric":
             raise ValueError("memory_numeric_price requires numeric evidence")
         if source.requires_semantics_certification and not semantics_certified:
@@ -188,26 +214,48 @@ def validate_structural_claim(
         if source.requires_license_or_public_reuse_basis and not reuse_basis:
             raise ValueError("Numeric memory price requires documented reuse/license basis")
     elif kind == "numeric" and not source.primary_source:
-        raise ValueError("Non-primary structural numeric evidence is only allowed for certified price data")
+        raise ValueError(
+            "Non-primary structural numeric evidence is only allowed for certified price data"
+        )
 
-    payload = {
-        "subject": str(raw.get("subject", "")).strip(),
+    subject = str(raw.get("subject", "")).strip()
+    statement = str(raw.get("statement", "")).strip()
+    issuer_specific = bool(raw.get("issuer_specific", False))
+    payload: dict[str, object] = {
+        "subject": subject,
         "dimension": dimension,
         "as_of_date": evaluation_date.isoformat(),
         "source_id": source_id,
         "source_url": source_url,
         "source_published_date": published.isoformat(),
         "evidence_kind": kind,
-        "statement": str(raw.get("statement", "")).strip(),
+        "statement": statement,
         "numeric_value": numeric_value,
         "unit": unit,
         "product_scope": product_scope,
         "semantics_certified": semantics_certified,
         "reuse_basis_documented": reuse_basis,
-        "issuer_specific": bool(raw.get("issuer_specific", False)),
+        "issuer_specific": issuer_specific,
         "decision_score_enabled": False,
     }
-    return SemiconductorStructuralClaim(claim_id=_claim_id(payload), **payload)  # type: ignore[arg-type]
+    return SemiconductorStructuralClaim(
+        claim_id=_claim_id(payload),
+        subject=subject,
+        dimension=dimension,
+        as_of_date=evaluation_date,
+        source_id=source_id,
+        source_url=source_url,
+        source_published_date=published,
+        evidence_kind=kind,
+        statement=statement,
+        numeric_value=numeric_value,
+        unit=unit,
+        product_scope=product_scope,
+        semantics_certified=semantics_certified,
+        reuse_basis_documented=reuse_basis,
+        issuer_specific=issuer_specific,
+        decision_score_enabled=False,
+    )
 
 
 def build_structural_evidence_bundle(
