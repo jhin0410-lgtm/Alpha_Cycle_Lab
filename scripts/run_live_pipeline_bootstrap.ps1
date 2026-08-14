@@ -11,6 +11,7 @@ $RepositoryRoot = Split-Path -Parent $ScriptDirectory
 $Resolver = Join-Path $ScriptDirectory "resolve_project_python.ps1"
 $Pipeline = Join-Path $ScriptDirectory "run_live_pipeline_orchestrator.ps1"
 $MacroLiquidityRefresh = Join-Path $ScriptDirectory "refresh_macro_liquidity.ps1"
+$OfficialIrRefresh = Join-Path $ScriptDirectory "refresh_official_semiconductor_ir.ps1"
 $SourceRoot = Join-Path $RepositoryRoot "src"
 
 $ProjectPython = & $Resolver
@@ -31,5 +32,6 @@ else {
 
 Set-Location $RepositoryRoot
 & $MacroLiquidityRefresh @PipelineArguments
+& $OfficialIrRefresh @PipelineArguments
 & $Pipeline @PipelineArguments
 exit $LASTEXITCODE
