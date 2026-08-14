@@ -69,6 +69,7 @@ def build_investment_decision_snapshot(
     macro_liquidity_pointer: str | Path | None = None,
     semiconductor_forward_input_pointer: str | Path | None = None,
     semiconductor_operating_assumption_pointer: str | Path | None = None,
+    semiconductor_baseline_reconciliation_pointer: str | Path | None = None,
     catalyst_horizon_pointer: str | Path | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
@@ -90,6 +91,9 @@ def build_investment_decision_snapshot(
         macro_liquidity_pointer=macro_liquidity_pointer,
         semiconductor_forward_input_pointer=semiconductor_forward_input_pointer,
         semiconductor_operating_assumption_pointer=semiconductor_operating_assumption_pointer,
+        semiconductor_baseline_reconciliation_pointer=(
+            semiconductor_baseline_reconciliation_pointer
+        ),
         catalyst_horizon_pointer=catalyst_horizon_pointer,
         benchmark=benchmark,
         exposures=exposures,

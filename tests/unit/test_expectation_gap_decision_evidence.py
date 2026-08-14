@@ -130,3 +130,29 @@ def test_ready_operating_assumptions_still_require_baseline_and_model_certificat
     assert "baseline_reconciliation_not_certified" in blockers
     assert "company_reconciliation_not_certified" in blockers
     assert bool(row["expectation_gap_enabled"]) is False
+
+
+def test_verified_baseline_bridge_removes_only_the_baseline_blocker() -> None:
+    scorecards = pd.DataFrame(
+        [
+            {
+                "ticker": "005930",
+                "kis_forward_evidence_available": True,
+                "semiconductor_assumption_horizon_quarters": 4,
+                "semiconductor_assumption_all_scenario_assumptions_documented": True,
+                "semiconductor_assumption_all_scenario_assumptions_model_use_ready": True,
+                "semiconductor_baseline_reconciliation_certified": True,
+                "semiconductor_assumption_output_method_certified": False,
+                "semiconductor_assumption_company_reconciliation_certified": False,
+                "semiconductor_assumption_model_version_frozen": False,
+                "semiconductor_assumption_internal_forward_model_certified": False,
+            }
+        ]
+    )
+    row = build_expectation_gap_decision_evidence(scorecards).rows.iloc[0]
+    blockers = json.loads(str(row["internal_forward_view_blockers_json"]))
+    assert "baseline_reconciliation_not_certified" not in blockers
+    assert "output_method_not_certified" in blockers
+    assert "company_reconciliation_not_certified" in blockers
+    assert "model_version_not_frozen" in blockers
+    assert bool(row["expectation_gap_enabled"]) is False
