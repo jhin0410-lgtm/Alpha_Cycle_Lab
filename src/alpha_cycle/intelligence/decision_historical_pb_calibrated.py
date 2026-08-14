@@ -22,7 +22,7 @@ from alpha_cycle.intelligence.historical_pb_decision_evidence import (
     load_historical_pb_decision_evidence,
     sync_record_historical_pb_fields,
 )
-from alpha_cycle.intelligence.pb_roe_valuation_regime import (
+from alpha_cycle.intelligence.pb_roe_valuation_regime_readiness import (
     append_pb_roe_regime_report,
     attach_pb_roe_regime_to_scorecards,
     build_pb_roe_valuation_regime_evidence,
@@ -195,14 +195,23 @@ def build_investment_decision_snapshot(
         available = int(
             regime_evidence.rows["regime_evidence_available"].astype(bool).sum()
         )
+        percentile_ready = int(
+            regime_evidence.rows["ttm_roe_history_ready"].astype(bool).sum()
+        )
         warnings.extend(
             [
                 f"pb_roe_regime_evidence:{regime_evidence.evidence_id[:12]}",
                 f"pb_roe_regime_available:{available}/{len(regime_evidence.rows)}",
+                (
+                    "pb_roe_regime_percentile_ready:"
+                    f"{percentile_ready}/{len(regime_evidence.rows)}"
+                ),
                 "pb_roe_regime_descriptive_non_scoring",
                 "pb_roe_regime_no_forward_roe_or_cost_of_equity",
             ]
         )
+        if percentile_ready < len(regime_evidence.rows):
+            warnings.append("pb_roe_regime_percentile_withheld_insufficient_history")
 
     usable = int(evidence.symbols["current_observational_band_usable"].astype(bool).sum())
     warnings.extend(

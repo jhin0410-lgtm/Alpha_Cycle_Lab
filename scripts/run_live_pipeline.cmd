@@ -1,6 +1,6 @@
 @echo off
 setlocal
 chcp 65001 >nul
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_live_pipeline_bootstrap.ps1" %*
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0run_live_pipeline_bootstrap.ps1" --history-years 5 %*
 set "EXIT_CODE=%ERRORLEVEL%"
 endlocal & exit /b %EXIT_CODE%
