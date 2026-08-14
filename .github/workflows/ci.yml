@@ -47,7 +47,23 @@ jobs:
         run: .venv-ci/bin/ruff check .
 
       - name: Mypy
-        run: .venv-ci/bin/mypy
+        shell: bash
+        run: |
+          set +e
+          output="$(.venv-ci/bin/mypy 2>&1)"
+          status=$?
+          printf '%s\n' "$output"
+          if [ "$status" -ne 0 ]; then
+            while IFS= read -r line; do
+              if [[ "$line" =~ ^([^:]+):([0-9]+):\ error:\ (.*)$ ]]; then
+                file="${BASH_REMATCH[1]}"
+                lineno="${BASH_REMATCH[2]}"
+                message="${BASH_REMATCH[3]}"
+                echo "::error file=${file},line=${lineno}::${message}"
+              fi
+            done <<< "$output"
+          fi
+          exit "$status"
 
       - name: Pytest
         run: .venv-ci/bin/pytest
