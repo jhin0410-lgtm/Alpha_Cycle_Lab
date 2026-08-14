@@ -79,10 +79,35 @@ def test_qualitative_evidence_never_becomes_numeric_driver_coverage() -> None:
         & evidence.block_coverage["block_id"].eq("dram_total")
     ].iloc[0]
     assert int(dram["covered_forward_driver_count"]) == 1
+    assert int(dram["expired_forward_claim_count"]) == 0
     assert int(dram["numeric_forward_driver_count"]) == 0
     assert bool(dram["numeric_model_input_ready"]) is False
     assert evidence.numeric_forecast_enabled is False
     assert evidence.decision_score_enabled is False
+
+
+def test_expired_qualitative_forward_evidence_is_archived_but_not_current_coverage() -> None:
+    raw = _claim(metric_id="dram_asp_change")
+    raw["source_published_date"] = "2026-04-22"
+    raw["period_start"] = "2026-04-23"
+    raw["period_end"] = "2026-06-30"
+    evidence = build_semiconductor_forward_input_evidence(
+        [raw],
+        REGISTRY,
+        evaluation_date=EVALUATION,
+    )
+    assert len(evidence.claims) == 1
+    claim = evidence.claims[0]
+    assert claim.period_end == date(2026, 6, 30)
+    dram = evidence.block_coverage.loc[
+        evidence.block_coverage["ticker"].eq("000660")
+        & evidence.block_coverage["block_id"].eq("dram_total")
+    ].iloc[0]
+    assert int(dram["covered_forward_driver_count"]) == 0
+    assert int(dram["expired_forward_claim_count"]) == 1
+    issuer = evidence.issuer_coverage.loc[evidence.issuer_coverage["ticker"].eq("000660")].iloc[0]
+    assert int(issuer["expired_forward_claim_count"]) == 1
+    assert bool(issuer["all_descriptive_inputs_covered"]) is False
 
 
 def test_numeric_issuer_guidance_requires_certification_and_future_period_to_be_model_input() -> None:
