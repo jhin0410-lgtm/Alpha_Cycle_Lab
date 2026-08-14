@@ -7,6 +7,7 @@ import json
 import shutil
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 from urllib.request import Request, urlopen
 
 from alpha_cycle.intelligence.macro_liquidity_evidence import (
@@ -33,7 +34,7 @@ def _download(url: str, *, timeout_seconds: float = 15.0) -> bytes:
         method="GET",
     )
     with urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
-        content = response.read()
+        content = cast(bytes, response.read())
     if not content:
         raise ValueError(f"Macro liquidity source returned no bytes: {url}")
     return content
