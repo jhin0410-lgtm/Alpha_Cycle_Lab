@@ -43,7 +43,7 @@ _ABSOLUTE_PDF_URL = re.compile(
     flags=re.IGNORECASE,
 )
 _RELATIVE_ATTACH_PDF = re.compile(
-    r"/web/attach/[0-9]+\.pdf(?:\?[^\s\"'<>]*)?",
+    r"(?<![A-Za-z0-9._-])/web/attach/[0-9]+\.pdf(?:\?[^\s\"'<>]*)?",
     flags=re.IGNORECASE,
 )
 
