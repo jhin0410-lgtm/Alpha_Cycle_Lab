@@ -8,6 +8,7 @@ import pytest
 from alpha_cycle.intelligence.official_semiconductor_ir_collector import (
     DEFAULT_IR_DOCUMENT_REGISTRY,
     OfficialIrDocumentSpec,
+    ParsedOfficialIrDocument,
     load_official_ir_document_registry,
 )
 from alpha_cycle.intelligence.semiconductor_forward_input_evidence import (
@@ -60,7 +61,7 @@ def _pages() -> tuple[str, ...]:
     return tuple(pages)
 
 
-def _claims_by_metric() -> tuple[object, dict[str, dict[str, object]]]:
+def _claims_by_metric() -> tuple[ParsedOfficialIrDocument, dict[str, dict[str, object]]]:
     parsed = parse_sk_hynix_2026q2(_spec(), b"%PDF-synthetic", _pages())
     claims = {str(row["metric_id"]): row for row in parsed.forward_input_claims}
     return parsed, claims
