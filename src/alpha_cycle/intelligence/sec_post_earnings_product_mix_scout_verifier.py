@@ -95,7 +95,8 @@ def load_post_earnings_product_mix_scout_evidence(
         filing_bytes_by_accession=filing_bytes_by_accession,
     )
     evidence_id = str(pointer.get("evidence_id", ""))
-    if reconstructed.evidence_id != evidence_id or str(manifest.get("evidence_id", "")) != evidence_id:
+    manifest_evidence_id = str(manifest.get("evidence_id", ""))
+    if reconstructed.evidence_id != evidence_id or manifest_evidence_id != evidence_id:
         raise ValueError("SEC scout evidence does not reproduce from archived source bytes")
     if reconstructed.submissions_sha256 != str(pointer.get("submissions_sha256", "")):
         raise ValueError("SEC scout submissions hash does not reproduce")
