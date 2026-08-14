@@ -2,8 +2,8 @@
 
 Market expectation levels/revisions and the internal operating view are certified
 independently. Current KIS estimate-perform semantics remain blocked. The internal
-side now reads explicit issuer/block forward-input coverage before falling back to
-historical transmission diagnostics; historical correlations are never forecasts.
+side distinguishes source-input coverage, explicit scenario assumptions, baseline
+reconciliation, and final model certification; historical correlations are never forecasts.
 """
 
 from __future__ import annotations
@@ -69,12 +69,54 @@ def kis_expectation_semantics(
 
 
 def _internal_forward_status(row: dict[str, object]) -> tuple[str, tuple[str, ...]]:
+    if _bool(row.get("semiconductor_assumption_internal_forward_model_certified")):
+        return "certified_forward_operating_view", ()
+
+    if _bool(row.get("semiconductor_assumption_all_scenario_assumptions_model_use_ready")):
+        blockers: list[str] = []
+        if not _bool(row.get("semiconductor_assumption_baseline_reconciliation_certified")):
+            blockers.append("baseline_reconciliation_not_certified")
+        if not _bool(row.get("semiconductor_assumption_output_method_certified")):
+            blockers.append("output_method_not_certified")
+        if not _bool(row.get("semiconductor_assumption_company_reconciliation_certified")):
+            blockers.append("company_reconciliation_not_certified")
+        if not _bool(row.get("semiconductor_assumption_model_version_frozen")):
+            blockers.append("model_version_not_frozen")
+        return (
+            "operating_assumptions_ready_model_certification_pending",
+            tuple(blockers or ("internal_forward_model_not_certified",)),
+        )
+
+    if _bool(row.get("semiconductor_assumption_all_scenario_assumptions_documented")):
+        return (
+            "scenario_assumptions_documented_not_model_ready",
+            (
+                "scenario_assumption_method_or_evidence_not_model_use_ready",
+                "baseline_reconciliation_not_certified",
+                "output_method_not_certified",
+                "company_reconciliation_not_certified",
+                "model_version_not_frozen",
+            ),
+        )
+
+    if "semiconductor_assumption_horizon_quarters" in row:
+        return (
+            "operating_assumption_coverage_incomplete",
+            (
+                "bull_base_bear_driver_quarter_coverage_incomplete",
+                "baseline_reconciliation_not_certified",
+                "internal_forward_model_not_certified",
+            ),
+        )
+
     if _bool(row.get("semiconductor_forward_internal_forward_model_certified")):
         return "certified_forward_operating_view", ()
     if _bool(row.get("semiconductor_forward_all_numeric_inputs_covered")):
         return (
-            "numeric_inputs_complete_model_certification_pending",
+            "numeric_source_inputs_complete_assumptions_and_bridges_pending",
             (
+                "operating_scenario_assumptions_missing",
+                "baseline_reconciliation_not_certified",
                 "output_method_not_certified",
                 "company_reconciliation_not_certified",
                 "model_version_not_frozen",
@@ -85,6 +127,8 @@ def _internal_forward_status(row: dict[str, object]) -> tuple[str, tuple[str, ..
             "descriptive_forward_inputs_only",
             (
                 "numeric_forward_drivers_incomplete",
+                "operating_scenario_assumptions_missing",
+                "baseline_reconciliation_not_certified",
                 "output_method_not_certified",
                 "company_reconciliation_not_certified",
                 "model_version_not_frozen",
@@ -96,6 +140,7 @@ def _internal_forward_status(row: dict[str, object]) -> tuple[str, tuple[str, ..
             (
                 "issuer_block_baseline_or_driver_coverage_incomplete",
                 "numeric_forward_drivers_incomplete",
+                "operating_scenario_assumptions_missing",
                 "internal_forward_model_not_certified",
             ),
         )
@@ -197,8 +242,9 @@ def append_expectation_gap_report(
             "사용하지 않습니다."
         ),
         (
-            "- issuer/block forward-input coverage가 있어도 output method·company "
-            "reconciliation·model version이 인증되기 전에는 numeric forecast가 아닙니다."
+            "- source-input coverage와 내부 Bull/Base/Bear assumptions는 별도 계층입니다. "
+            "baseline bridge·output method·company reconciliation·model freeze가 끝나기 "
+            "전에는 numeric forecast가 아닙니다."
         ),
         (
             "- certified market expectation level과 certified internal forward view가 "
