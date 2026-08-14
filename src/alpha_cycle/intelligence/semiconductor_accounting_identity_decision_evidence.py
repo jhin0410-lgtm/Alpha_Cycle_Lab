@@ -149,7 +149,10 @@ def append_semiconductor_accounting_identity_report(
         f"| income tax | {item.income_tax:.1f} |",
         f"| net income | {item.net_income:.1f} |",
         "",
-        f"- corporate consolidation bridge certified: `{item.corporate_consolidation_bridge_certified}`",
+        (
+            "- corporate consolidation bridge certified: "
+            f"`{item.corporate_consolidation_bridge_certified}`"
+        ),
         f"- net-income bridge certified: `{item.net_income_bridge_certified}`",
         "- residual estimate: `false`; segment-profit inference: `false`; decision score: `false`",
     ]
