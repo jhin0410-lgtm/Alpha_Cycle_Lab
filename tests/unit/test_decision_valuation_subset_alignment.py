@@ -13,16 +13,16 @@ from alpha_cycle.intelligence.decision_resilient import (
 )
 
 
-def test_intelligence_export_uses_structural_final_decision_builder() -> None:
+def test_intelligence_export_uses_macro_liquidity_final_decision_builder() -> None:
     assert (
         intelligence.build_investment_decision_snapshot.__module__
-        == "alpha_cycle.intelligence.decision_semiconductor_structural_calibrated"
+        == "alpha_cycle.intelligence.decision_macro_liquidity_calibrated"
     )
     wrapper = Path(
-        "src/alpha_cycle/intelligence/decision_semiconductor_structural_calibrated.py"
+        "src/alpha_cycle/intelligence/decision_macro_liquidity_calibrated.py"
     ).read_text(encoding="utf-8")
-    assert "decision_semiconductor_transmission_calibrated" in wrapper
-    assert "_build_transmission_snapshot" in wrapper
+    assert "decision_semiconductor_structural_calibrated" in wrapper
+    assert "_build_structural_snapshot" in wrapper
 
 
 def test_missing_valuation_company_is_padded_explicitly() -> None:
