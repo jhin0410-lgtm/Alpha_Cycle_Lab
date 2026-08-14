@@ -8,6 +8,7 @@ from pathlib import Path
 from alpha_cycle.intelligence.sk_hynix_official_ir_attachment_discovery import (
     DEFAULT_DISCOVERY_POINTER,
 )
+from alpha_cycle.intelligence.sk_hynix_official_ir_board_api_capture import BoardRowSummary
 from alpha_cycle.intelligence.sk_hynix_official_ir_board_api_pipeline import (
     DEFAULT_BOARD_API_OUTPUT,
     DEFAULT_BOARD_API_POINTER,
@@ -37,6 +38,19 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", type=Path, default=DEFAULT_BOARD_API_OUTPUT)
     parser.add_argument("--timeout", type=float, default=20.0)
     return parser
+
+
+def _row_summary(item: BoardRowSummary) -> dict[str, object]:
+    return {
+        "seq": item.seq,
+        "title": item.title,
+        "display_date": item.display_date,
+        "file_url1": item.file_url1,
+        "file_url2": item.file_url2,
+        "file_url3": item.file_url3,
+        "file_url4": item.file_url4,
+        "candidate_2026q2": item.candidate_2026q2,
+    }
 
 
 def main() -> int:
@@ -98,6 +112,7 @@ def main() -> int:
         args.output / DEFAULT_BOARD_API_POINTER.name,
         evaluation_date=args.observed_date,
     )
+    candidate_rows = [item for item in capture.rows if item.candidate_2026q2]
     result = {
         **transport_summary,
         **pointer,
@@ -105,19 +120,10 @@ def main() -> int:
         "total": capture.total,
         "row_count": len(capture.rows),
         "candidate_seqs": list(capture.candidate_seqs),
-        "rows": [
-            {
-                "seq": item.seq,
-                "title": item.title,
-                "display_date": item.display_date,
-                "file_url1": item.file_url1,
-                "file_url2": item.file_url2,
-                "file_url3": item.file_url3,
-                "file_url4": item.file_url4,
-                "candidate_2026q2": item.candidate_2026q2,
-            }
-            for item in capture.rows
-        ],
+        "candidate_rows": [_row_summary(item) for item in candidate_rows],
+        "recent_rows_preview": [_row_summary(item) for item in capture.rows[:5]],
+        "console_rows_truncated": len(capture.rows) > 5,
+        "full_rows_available_in_raw_response": True,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
