@@ -1,17 +1,8 @@
-"""Trace exact component-level SK hynix IR data contracts from archived issuer JavaScript.
+"""Trace exact SK hynix IR component contracts from archived issuer JavaScript.
 
-This is a second-stage, offline diagnostic.  It consumes the already verified official-IR
-attachment-discovery artifact and inspects only those archived issuer-controlled bytes.
-Unlike the broad runtime-route diagnostic, this module intentionally extracts a small set
-of syntactically constrained contracts that can justify the next network-capture step:
-
-* literal ``execute.get/post(..., \"/route\", ...)`` calls,
-* board ``bcode`` assignments and earnings-category code mappings,
-* ``cdnPath`` literals, and
-* ``cdnPath + fileUrlN`` bindings used to construct download URLs.
-
-Nothing in this module performs network I/O, synthesizes an API path, guesses an attachment
-identifier, or widens any model/decision trust boundary.
+This second-stage diagnostic consumes only the already verified official-IR discovery
+artifact. It extracts syntactically constrained component contracts that can justify a
+later network-capture step without guessing an endpoint or attachment identifier.
 """
 
 from __future__ import annotations
@@ -35,7 +26,8 @@ DEFAULT_COMPONENT_CONTRACT_OUTPUT = Path(
     "data/private/research/skhynix-official-ir-component-contract-diagnostic"
 )
 DEFAULT_COMPONENT_CONTRACT_POINTER = (
-    DEFAULT_COMPONENT_CONTRACT_OUTPUT / "latest_skhynix_ir_component_contract_diagnostic.json"
+    DEFAULT_COMPONENT_CONTRACT_OUTPUT
+    / "latest_skhynix_ir_component_contract_diagnostic.json"
 )
 
 _CONTEXT_CHARS = 900
@@ -60,12 +52,13 @@ _BCODE_ASSIGNMENT = re.compile(
     flags=re.IGNORECASE,
 )
 _EARNINGS_CODE_MAPPING = re.compile(
-    r"(?P<quote>[\"'])(?P<label>실적발표|Earnings(?:\s+Release|\s+Results)?)(?P=quote)"
-    r"\s*:\s*(?P<value>\d{1,4})",
+    r"(?P<quote>[\"'])(?P<label>실적발표|Earnings(?:\s+Release|\s+Results)?)"
+    r"(?P=quote)\s*:\s*(?P<value>\d{1,4})",
     flags=re.IGNORECASE,
 )
 _CDN_PATH_LITERAL = re.compile(
-    r"\bcdnPath\s*:\s*(?P<quote>[\"'])(?P<url>https://[^\"']{1,300})(?P=quote)",
+    r"\bcdnPath\s*:\s*(?P<quote>[\"'])(?P<url>https://[^\"']{1,300})"
+    r"(?P=quote)",
     flags=re.IGNORECASE,
 )
 _FILE_URL_BINDING = re.compile(
@@ -109,16 +102,16 @@ class OfficialIrComponentContractDiagnostic:
 
     def __post_init__(self) -> None:
         if not _valid_sha(self.evidence_id) or not _valid_sha(self.source_evidence_id):
-            raise ValueError("SK hynix component-contract diagnostic IDs must be SHA-256")
+            raise ValueError("SK hynix component-contract IDs must be SHA-256")
         if not self.discovery_only:
-            raise ValueError("SK hynix component-contract diagnostic must remain discovery-only")
+            raise ValueError("SK hynix component-contract diagnostic must be discovery-only")
         if (
             self.product_baseline_eligible
             or self.allocation_resolver_registered
             or self.numeric_forecast_enabled
             or self.decision_score_enabled
         ):
-            raise ValueError("SK hynix component-contract diagnostic cannot widen model trust")
+            raise ValueError("SK hynix component-contract diagnostic cannot widen trust")
 
 
 def _valid_sha(value: str) -> bool:
@@ -145,7 +138,9 @@ def _compact(value: str) -> str:
 
 def _context(text: str, start: int, end: int) -> str:
     half = _CONTEXT_CHARS // 2
-    return _compact(text[max(0, start - half) : min(len(text), end + half)])[:_CONTEXT_CHARS]
+    left = max(0, start - half)
+    right = min(len(text), end + half)
+    return _compact(text[left:right])[:_CONTEXT_CHARS]
 
 
 def _nearest_component_name(text: str, position: int) -> str | None:
@@ -154,6 +149,28 @@ def _nearest_component_name(text: str, position: int) -> str | None:
     for match in _COMPONENT_NAME.finditer(text, left, position):
         nearest = match.group("name")
     return nearest
+
+
+def _signal(
+    *,
+    source_file: str,
+    source_url: str,
+    text: str,
+    match: re.Match[str],
+    kind: str,
+    value: str,
+    method: str | None = None,
+    extra_context: int = 0,
+) -> ComponentContractSignal:
+    return ComponentContractSignal(
+        source_file=source_file,
+        source_url=source_url,
+        component_name=_nearest_component_name(text, match.start()),
+        kind=kind,
+        value=value,
+        method=method,
+        context=_context(text, match.start(), min(len(text), match.end() + extra_context)),
+    )
 
 
 def _signal_payload(item: ComponentContractSignal) -> dict[str, object]:
@@ -181,67 +198,62 @@ def scan_component_contracts(
     tuple[ComponentContractSignal, ...],
     tuple[ComponentContractSignal, ...],
 ]:
-    """Extract only exact component contract shapes from one archived source."""
+    """Extract exact component-contract shapes from one archived source."""
 
     text = _normalized_text(data)
-
     execute_routes = tuple(
-        ComponentContractSignal(
+        _signal(
             source_file=source_file,
             source_url=source_url,
-            component_name=_nearest_component_name(text, match.start()),
+            text=text,
+            match=match,
             kind="execute_literal_route",
             value=match.group("route"),
             method=match.group("method").lower(),
-            context=_context(text, match.start(), match.end()),
         )
         for match in _EXECUTE_LITERAL_ROUTE.finditer(text)
     )
     bcode_assignments = tuple(
-        ComponentContractSignal(
+        _signal(
             source_file=source_file,
             source_url=source_url,
-            component_name=_nearest_component_name(text, match.start()),
+            text=text,
+            match=match,
             kind="board_bcode_assignment",
             value=match.group("value"),
-            method=None,
-            context=_context(text, match.start(), match.end()),
         )
         for match in _BCODE_ASSIGNMENT.finditer(text)
     )
     earnings_code_mappings = tuple(
-        ComponentContractSignal(
+        _signal(
             source_file=source_file,
             source_url=source_url,
-            component_name=_nearest_component_name(text, match.start()),
+            text=text,
+            match=match,
             kind="earnings_code_mapping",
             value=f"{match.group('label')}={match.group('value')}",
-            method=None,
-            context=_context(text, match.start(), match.end()),
         )
         for match in _EARNINGS_CODE_MAPPING.finditer(text)
     )
     cdn_paths = tuple(
-        ComponentContractSignal(
+        _signal(
             source_file=source_file,
             source_url=source_url,
-            component_name=_nearest_component_name(text, match.start()),
+            text=text,
+            match=match,
             kind="cdn_path_literal",
             value=match.group("url"),
-            method=None,
-            context=_context(text, match.start(), match.end()),
         )
         for match in _CDN_PATH_LITERAL.finditer(text)
     )
     file_url_bindings = tuple(
-        ComponentContractSignal(
+        _signal(
             source_file=source_file,
             source_url=source_url,
-            component_name=_nearest_component_name(text, match.start()),
+            text=text,
+            match=match,
             kind="file_url_binding",
             value=f"{match.group('base')}.cdnPath+{match.group('field')}",
-            method=None,
-            context=_context(text, match.start(), match.end()),
         )
         for match in _FILE_URL_BINDING.finditer(text)
     )
@@ -251,17 +263,17 @@ def scan_component_contracts(
         if len(method_windows) >= _MAX_METHOD_WINDOWS:
             break
         method_windows.append(
-            ComponentContractSignal(
+            _signal(
                 source_file=source_file,
                 source_url=source_url,
-                component_name=_nearest_component_name(text, match.start()),
+                text=text,
+                match=match,
                 kind="component_method_window",
                 value=match.group("method"),
                 method=match.group("method"),
-                context=_context(text, match.start(), min(len(text), match.end() + 360)),
+                extra_context=360,
             )
         )
-
     return (
         execute_routes,
         bcode_assignments,
@@ -281,32 +293,30 @@ def build_component_contract_diagnostic(
         pointer_path,
         evaluation_date=evaluation_date,
     )
-    execute_routes: list[ComponentContractSignal] = []
-    bcode_assignments: list[ComponentContractSignal] = []
-    earnings_code_mappings: list[ComponentContractSignal] = []
-    cdn_paths: list[ComponentContractSignal] = []
-    file_url_bindings: list[ComponentContractSignal] = []
-    method_windows: list[ComponentContractSignal] = []
-
+    groups: list[list[ComponentContractSignal]] = [[] for _ in range(6)]
     for source_file, source_url, data in sources:
         extracted = scan_component_contracts(
             source_file=source_file,
             source_url=source_url,
             data=data,
         )
-        execute_routes.extend(extracted[0])
-        bcode_assignments.extend(extracted[1])
-        earnings_code_mappings.extend(extracted[2])
-        cdn_paths.extend(extracted[3])
-        file_url_bindings.extend(extracted[4])
-        method_windows.extend(extracted[5])
+        for index, items in enumerate(extracted):
+            groups[index].extend(items)
 
+    execute_routes = tuple(groups[0])
+    bcode_assignments = tuple(groups[1])
+    earnings_code_mappings = tuple(groups[2])
+    cdn_paths = tuple(groups[3])
+    file_url_bindings = tuple(groups[4])
+    method_windows = tuple(groups[5])
     payload = {
         "source_evidence_id": source_evidence_id,
         "observed_date": observed_date.isoformat(),
         "execute_routes": [_signal_payload(item) for item in execute_routes],
         "bcode_assignments": [_signal_payload(item) for item in bcode_assignments],
-        "earnings_code_mappings": [_signal_payload(item) for item in earnings_code_mappings],
+        "earnings_code_mappings": [
+            _signal_payload(item) for item in earnings_code_mappings
+        ],
         "cdn_paths": [_signal_payload(item) for item in cdn_paths],
         "file_url_bindings": [_signal_payload(item) for item in file_url_bindings],
         "method_windows": [_signal_payload(item) for item in method_windows],
@@ -320,16 +330,18 @@ def build_component_contract_diagnostic(
         evidence_id=_sha_payload(payload),
         source_evidence_id=source_evidence_id,
         observed_date=observed_date,
-        execute_routes=tuple(execute_routes),
-        bcode_assignments=tuple(bcode_assignments),
-        earnings_code_mappings=tuple(earnings_code_mappings),
-        cdn_paths=tuple(cdn_paths),
-        file_url_bindings=tuple(file_url_bindings),
-        method_windows=tuple(method_windows),
+        execute_routes=execute_routes,
+        bcode_assignments=bcode_assignments,
+        earnings_code_mappings=earnings_code_mappings,
+        cdn_paths=cdn_paths,
+        file_url_bindings=file_url_bindings,
+        method_windows=method_windows,
     )
 
 
-def _evidence_payload(evidence: OfficialIrComponentContractDiagnostic) -> dict[str, object]:
+def _evidence_payload(
+    evidence: OfficialIrComponentContractDiagnostic,
+) -> dict[str, object]:
     return {
         "schema_version": 1,
         "status": "skhynix_official_ir_component_contract_diagnostic_captured",
@@ -344,9 +356,13 @@ def _evidence_payload(evidence: OfficialIrComponentContractDiagnostic) -> dict[s
         "method_window_count": len(evidence.method_windows),
         "execute_routes": [_signal_payload(item) for item in evidence.execute_routes],
         "bcode_assignments": [_signal_payload(item) for item in evidence.bcode_assignments],
-        "earnings_code_mappings": [_signal_payload(item) for item in evidence.earnings_code_mappings],
+        "earnings_code_mappings": [
+            _signal_payload(item) for item in evidence.earnings_code_mappings
+        ],
         "cdn_paths": [_signal_payload(item) for item in evidence.cdn_paths],
-        "file_url_bindings": [_signal_payload(item) for item in evidence.file_url_bindings],
+        "file_url_bindings": [
+            _signal_payload(item) for item in evidence.file_url_bindings
+        ],
         "method_windows": [_signal_payload(item) for item in evidence.method_windows],
         "discovery_only": True,
         "product_baseline_eligible": False,
@@ -380,14 +396,15 @@ def capture_component_contract_diagnostic(
     )
     temporary = root / f".{directory.name}.tmp"
     if directory.exists() or temporary.exists():
-        raise ValueError("SK hynix component-contract diagnostic artifact path already exists")
+        raise ValueError("SK hynix component-contract artifact path already exists")
     temporary.mkdir()
     try:
-        payload = _evidence_payload(evidence)
-        payload["captured_at"] = captured.isoformat()
-        payload["source_pointer_path"] = str(Path(pointer_path).resolve())
-        (temporary / "component_contract_report.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        report = _evidence_payload(evidence)
+        report["captured_at"] = captured.isoformat()
+        report["source_pointer_path"] = str(Path(pointer_path).resolve())
+        report_path = temporary / "component_contract_report.json"
+        report_path.write_text(
+            json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True),
             encoding="utf-8",
         )
         temporary.rename(directory)
@@ -396,6 +413,7 @@ def capture_component_contract_diagnostic(
             shutil.rmtree(temporary)
         raise
 
+    final_report_path = directory / "component_contract_report.json"
     pointer = {
         "schema_version": 1,
         "status": "skhynix_official_ir_component_contract_diagnostic_captured",
@@ -414,16 +432,26 @@ def capture_component_contract_diagnostic(
         "numeric_forecast_enabled": False,
         "decision_score_enabled": False,
         "source_pointer_path": str(Path(pointer_path).resolve()),
-        "report_path": str((directory / "component_contract_report.json").resolve()),
+        "report_path": str(final_report_path.resolve()),
         "artifact_directory": str(directory.resolve()),
     }
-    temporary_pointer = root / ".latest_skhynix_ir_component_contract_diagnostic.json.tmp"
-    temporary_pointer.write_text(
+    pointer_tmp = root / ".latest_skhynix_ir_component_contract_diagnostic.json.tmp"
+    pointer_tmp.write_text(
         json.dumps(pointer, ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
-    temporary_pointer.replace(root / DEFAULT_COMPONENT_CONTRACT_POINTER.name)
+    pointer_tmp.replace(root / DEFAULT_COMPONENT_CONTRACT_POINTER.name)
     return pointer
+
+
+def _json_mapping(path: Path, label: str) -> dict[str, object]:
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{label} is unreadable") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label} must be an object")
+    return {str(key): value for key, value in raw.items()}
 
 
 def load_component_contract_diagnostic(
@@ -431,16 +459,13 @@ def load_component_contract_diagnostic(
     *,
     evaluation_date: date,
 ) -> OfficialIrComponentContractDiagnostic:
-    pointer_file = Path(pointer_path)
-    try:
-        pointer_obj: object = json.loads(pointer_file.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        raise ValueError("SK hynix component-contract diagnostic pointer is unreadable") from exc
-    if not isinstance(pointer_obj, dict):
-        raise ValueError("SK hynix component-contract diagnostic pointer must be an object")
-    pointer = {str(key): value for key, value in pointer_obj.items()}
-    if pointer.get("status") != "skhynix_official_ir_component_contract_diagnostic_captured":
-        raise ValueError("SK hynix component-contract diagnostic pointer status is invalid")
+    pointer = _json_mapping(
+        Path(pointer_path),
+        "SK hynix component-contract diagnostic pointer",
+    )
+    expected_status = "skhynix_official_ir_component_contract_diagnostic_captured"
+    if pointer.get("status") != expected_status:
+        raise ValueError("SK hynix component-contract pointer status is invalid")
     if pointer.get("discovery_only") is not True:
         raise ValueError("SK hynix component-contract diagnostic must remain discovery-only")
     for flag in _REQUIRED_FALSE_FLAGS:
@@ -452,19 +477,16 @@ def load_component_contract_diagnostic(
         evaluation_date=evaluation_date,
     )
     if reconstructed.evidence_id != str(pointer.get("evidence_id", "")):
-        raise ValueError("SK hynix component-contract diagnostic does not reproduce from source bytes")
-    report_path = Path(str(pointer.get("report_path", "")))
-    try:
-        report_obj: object = json.loads(report_path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        raise ValueError("SK hynix component-contract diagnostic report is unreadable") from exc
-    if not isinstance(report_obj, dict):
-        raise ValueError("SK hynix component-contract diagnostic report must be an object")
-    report = {str(key): value for key, value in report_obj.items()}
-    expected = _evidence_payload(reconstructed)
-    for key, value in expected.items():
+        raise ValueError(
+            "SK hynix component-contract diagnostic does not reproduce from source bytes"
+        )
+    report = _json_mapping(
+        Path(str(pointer.get("report_path", ""))),
+        "SK hynix component-contract diagnostic report",
+    )
+    for key, value in _evidence_payload(reconstructed).items():
         if report.get(key) != value:
-            raise ValueError(f"SK hynix component-contract diagnostic report mismatch: {key}")
+            raise ValueError(f"SK hynix component-contract report mismatch: {key}")
     return reconstructed
 
 
