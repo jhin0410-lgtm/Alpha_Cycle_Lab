@@ -3,10 +3,11 @@
 The final package decision wrapper preserves the calibrated chain through
 ``decision_industry_evidence_calibrated``, ``decision_forward_estimate_calibrated``,
 ``decision_historical_pb_calibrated``, ``decision_sector_vertical_calibrated``,
-``decision_semiconductor_transmission_calibrated``, and finally
-``decision_semiconductor_structural_calibrated``. Sector vertical, transmission,
-and structural evidence remain non-scoring: missing industry evidence is surfaced
-as a research gap rather than converted into a zero factor score. Valuation still
+``decision_semiconductor_transmission_calibrated``,
+``decision_semiconductor_structural_calibrated``, and finally
+``decision_macro_liquidity_calibrated``. Sector, transmission, structural, and
+macro-liquidity evidence remain non-scoring: missing evidence is surfaced as a
+research gap rather than converted into a zero factor score. Valuation still
 passes through ``valuation_resilient`` before the final latest-observable-equity
 P/B correction.
 """
@@ -14,6 +15,9 @@ P/B correction.
 from alpha_cycle.intelligence.decision import (
     InvestmentDecisionSnapshot,
     write_investment_decision_snapshot,
+)
+from alpha_cycle.intelligence.decision_macro_liquidity_calibrated import (
+    build_investment_decision_snapshot,
 )
 from alpha_cycle.intelligence.decision_provenance import (
     DecisionEvidenceEnvelope,
@@ -24,9 +28,6 @@ from alpha_cycle.intelligence.decision_scoring import (
     CompanyExposure,
     DecisionPolicy,
     load_company_exposures,
-)
-from alpha_cycle.intelligence.decision_semiconductor_structural_calibrated import (
-    build_investment_decision_snapshot,
 )
 from alpha_cycle.intelligence.fundamental_macro import (
     FundamentalMacroSnapshot,
