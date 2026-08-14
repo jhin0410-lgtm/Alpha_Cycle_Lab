@@ -14,6 +14,9 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     expectation = Path(
         "src/alpha_cycle/intelligence/decision_expectation_gap_calibrated.py"
     ).read_text(encoding="utf-8")
+    allocation = Path(
+        "src/alpha_cycle/intelligence/decision_semiconductor_baseline_allocation_calibrated.py"
+    ).read_text(encoding="utf-8")
     accounting = Path(
         "src/alpha_cycle/intelligence/decision_semiconductor_accounting_identity_calibrated.py"
     ).read_text(encoding="utf-8")
@@ -51,6 +54,7 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
         "decision_semiconductor_operating_assumption_calibrated",
         "decision_semiconductor_baseline_reconciliation_calibrated",
         "decision_semiconductor_accounting_identity_calibrated",
+        "decision_semiconductor_baseline_allocation_calibrated",
         "decision_expectation_gap_calibrated",
         "decision_catalyst_horizon_calibrated",
         "decision_scenario_expected_return_calibrated",
@@ -65,15 +69,25 @@ def test_package_routes_final_decision_builder_through_full_vertical_chain() -> 
     assert "_build_catalyst_snapshot" in scenario
     assert "build_scenario_expected_return_decision_evidence" in scenario
     assert "semiconductor_baseline_reconciliation_pointer" in scenario
+    assert "semiconductor_accounting_identity_pointer" in scenario
+    assert "semiconductor_baseline_allocation_pointer" in scenario
 
     assert "decision_expectation_gap_calibrated" in catalyst
     assert "_build_expectation_snapshot" in catalyst
     assert "load_catalyst_horizon_decision_evidence" in catalyst
     assert "semiconductor_baseline_reconciliation_pointer" in catalyst
+    assert "semiconductor_accounting_identity_pointer" in catalyst
+    assert "semiconductor_baseline_allocation_pointer" in catalyst
 
-    assert "decision_semiconductor_accounting_identity_calibrated" in expectation
-    assert "_build_accounting_identity_snapshot" in expectation
+    assert "decision_semiconductor_baseline_allocation_calibrated" in expectation
+    assert "_build_baseline_allocation_snapshot" in expectation
     assert "build_expectation_gap_decision_evidence" in expectation
+    assert "semiconductor_accounting_identity_pointer" in expectation
+    assert "semiconductor_baseline_allocation_pointer" in expectation
+
+    assert "decision_semiconductor_accounting_identity_calibrated" in allocation
+    assert "_build_accounting_identity_snapshot" in allocation
+    assert "load_semiconductor_baseline_allocation_decision_evidence" in allocation
 
     assert "decision_semiconductor_baseline_reconciliation_calibrated" in accounting
     assert "_build_baseline_snapshot" in accounting
