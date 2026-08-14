@@ -30,3 +30,14 @@ def test_hbm_mix_share_can_be_supported_by_direct_numeric_issuer_fact() -> None:
     assert hynix.requirement_kind == "direct_numeric_or_share"
     assert hynix.direct_numeric_source_fact_sufficient is True
     assert hynix.reconciliation_required is False
+
+
+def test_hynix_other_product_revenue_requires_reconciled_baseline_bridge() -> None:
+    other = baseline_requirement_semantics(
+        "000660",
+        "other_products_services",
+        "other_products_services_revenue_bridge",
+    )
+    assert other.requirement_kind == "reconciliation_artifact"
+    assert other.direct_numeric_source_fact_sufficient is False
+    assert other.reconciliation_required is True
