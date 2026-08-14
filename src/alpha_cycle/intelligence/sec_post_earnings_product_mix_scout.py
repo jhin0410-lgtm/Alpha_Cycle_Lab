@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
+from zoneinfo import ZoneInfo
 
 from alpha_cycle.intelligence.sec_company_actual import (
     SEC_ARCHIVES_ROOT,
@@ -32,6 +33,7 @@ DEFAULT_SEC_POST_EARNINGS_SCOUT_OUTPUT = Path(
 DEFAULT_SEC_POST_EARNINGS_SCOUT_POINTER = (
     DEFAULT_SEC_POST_EARNINGS_SCOUT_OUTPUT / "latest_sec_post_earnings_product_mix_scout.json"
 )
+_KOREA_TIME_ZONE = ZoneInfo("Asia/Seoul")
 
 _Q2_ANCHORS = (
     "second quarter of 2026",
@@ -378,8 +380,8 @@ def capture_post_earnings_product_mix_scout(
     captured = captured_at or datetime.now(UTC)
     if captured.tzinfo is None or captured.utcoffset() is None:
         raise ValueError("captured_at must be timezone-aware")
-    if captured.date() < observed_date:
-        raise ValueError("captured_at cannot precede observed_date")
+    if captured.astimezone(_KOREA_TIME_ZONE).date() < observed_date:
+        raise ValueError("captured_at cannot precede observed_date in Asia/Seoul")
     root = Path(output)
     root.mkdir(parents=True, exist_ok=True)
     directory = root / (

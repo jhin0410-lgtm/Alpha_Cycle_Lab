@@ -18,10 +18,9 @@ issuers:
         q2_allocation_eligible: false
         required_identity_anchors:
           - "The following table presents a breakdown of our revenue by principal product category"
+          - "The following table sets forth our revenue by principal product category and the related percentage data for the periods indicated"
           - "first quarter of 2026"
           - "DRAM"
           - "NAND flash"
           - "Other products"
           - "Total revenue"
-          - "Sales of DRAMs accounted for 77.3% of our total revenue in the first quarter of 2026"
-          - "Sales of NAND flash products accounted for 22.0% of our total revenue in the first quarter of 2026"
