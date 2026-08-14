@@ -37,22 +37,9 @@ _FIELDS = [
 ]
 
 
-def _attach(
-    scorecards: pd.DataFrame,
-    *,
-    evidence_id: str,
-    required_block_count: int,
-    allocated_block_count: int,
-    missing_block_count: int,
-    reconciliation_delta: float,
-    revenue_reconciliation_certified: bool,
-    revenue_model_input_ready: bool,
-) -> pd.DataFrame:
-    """Attach a non-authoritative revenue-allocation summary without touching direct baseline flags."""
-
+def _defaults(scorecards: pd.DataFrame) -> pd.DataFrame:
     result = scorecards.copy()
     result["ticker"] = result["ticker"].astype("string").str.zfill(6)
-    target = result["ticker"].eq("000660")
     result["semiconductor_baseline_allocation_available"] = False
     result["semiconductor_baseline_allocation_evidence_id"] = pd.NA
     result["semiconductor_baseline_allocation_required_revenue_block_count"] = 0
@@ -66,7 +53,24 @@ def _attach(
     result["semiconductor_baseline_allocation_source_fact"] = False
     result["semiconductor_baseline_allocation_numeric_forecast_enabled"] = False
     result["semiconductor_baseline_allocation_decision_score_enabled"] = False
+    return result
 
+
+def _attach(
+    scorecards: pd.DataFrame,
+    *,
+    evidence_id: str,
+    required_block_count: int,
+    allocated_block_count: int,
+    missing_block_count: int,
+    reconciliation_delta: float,
+    revenue_reconciliation_certified: bool,
+    revenue_model_input_ready: bool,
+) -> pd.DataFrame:
+    """Attach a non-authoritative revenue summary without touching direct baseline flags."""
+
+    result = _defaults(scorecards)
+    target = result["ticker"].eq("000660")
     result.loc[target, "semiconductor_baseline_allocation_available"] = True
     result.loc[target, "semiconductor_baseline_allocation_evidence_id"] = evidence_id
     result.loc[
@@ -116,6 +120,22 @@ def _unavailable_report(report: str, reason: str) -> str:
         + "- direct-fact baseline reconciliation과 company accounting identity는 그대로 유지합니다.\n"
         + "- source-specific resolver가 없거나 재현 검증에 실패한 persisted allocation은 신뢰하지 않습니다.\n"
         + "- profitability/full baseline, numeric forecast, Expectation Gap, decision score는 열지 않습니다.\n"
+    )
+
+
+def _replace_unavailable(
+    snapshot: InvestmentDecisionSnapshot,
+    *,
+    reason: str,
+) -> InvestmentDecisionSnapshot:
+    scorecards = _defaults(snapshot.scorecards)
+    records = _sync_records(snapshot.decision_records, scorecards)
+    return replace(
+        snapshot,
+        scorecards=scorecards,
+        decision_records=records,
+        warnings=tuple(dict.fromkeys((*snapshot.warnings, reason))),
+        report_markdown=_unavailable_report(snapshot.report_markdown, reason),
     )
 
 
@@ -171,11 +191,9 @@ def build_investment_decision_snapshot(
         else DEFAULT_BASELINE_ALLOCATION_POINTER
     )
     if not pointer.is_file():
-        reason = "semiconductor_baseline_allocation_evidence_missing"
-        return replace(
+        return _replace_unavailable(
             snapshot,
-            warnings=tuple(dict.fromkeys((*snapshot.warnings, reason))),
-            report_markdown=_unavailable_report(snapshot.report_markdown, reason),
+            reason="semiconductor_baseline_allocation_evidence_missing",
         )
     try:
         evidence = load_semiconductor_baseline_allocation_decision_evidence(
@@ -183,11 +201,9 @@ def build_investment_decision_snapshot(
             evaluation_date=snapshot.evaluation_date,
         )
     except (OSError, TypeError, ValueError) as exc:
-        reason = f"semiconductor_baseline_allocation_unavailable:{type(exc).__name__}"
-        return replace(
+        return _replace_unavailable(
             snapshot,
-            warnings=tuple(dict.fromkeys((*snapshot.warnings, reason))),
-            report_markdown=_unavailable_report(snapshot.report_markdown, reason),
+            reason=f"semiconductor_baseline_allocation_unavailable:{type(exc).__name__}",
         )
 
     reconciliation = evidence.evidence.reconciliation
@@ -228,4 +244,4 @@ def build_investment_decision_snapshot(
     )
 
 
-__all__ = ["_attach", "build_investment_decision_snapshot"]
+__all__ = ["_attach", "_defaults", "build_investment_decision_snapshot"]
