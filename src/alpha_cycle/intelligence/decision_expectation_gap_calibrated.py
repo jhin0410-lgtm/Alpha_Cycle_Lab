@@ -1,4 +1,4 @@
-"""Attach provider-agnostic Expectation Gap v1 after baseline reconciliation."""
+"""Attach provider-agnostic Expectation Gap v1 after company accounting identities."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import pandas as pd
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_scoring import CompanyExposure, DecisionPolicy
-from alpha_cycle.intelligence.decision_semiconductor_baseline_reconciliation_calibrated import (
-    build_investment_decision_snapshot as _build_baseline_snapshot,
+from alpha_cycle.intelligence.decision_semiconductor_accounting_identity_calibrated import (
+    build_investment_decision_snapshot as _build_accounting_identity_snapshot,
 )
 from alpha_cycle.intelligence.expectation_gap_decision_evidence import (
     append_expectation_gap_report,
@@ -84,7 +84,7 @@ def build_investment_decision_snapshot(
 ) -> InvestmentDecisionSnapshot:
     """Build existing chain, then attach expectation certification/readiness only."""
 
-    snapshot = _build_baseline_snapshot(
+    snapshot = _build_accounting_identity_snapshot(
         research_snapshot,
         market_snapshot,
         valuation_snapshot=valuation_snapshot,
