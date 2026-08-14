@@ -14,6 +14,9 @@ import pandas as pd
 from alpha_cycle.intelligence.semiconductor_forward_input_decision_evidence import (
     load_semiconductor_forward_input_decision_evidence,
 )
+from alpha_cycle.intelligence.semiconductor_forward_operating_model_contract import (
+    SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS,
+)
 from alpha_cycle.intelligence.semiconductor_model_input_semantics import (
     baseline_requirement_semantics,
 )
@@ -54,7 +57,9 @@ class SemiconductorOperatingAssumptionDecisionEvidence:
         if len(self.forward_input_evidence_id) != 64:
             raise ValueError("Operating assumption forward-input evidence ID is invalid")
         if self.numeric_forecast_enabled or self.decision_score_enabled:
-            raise ValueError("Operating assumption decision evidence must remain non-forecast/non-scoring")
+            raise ValueError(
+                "Operating assumption decision evidence must remain non-forecast/non-scoring"
+            )
 
 
 def _json_object(path: Path, label: str) -> Mapping[str, object]:
@@ -102,7 +107,10 @@ def _verified_forward_claim_ids(
         evaluation_date=evaluation_date,
     )
     pointer = _json_object(forward_pointer, "Forward-input pointer")
-    claims = _json_rows(Path(str(pointer.get("claims_path", "")).strip()), "Forward-input claims")
+    claims = _json_rows(
+        Path(str(pointer.get("claims_path", "")).strip()),
+        "Forward-input claims",
+    )
     ids = {str(item.get("claim_id", "")).strip() for item in claims}
     if not ids or any(
         len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
@@ -125,23 +133,20 @@ def _persisted_coverage(path: Path) -> pd.DataFrame:
 
 def _issuer_summary(pack: OperatingAssumptionPack) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    for ticker, group in pack.scenario_coverage.groupby("ticker", sort=True):
+    for ticker_key, group in pack.scenario_coverage.groupby("ticker", sort=True):
+        ticker = str(ticker_key)
         by_scenario = {str(row["scenario"]): row for row in group.to_dict(orient="records")}
         baseline_bridge_count = 0
         direct_baseline_count = 0
-        from alpha_cycle.intelligence.semiconductor_forward_operating_model_contract import (
-            SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS,
-        )
-
-        contract = SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS[str(ticker)]
+        contract = SEMICONDUCTOR_FORWARD_MODEL_CONTRACTS[ticker]
         for block in contract.blocks:
             for metric in block.required_baseline_metrics:
-                semantics = baseline_requirement_semantics(str(ticker), block.block_id, metric)
+                semantics = baseline_requirement_semantics(ticker, block.block_id, metric)
                 baseline_bridge_count += int(semantics.reconciliation_required)
                 direct_baseline_count += int(semantics.direct_numeric_source_fact_sufficient)
         rows.append(
             {
-                "ticker": str(ticker),
+                "ticker": ticker,
                 "horizon_quarters": pack.horizon_quarters,
                 "bear_assumption_coverage_complete": bool(
                     by_scenario["bear"]["assumption_coverage_complete"]
@@ -202,7 +207,7 @@ def load_semiconductor_operating_assumption_decision_evidence(
     pack_id = str(pointer.get("pack_id", "")).strip()
     if len(pack_id) != 64:
         raise ValueError("Operating assumption pack_id is invalid")
-    horizon_quarters = int(pointer.get("horizon_quarters", 0))
+    horizon_quarters = int(str(pointer.get("horizon_quarters", 0)))
     manifest = _json_object(
         Path(str(pointer.get("manifest_path", "")).strip()),
         "Operating assumption manifest",
@@ -210,7 +215,7 @@ def load_semiconductor_operating_assumption_decision_evidence(
     if str(manifest.get("pack_id", "")) != pack_id:
         raise ValueError("Operating assumption pointer/manifest mismatch")
     _require_false(manifest)
-    if int(manifest.get("horizon_quarters", 0)) != horizon_quarters:
+    if int(str(manifest.get("horizon_quarters", 0))) != horizon_quarters:
         raise ValueError("Operating assumption horizon metadata mismatch")
 
     forward_pointer = Path(str(pointer.get("forward_input_pointer", "")).strip())
