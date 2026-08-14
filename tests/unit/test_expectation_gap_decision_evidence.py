@@ -4,12 +4,12 @@ import json
 
 import pandas as pd
 
+from alpha_cycle.intelligence.expectation_gap_contract import evaluate_expectation_readiness
 from alpha_cycle.intelligence.expectation_gap_decision_evidence import (
     append_expectation_gap_report,
     build_expectation_gap_decision_evidence,
     kis_expectation_semantics,
 )
-from alpha_cycle.intelligence.expectation_gap_contract import evaluate_expectation_readiness
 
 
 def _scorecards() -> pd.DataFrame:
@@ -66,7 +66,10 @@ def test_expectation_gap_requires_both_market_and_internal_forward_views() -> No
 
     hynix = evidence.rows.loc[evidence.rows["ticker"].eq("000660")].iloc[0]
     samsung = evidence.rows.loc[evidence.rows["ticker"].eq("005930")].iloc[0]
-    assert hynix["internal_forward_view_status"] == "historical_transmission_only_not_forward_model"
+    assert (
+        hynix["internal_forward_view_status"]
+        == "historical_transmission_only_not_forward_model"
+    )
     assert samsung["internal_forward_view_status"] == "internal_forward_view_missing"
     blockers = json.loads(str(hynix["expectation_gap_blockers_json"]))
     assert "historical_transmission_not_a_forecast" in blockers
