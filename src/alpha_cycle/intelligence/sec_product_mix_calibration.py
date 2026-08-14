@@ -381,7 +381,7 @@ def parse_sec_product_mix_html(
         ),
         other_products_revenue=_number(
             section,
-            r"\bOther\s+products(?:\^\([^)]*\))?\s+(?:W\s+)?([0-9][0-9,]*)",
+            r"\bOther\s+products(?:\s*\([^)]*\))?\s+(?:W\s+)?([0-9][0-9,]*)",
             "other_products_revenue",
         ),
         total_revenue=_number(
