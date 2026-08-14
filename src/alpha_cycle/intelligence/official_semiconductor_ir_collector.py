@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import re
 from dataclasses import dataclass
 from datetime import date
@@ -99,10 +98,16 @@ class ParsedOfficialIrDocument:
 def _string_tuple(raw: object, label: str) -> tuple[str, ...]:
     if not isinstance(raw, list):
         raise ValueError(f"Official IR {label} must be an array")
-    values = tuple(str(item).strip() for item in raw if str(item).strip())
+    values: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise ValueError(f"Official IR {label} entries must be strings")
+        value = item.strip()
+        if value:
+            values.append(value)
     if not values:
         raise ValueError(f"Official IR {label} cannot be empty")
-    return values
+    return tuple(values)
 
 
 def load_official_ir_document_registry(
@@ -265,7 +270,8 @@ def parse_samsung_2026q2(
         raise ValueError("Samsung 2Q26 parser received the wrong parser_id")
     if len(pages) != spec.expected_page_count:
         raise ValueError(
-            f"Samsung 2Q26 page count changed: expected={spec.expected_page_count} actual={len(pages)}"
+            "Samsung 2Q26 page count changed: "
+            f"expected={spec.expected_page_count} actual={len(pages)}"
         )
     whole = _normalized("\n".join(pages))
     for anchor in spec.required_identity_anchors:
