@@ -1,0 +1,410 @@
+schema_version: 1
+sectors:
+  semiconductor:
+    delegates_to: config/semiconductor_structural_sources.yaml
+    required_source_roles:
+      - issuer_ir
+      - customer_ir
+      - peer_ir
+      - government_regulation
+      - official_industry_statistics
+
+  defense:
+    sources:
+      dapa:
+        owner: Defense Acquisition Program Administration
+        role: government_procurement
+        domains: [dapa.go.kr]
+        dimensions:
+          - procurement_program
+          - contract_award
+          - export_policy
+          - production_capacity_policy
+      mnd:
+        owner: Ministry of National Defense
+        role: government_budget_policy
+        domains: [mnd.go.kr]
+        dimensions:
+          - defense_budget
+          - force_structure
+          - procurement_policy
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - backlog
+          - delivery_schedule
+          - production_capacity
+          - export_product_mix
+          - contract_margin
+          - working_capital
+          - capex
+    prohibited_generic_proxies:
+      - recent_geopolitical_news_count
+      - generic_defense_etf_momentum_as_backlog
+
+  shipbuilding:
+    sources:
+      motie:
+        owner: Ministry of Trade Industry and Energy
+        role: government_industry
+        domains: [motie.go.kr]
+        dimensions:
+          - industry_order_flow
+          - ship_export_policy
+          - shipbuilding_policy
+      kosis:
+        owner: Statistics Korea KOSIS
+        role: official_statistics
+        domains: [kosis.kr]
+        dimensions:
+          - production
+          - employment
+          - utilization
+      korea_customs:
+        owner: Korea Customs Service
+        role: official_trade
+        domains: [customs.go.kr]
+        dimensions:
+          - ship_export_value
+          - export_destination
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - order_intake
+          - orderbook
+          - delivery_mix
+          - low_price_backlog_burnoff
+          - yard_utilization
+          - steel_and_labor_cost
+          - margin
+    licensed_optional_sources:
+      - newbuild_price_index
+      - secondhand_vessel_price
+    prohibited_generic_proxies:
+      - baltic_dry_index_as_shipyard_newbuild_price
+
+  power_equipment:
+    sources:
+      kepco:
+        owner: Korea Electric Power Corporation
+        role: utility_plan
+        domains: [kepco.co.kr]
+        dimensions:
+          - grid_capex
+          - transmission_investment
+          - distribution_investment
+          - procurement_plan
+      kpx:
+        owner: Korea Power Exchange
+        role: system_operator
+        domains: [kpx.or.kr]
+        dimensions:
+          - power_demand
+          - generation_mix
+          - system_capacity
+      motie:
+        owner: Ministry of Trade Industry and Energy
+        role: government_industry
+        domains: [motie.go.kr]
+        dimensions:
+          - grid_policy
+          - electricity_plan
+          - export_policy
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - order_intake
+          - book_to_bill
+          - backlog
+          - lead_time
+          - pricing
+          - capacity_expansion
+          - copper_cost
+          - regional_mix
+    prohibited_generic_proxies:
+      - electricity_price_as_transformer_order_backlog
+
+  nuclear:
+    sources:
+      khnp:
+        owner: Korea Hydro and Nuclear Power
+        role: project_owner_operator
+        domains: [khnp.co.kr]
+        dimensions:
+          - project_pipeline
+          - project_schedule
+          - contract_milestone
+          - operating_fleet
+      nssc:
+        owner: Nuclear Safety and Security Commission
+        role: regulator
+        domains: [nssc.go.kr]
+        dimensions:
+          - licensing
+          - safety_approval
+          - regulatory_milestone
+      motie:
+        owner: Ministry of Trade Industry and Energy
+        role: government_industry
+        domains: [motie.go.kr]
+        dimensions:
+          - nuclear_policy
+          - export_policy
+          - financing_policy
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - project_backlog
+          - epc_revenue_timing
+          - local_content
+          - margin
+          - cost_overrun
+          - working_capital
+    event_probability_requires:
+      - identified_project
+      - explicit_stage
+      - documented_next_milestone
+    prohibited_generic_proxies:
+      - memorandum_of_understanding_as_firm_order
+
+  construction:
+    sources:
+      molit:
+        owner: Ministry of Land Infrastructure and Transport
+        role: housing_infrastructure_statistics
+        domains: [molit.go.kr]
+        dimensions:
+          - housing_permits
+          - housing_starts
+          - housing_completions
+          - unsold_inventory
+          - infrastructure_policy
+      hug:
+        owner: Korea Housing and Urban Guarantee Corporation
+        role: housing_guarantee
+        domains: [khug.or.kr]
+        dimensions:
+          - presale_guarantee
+          - housing_guarantee
+          - project_guarantee
+      fss:
+        owner: Financial Supervisory Service
+        role: financial_regulator
+        domains: [fss.or.kr]
+        dimensions:
+          - pf_credit_conditions
+          - financial_sector_pf_exposure
+      bok:
+        owner: Bank of Korea
+        role: central_bank
+        domains: [bok.or.kr]
+        dimensions:
+          - credit_conditions
+          - rates
+          - housing_finance
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - presales
+          - domestic_backlog
+          - overseas_backlog
+          - guarantees
+          - contingent_liabilities
+          - project_margin
+          - unbilled_receivables
+          - working_capital
+    prohibited_generic_proxies:
+      - housing_price_index_as_project_profitability
+
+  battery:
+    sources:
+      motie:
+        owner: Ministry of Trade Industry and Energy
+        role: government_industry
+        domains: [motie.go.kr]
+        dimensions:
+          - battery_policy
+          - supply_chain_policy
+          - subsidy_policy
+      kosis:
+        owner: Statistics Korea KOSIS
+        role: official_statistics
+        domains: [kosis.kr]
+        dimensions:
+          - production
+          - inventory
+          - utilization
+      korea_customs:
+        owner: Korea Customs Service
+        role: official_trade
+        domains: [customs.go.kr]
+        dimensions:
+          - battery_export_value
+          - material_import_export
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - customer_volume
+          - utilization
+          - asp
+          - chemistry_mix
+          - capex
+          - jv_ramp
+          - subsidy_effect
+          - inventory
+    certified_or_licensed_required:
+      - lithium_price
+      - nickel_price
+      - cell_price
+
+  auto:
+    sources:
+      motie:
+        owner: Ministry of Trade Industry and Energy
+        role: government_industry
+        domains: [motie.go.kr]
+        dimensions:
+          - vehicle_production
+          - domestic_sales
+          - exports
+          - auto_policy
+      kosis:
+        owner: Statistics Korea KOSIS
+        role: official_statistics
+        domains: [kosis.kr]
+        dimensions:
+          - production
+          - inventory
+      korea_customs:
+        owner: Korea Customs Service
+        role: official_trade
+        domains: [customs.go.kr]
+        dimensions:
+          - vehicle_export_value
+          - export_destination
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - global_units
+          - regional_mix
+          - pricing
+          - incentives
+          - ice_hybrid_ev_mix
+          - warranty_cost
+          - inventory
+          - fx_sensitivity
+
+  bio:
+    sources:
+      mfds:
+        owner: Ministry of Food and Drug Safety
+        role: regulator
+        domains: [mfds.go.kr]
+        dimensions:
+          - approval
+          - clinical_regulatory_milestone
+          - safety_action
+      fda:
+        owner: U.S. Food and Drug Administration
+        role: regulator
+        domains: [fda.gov]
+        dimensions:
+          - approval
+          - regulatory_milestone
+          - safety_action
+      clinicaltrials:
+        owner: U.S. National Library of Medicine ClinicalTrials.gov
+        role: trial_registry
+        domains: [clinicaltrials.gov]
+        dimensions:
+          - trial_status
+          - trial_endpoint
+          - enrollment
+          - primary_completion_date
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - pipeline
+          - cash_burn
+          - manufacturing_capacity
+          - commercialization_plan
+          - eligible_population
+    prohibited_generic_proxies:
+      - press_release_trial_success_without_primary_endpoint_result
+
+  internet_platform:
+    sources:
+      kcc:
+        owner: Korea Communications Commission
+        role: regulator
+        domains: [kcc.go.kr]
+        dimensions:
+          - platform_regulation
+          - communications_policy
+      kftc:
+        owner: Korea Fair Trade Commission
+        role: competition_regulator
+        domains: [ftc.go.kr]
+        dimensions:
+          - competition_policy
+          - platform_regulation
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - mau
+          - engagement
+          - ad_revenue
+          - commerce_gmv
+          - take_rate
+          - arpu
+          - traffic_acquisition_cost
+          - ai_infrastructure_cost
+          - operating_margin
+
+  robotics:
+    sources:
+      motie:
+        owner: Ministry of Trade Industry and Energy
+        role: government_industry
+        domains: [motie.go.kr]
+        dimensions:
+          - robotics_policy
+          - automation_policy
+          - manufacturing_capex_policy
+      kosis:
+        owner: Statistics Korea KOSIS
+        role: official_statistics
+        domains: [kosis.kr]
+        dimensions:
+          - machinery_production
+          - manufacturing_utilization
+      issuer_ir:
+        owner: covered issuer
+        role: issuer_ir
+        domains: []
+        dimensions:
+          - order_intake
+          - backlog
+          - deployment
+          - service_software_mix
+          - unit_economics
+          - capacity
+          - customer_concentration
