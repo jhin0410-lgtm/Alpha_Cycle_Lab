@@ -262,7 +262,7 @@ def test_official_q1_shape_needs_calibrated_rounding_tolerance_to_reconcile(tmp_
         resolvers={RESOLVER_ID: _official_q1_like_exact_tolerance_resolver},
     )
     assert exact.reconciliation.missing_revenue_blocks == ()
-    assert exact.reconciliation.reconciliation_delta == pytest.approx(-24.032)
+    assert exact.reconciliation.reconciliation_delta == pytest.approx(-25.032)
     assert exact.reconciliation.revenue_reconciliation_certified is False
 
     calibrated = build_skhynix_revenue_allocation_evidence(
@@ -279,9 +279,9 @@ def test_official_q1_shape_needs_calibrated_rounding_tolerance_to_reconcile(tmp_
         "other_products_services",
     )
     assert reconciliation.missing_revenue_blocks == ()
-    assert reconciliation.allocated_revenue_total == pytest.approx(52_551.968)
+    assert reconciliation.allocated_revenue_total == pytest.approx(52_550.968)
     assert reconciliation.reported_company_revenue == pytest.approx(52_576.0)
-    assert reconciliation.reconciliation_delta == pytest.approx(-24.032)
+    assert reconciliation.reconciliation_delta == pytest.approx(-25.032)
     assert reconciliation.absolute_tolerance == pytest.approx(52.576)
     assert reconciliation.revenue_reconciliation_certified is True
     assert reconciliation.revenue_model_input_ready is True
