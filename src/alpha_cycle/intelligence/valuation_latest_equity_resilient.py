@@ -147,12 +147,25 @@ def apply_latest_observable_equity_pb(
         if reference is None:
             metrics.at[index, "pb"] = None
             continue
-        equity = float(reference["equity"])
+        equity_value = pd.to_numeric(
+            pd.Series([reference.get("equity")]),
+            errors="coerce",
+        ).iloc[0]
+        if pd.isna(equity_value) or float(equity_value) <= 0:
+            metrics.at[index, "pb"] = None
+            continue
+        equity = float(equity_value)
         metrics.at[index, "book_equity"] = equity
-        metrics.at[index, "book_equity_reference_year"] = reference.get("business_year")
-        metrics.at[index, "book_equity_reference_period"] = reference.get("period_label")
-        metrics.at[index, "book_equity_period_end"] = reference.get("period_end")
-        metrics.at[index, "book_equity_available_date"] = reference.get("available_date")
+        metrics.at[index, "book_equity_reference_year"] = str(
+            reference.get("business_year", "")
+        )
+        metrics.at[index, "book_equity_reference_period"] = str(
+            reference.get("period_label", "")
+        )
+        metrics.at[index, "book_equity_period_end"] = str(reference.get("period_end", ""))
+        metrics.at[index, "book_equity_available_date"] = str(
+            reference.get("available_date", "")
+        )
         metrics.at[index, "pb_equity_basis"] = "latest_observable_non_derived_equity"
         if not complete or pd.isna(market_cap) or float(market_cap) <= 0:
             metrics.at[index, "pb"] = None
