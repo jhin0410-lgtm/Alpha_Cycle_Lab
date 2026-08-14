@@ -10,6 +10,7 @@ from typing import cast
 
 from alpha_cycle.intelligence.sk_hynix_official_ir_attachment_discovery import (
     OfficialIrAttachmentDiscoveryEvidence,
+    OfficialIrPdfCandidate,
     build_official_ir_attachment_discovery_evidence,
     extract_explicit_pdf_urls,
     extract_explicit_script_urls,
@@ -47,7 +48,7 @@ def _sha_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def _candidate_row(item) -> dict[str, object]:
+def _candidate_row(item: OfficialIrPdfCandidate) -> dict[str, object]:
     return {
         "url": item.url,
         "discovered_from": list(item.discovered_from),
