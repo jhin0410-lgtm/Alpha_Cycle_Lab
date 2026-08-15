@@ -1,10 +1,11 @@
 """Parse SK hynix OpenDART product revenue using the filing's actual column layout.
 
 SK hynix periodic filings publish DRAM, NAND Flash, Other, and total as column groups
-under the consolidated revenue note. Each product column has 3-month/cumulative
-subcolumns and a single ``수익(매출액)`` data row. This module preserves compatibility
-with the earlier row-layout parser for archived synthetic fixtures, but production
-column-layout evidence must be scoped to the nearest ``매출액 (연결)`` note.
+under the consolidated revenue note. In the live 2026 half-year filing the product
+header grid and the single revenue data row are emitted as adjacent HTML tables rather
+than one table. This module supports both that split-table production shape and the
+older single-table fixture shape, while preserving the legacy row-layout parser only as
+a compatibility fallback.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from alpha_cycle.providers.opendart_documents import _decode_text, _safe_member_
 _TEXT_SUFFIXES = frozenset({".xml", ".html", ".htm", ".xhtml"})
 _CURRENT_MARKERS = ("당반기", "당분기", "당기")
 _PRIOR_MARKERS = ("전반기", "전분기", "전기")
-_REVENUE_ROW_LABELS = ("수익(매출액)", "수익 (매출액)")
+_REVENUE_ROW_LABELS = ("수익", "수익(매출액)", "수익 (매출액)")
 _NOTE_HEADING = re.compile(r"^\s*\d+\.\s*매출액(?:\s*\(연결\))?\s*$")
 _ALLOWED_UNIT_MARKERS = {"백만원": ("KRW_million", 1.0), "억원": ("KRW_million", 100.0)}
 
@@ -174,7 +175,16 @@ def _column_text_candidates(
         ]
         expected_period_tokens = [
             _normalized(value)
-            for value in ("3개월", "누적", "3개월", "누적", "3개월", "누적", "3개월", "누적")
+            for value in (
+                "3개월",
+                "누적",
+                "3개월",
+                "누적",
+                "3개월",
+                "누적",
+                "3개월",
+                "누적",
+            )
         ]
         if period_tokens != expected_period_tokens:
             continue
@@ -222,7 +232,7 @@ def parse_periodic_product_revenue_text(
     spec: PeriodicProductRevenueSpec,
     text: str,
 ) -> ProductRevenueMetrics:
-    """Parse the consolidated product-as-columns table, with legacy fixture fallback."""
+    """Parse the consolidated product-as-columns text, with legacy fixture fallback."""
 
     candidates = _column_text_candidates(spec, text)
     unique = {
@@ -258,68 +268,96 @@ def _header_has_label(tokens: tuple[str, ...], labels: tuple[str, ...]) -> bool:
     return any(_normalized(token) in accepted for token in tokens)
 
 
-def _column_metrics_from_table(
-    spec: PeriodicProductRevenueSpec,
-    table: _RawTable,
-) -> ProductRevenueMetrics:
-    heading = _nearest_table_note_heading(table)
-    if heading is None or "(연결)" not in heading.replace(" ", ""):
-        raise ValueError("OpenDART product table is outside consolidated revenue note")
-    grid = _grid(table)
-    revenue_labels = _accepted(_REVENUE_ROW_LABELS)
-    revenue_rows = [
-        row_index
-        for row_index, row in enumerate(grid)
-        if any(_normalized(value) in revenue_labels for value in row)
-    ]
-    if len(revenue_rows) != 1:
-        raise ValueError("OpenDART product-column table requires one revenue data row")
-    revenue_row = revenue_rows[0]
-    period_context = tuple(_normalized(value) for value in table.prefix_text[-30:])
-    last_period: str | None = None
-    for value in reversed(period_context):
-        if value in {_normalized(marker) for marker in (*_CURRENT_MARKERS, *_PRIOR_MARKERS)}:
-            last_period = value
-            break
-    if last_period not in {_normalized(marker) for marker in _CURRENT_MARKERS}:
-        raise ValueError("OpenDART product-column table is not the current period")
+def _current_period_table(table: _RawTable) -> bool:
+    accepted = {_normalized(marker) for marker in (*_CURRENT_MARKERS, *_PRIOR_MARKERS)}
+    for value in reversed(table.prefix_text):
+        normalized = _normalized(value)
+        if normalized in accepted:
+            return normalized in {_normalized(marker) for marker in _CURRENT_MARKERS}
+    return False
 
-    product_columns: dict[str, list[int]] = {
+
+def _product_columns_from_header(
+    spec: PeriodicProductRevenueSpec,
+    grid: tuple[tuple[str, ...], ...],
+) -> dict[str, int]:
+    width = max((len(row) for row in grid), default=0)
+    matches: dict[str, list[int]] = {
         "dram": [],
         "nand": [],
         "other": [],
         "total": [],
     }
-    for column in range(len(grid[revenue_row])):
+    for column in range(width):
         tokens = tuple(
             row[column]
-            for row in grid[:revenue_row]
+            for row in grid
             if column < len(row) and row[column].strip()
         )
-        if not any(_normalized("3개월") == _normalized(token) for token in tokens):
+        normalized_tokens = {_normalized(token) for token in tokens}
+        if _normalized("3개월") not in normalized_tokens:
             continue
-        if any(_normalized("누적") == _normalized(token) for token in tokens):
+        if _normalized("누적") in normalized_tokens:
             continue
         if _header_has_label(tokens, spec.product_labels["dram_total"]):
-            product_columns["dram"].append(column)
+            matches["dram"].append(column)
         if _header_has_label(tokens, spec.product_labels["nand_and_solutions"]):
-            product_columns["nand"].append(column)
+            matches["nand"].append(column)
         if _header_has_label(tokens, spec.product_labels["other_products_services"]):
-            product_columns["other"].append(column)
+            matches["other"].append(column)
         if _header_has_label(tokens, spec.product_labels["reported_company_revenue"]):
-            product_columns["total"].append(column)
-    if any(len(columns) != 1 for columns in product_columns.values()):
-        counts = {key: len(value) for key, value in product_columns.items()}
-        raise ValueError(f"OpenDART product 3-month columns are not unique: {counts}")
+            matches["total"].append(column)
+    if any(len(columns) != 1 for columns in matches.values()):
+        counts = {key: len(value) for key, value in matches.items()}
+        raise ValueError(f"OpenDART product 3-month header columns are not unique: {counts}")
+    return {key: columns[0] for key, columns in matches.items()}
 
-    unit, scale = _structured_unit(table, grid)
+
+def _revenue_row(
+    grid: tuple[tuple[str, ...], ...],
+) -> tuple[int, int]:
+    accepted = _accepted(_REVENUE_ROW_LABELS)
+    matches: list[tuple[int, int]] = []
+    for row_index, row in enumerate(grid):
+        for column, value in enumerate(row):
+            if _normalized(value) in accepted:
+                matches.append((row_index, column))
+    if len(matches) != 1:
+        raise ValueError(
+            "OpenDART product-column data table requires one revenue row: "
+            f"count={len(matches)}"
+        )
+    return matches[0]
+
+
+def _metrics_from_header_and_data(
+    spec: PeriodicProductRevenueSpec,
+    *,
+    header_table: _RawTable,
+    header_grid: tuple[tuple[str, ...], ...],
+    data_grid: tuple[tuple[str, ...], ...],
+) -> ProductRevenueMetrics:
+    heading = _nearest_table_note_heading(header_table)
+    if heading is None or "(연결)" not in heading.replace(" ", ""):
+        raise ValueError("OpenDART product table is outside consolidated revenue note")
+    if not _current_period_table(header_table):
+        raise ValueError("OpenDART product-column table is not the current period")
+
+    product_columns = _product_columns_from_header(spec, header_grid)
+    revenue_row, label_column = _revenue_row(data_grid)
+    if label_column != 0:
+        raise ValueError("OpenDART split product revenue row label must occupy first column")
+
+    unit, scale = _structured_unit(header_table, header_grid)
     values: dict[str, float] = {}
-    for key, columns in product_columns.items():
-        column = columns[0]
-        amount = _parse_amount(grid[revenue_row][column])
+    for key, column in product_columns.items():
+        if column >= len(data_grid[revenue_row]):
+            raise ValueError(f"OpenDART structured {key} 3-month amount is missing")
+        amount = _parse_amount(data_grid[revenue_row][column])
         if amount is None:
             raise ValueError(f"OpenDART structured {key} 3-month amount is invalid")
         values[key] = amount * scale
+
     direct_sum = values["dram"] + values["nand"] + values["other"]
     return ProductRevenueMetrics(
         unit=unit,
@@ -332,11 +370,47 @@ def _column_metrics_from_table(
     )
 
 
+def _column_metrics_from_table(
+    spec: PeriodicProductRevenueSpec,
+    table: _RawTable,
+) -> ProductRevenueMetrics:
+    grid = _grid(table)
+    return _metrics_from_header_and_data(
+        spec,
+        header_table=table,
+        header_grid=grid,
+        data_grid=grid,
+    )
+
+
+def _split_column_metrics_from_tables(
+    spec: PeriodicProductRevenueSpec,
+    header_table: _RawTable,
+    data_table: _RawTable,
+) -> ProductRevenueMetrics:
+    header_grid = _grid(header_table)
+    data_grid = _grid(data_table)
+    header_heading = _nearest_table_note_heading(header_table)
+    data_heading = _nearest_table_note_heading(data_table)
+    if (
+        header_heading is not None
+        and data_heading is not None
+        and _normalized(header_heading) != _normalized(data_heading)
+    ):
+        raise ValueError("OpenDART split product tables cross a revenue-note boundary")
+    return _metrics_from_header_and_data(
+        spec,
+        header_table=header_table,
+        header_grid=header_grid,
+        data_grid=data_grid,
+    )
+
+
 def parse_periodic_product_revenue_archive(
     spec: PeriodicProductRevenueSpec,
     archive_bytes: bytes,
 ) -> ProductRevenueMetrics:
-    """Parse the unique consolidated current-period product-as-columns source table."""
+    """Parse the unique consolidated current-period product table from raw source bytes."""
 
     try:
         archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
@@ -355,9 +429,21 @@ def parse_periodic_product_revenue_archive(
             parser = _TableExtractor()
             parser.feed(decoded)
             parser.close()
-            for table in parser.tables:
+            for index, table in enumerate(parser.tables):
                 try:
                     candidates.append(_column_metrics_from_table(spec, table))
+                except ValueError:
+                    pass
+                if index + 1 >= len(parser.tables):
+                    continue
+                try:
+                    candidates.append(
+                        _split_column_metrics_from_tables(
+                            spec,
+                            table,
+                            parser.tables[index + 1],
+                        )
+                    )
                 except ValueError:
                     continue
     unique = {
