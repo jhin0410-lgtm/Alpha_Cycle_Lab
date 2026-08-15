@@ -36,6 +36,26 @@ if ([string]::IsNullOrWhiteSpace($Output)) { $Output = $DefaultOutput }
 if ([string]::IsNullOrWhiteSpace($IrAssignmentPointer)) {
     $IrAssignmentPointer = $DefaultIrAssignmentPointer
 }
+
+$FailedRoot = Join-Path $Output "failed"
+if (Test-Path $FailedRoot) {
+    $LatestFailure = Get-ChildItem -Path $FailedRoot -Directory |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if ($null -ne $LatestFailure) {
+        $FailureArchive = Join-Path $LatestFailure.FullName "opendart_document.zip"
+        $FailureText = Join-Path $LatestFailure.FullName "normalized_document.txt"
+        if ((Test-Path $FailureArchive) -and (Test-Path $FailureText)) {
+            Write-Host "Offline-preflighting the latest preserved OpenDART failure before any new network request."
+            & $ProjectPython -m alpha_cycle.sk_hynix_opendart_q2_product_revenue_offline_preflight_cli `
+                --archive $FailureArchive `
+                --normalized-text $FailureText `
+                --registry $Registry
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
+    }
+}
+
 if ([string]::IsNullOrWhiteSpace($env:OPENDART_API_KEY)) {
     throw "OPENDART_API_KEY is required for official OpenDART discovery. The key is never printed or archived."
 }
@@ -48,7 +68,7 @@ if (-not (Test-Path $IrAssignmentPointer)) {
 }
 
 Write-Host "Discovering the exact SK hynix 2026 half-year filing through official OpenDART."
-Write-Host "Semantic replay scans the current consolidated revenue note instead of assuming adjacent HTML tables."
+Write-Host "Semantic replay scans raw source tokens across the current consolidated revenue note."
 Write-Host "The exact ZIP bytes will be archived; Q2 DRAM/NAND/Other amounts must be directly reported and reconcile."
 Write-Host "Direct product revenue does not certify product profitability, numeric forecast, fair value, or decision score."
 Write-Host "Python: $ProjectPython"

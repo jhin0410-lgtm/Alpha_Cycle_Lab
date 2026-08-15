@@ -14,6 +14,19 @@ def test_launcher_requires_opendart_secret_without_printing_it() -> None:
     assert "Write-Output $env:OPENDART_API_KEY" not in text
 
 
+def test_launcher_offline_preflights_latest_failure_before_live_capture() -> None:
+    text = _script_text()
+    offline = "alpha_cycle.sk_hynix_opendart_q2_product_revenue_offline_preflight_cli"
+    live = "alpha_cycle.sk_hynix_opendart_q2_product_revenue_semantic_cli"
+    assert 'Join-Path $Output "failed"' in text
+    assert "opendart_document.zip" in text
+    assert "normalized_document.txt" in text
+    assert offline in text
+    assert live in text
+    assert text.index(offline) < text.index("$env:OPENDART_API_KEY")
+    assert text.index(offline) < text.index(live)
+
+
 def test_launcher_rebuilds_ir_assignment_before_live_product_revenue_when_missing() -> None:
     text = _script_text()
     assert "Test-Path $IrAssignmentPointer" in text
