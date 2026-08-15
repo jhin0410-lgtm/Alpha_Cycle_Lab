@@ -131,7 +131,19 @@ def _header_product_order(
 
 
 def _flatten_table_tokens(table: _RawTable) -> tuple[str, ...]:
-    return tuple(token for row in _grid(table) for token in row if token.strip())
+    """Read raw cell order without expanding rowspan/colspan geometry.
+
+    Geometry is a trust anchor only for the unique product header. Revenue labels and
+    amounts may live in arbitrary helper/data tables, so unrelated span layouts must not
+    abort the semantic note stream.
+    """
+
+    return tuple(
+        cell.text
+        for row in table.rows
+        for cell in row
+        if cell.text.strip()
+    )
 
 
 def _same_note_current_period_scope(
