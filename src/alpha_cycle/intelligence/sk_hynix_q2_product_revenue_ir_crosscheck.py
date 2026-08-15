@@ -79,8 +79,10 @@ def build_product_revenue_ir_crosscheck(
     dram_share = 100.0 * product_revenue.metrics.dram_total / total
     nand_share = 100.0 * product_revenue.metrics.nand_and_solutions / total
     other_share = 100.0 * product_revenue.metrics.other_products_services / total
-    dram_match = _round_percent(dram_share) == int(ir_assignment.dram_share_percent)
-    nand_match = _round_percent(nand_share) == int(ir_assignment.nand_share_percent)
+    dram_ir = int(ir_assignment.dram_share_percent)
+    nand_ir = int(ir_assignment.nand_share_percent)
+    dram_match = _round_percent(dram_share) == dram_ir
+    nand_match = _round_percent(nand_share) == nand_ir
     others_match = (
         ir_assignment.others_segment_present
         and product_revenue.metrics.other_products_services > 0.0
@@ -97,8 +99,8 @@ def build_product_revenue_ir_crosscheck(
         "dram_direct_share_percent": dram_share,
         "nand_direct_share_percent": nand_share,
         "other_direct_share_percent": other_share,
-        "dram_ir_rounded_percent": int(ir_assignment.dram_share_percent),
-        "nand_ir_rounded_percent": int(ir_assignment.nand_share_percent),
+        "dram_ir_rounded_percent": dram_ir,
+        "nand_ir_rounded_percent": nand_ir,
         "dram_rounded_match": dram_match,
         "nand_rounded_match": nand_match,
         "others_presence_match": others_match,
@@ -113,7 +115,26 @@ def build_product_revenue_ir_crosscheck(
     evidence_id = hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    return ProductRevenueIrCrosscheck(evidence_id=evidence_id, **payload)  # type: ignore[arg-type]
+    return ProductRevenueIrCrosscheck(
+        evidence_id=evidence_id,
+        product_revenue_evidence_id=product_revenue.evidence_id,
+        ir_assignment_evidence_id=ir_assignment.evidence_id,
+        dram_direct_share_percent=dram_share,
+        nand_direct_share_percent=nand_share,
+        other_direct_share_percent=other_share,
+        dram_ir_rounded_percent=dram_ir,
+        nand_ir_rounded_percent=nand_ir,
+        dram_rounded_match=dram_match,
+        nand_rounded_match=nand_match,
+        others_presence_match=others_match,
+        period_match=period_match,
+        crosscheck_certified=certified,
+        product_revenue_promotion_ready=certified,
+        allocation_resolver_registered=False,
+        product_profitability_certified=False,
+        numeric_forecast_enabled=False,
+        decision_score_enabled=False,
+    )
 
 
 __all__ = ["ProductRevenueIrCrosscheck", "build_product_revenue_ir_crosscheck"]
