@@ -10,6 +10,7 @@ The final package decision wrapper preserves the calibrated chain through
 ``decision_semiconductor_operating_assumption_calibrated``,
 ``decision_semiconductor_baseline_reconciliation_calibrated``,
 ``decision_semiconductor_accounting_identity_calibrated``,
+``decision_semiconductor_product_revenue_calibrated``,
 ``decision_semiconductor_baseline_allocation_calibrated``,
 ``decision_semiconductor_company_actual_calibrated``,
 ``decision_semiconductor_company_actual_crosscheck_calibrated``,
