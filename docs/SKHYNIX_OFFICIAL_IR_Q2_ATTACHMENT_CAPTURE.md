@@ -73,11 +73,29 @@ never be fabricated merely because displayed shares sum to 100%.
 
 ## Windows end-to-end capture
 
-After the earlier official page/component artifacts exist, run:
+Run from the repository root:
 
 ```powershell
 .\scripts\capture_skhynix_official_ir_q2_source.ps1
 ```
 
-The script first resolves/captures the board API. The PDF stage is not attempted if the API
-base is unresolved or the board response fails verification.
+The launcher is self-bootstrapping for its source prerequisites:
+
+1. if the official IR attachment-discovery pointer is missing, it captures the issuer page
+   and explicitly referenced issuer JavaScript first;
+2. if the component-contract pointer is missing, or a new source artifact was just captured,
+   it rebuilds the Earnings Release component contract from those archived bytes;
+3. it resolves/captures the verified board API contract;
+4. it captures the returned 2Q26 PDF from `cdnUrl + fileUrl2`; and
+5. it extracts parser-readiness context from the archived official PDF.
+
+Existing source/component pointers are reused only as inputs to downstream loaders that
+reverify their archived bytes. To deliberately refresh both prerequisite source artifacts,
+run:
+
+```powershell
+.\scripts\capture_skhynix_official_ir_q2_source.ps1 -RefreshPrerequisites
+```
+
+No prerequisite step guesses an API route, attachment ID, or numeric value. The PDF stage is
+not attempted if the source/component contract or board response fails verification.
