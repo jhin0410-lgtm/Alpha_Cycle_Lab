@@ -5,7 +5,9 @@ from datetime import date
 
 import pytest
 
-from alpha_cycle.intelligence import sk_hynix_official_ir_q2_product_assignment_certification as assignment
+from alpha_cycle.intelligence import (
+    sk_hynix_official_ir_q2_product_assignment_certification as assignment,
+)
 from alpha_cycle.intelligence import sk_hynix_official_ir_q2_product_geometry as geometry
 from alpha_cycle.intelligence import sk_hynix_official_ir_q2_share_column_certification as share
 
