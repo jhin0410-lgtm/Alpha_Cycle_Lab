@@ -40,7 +40,9 @@ def load_q2_source_certification(
     try:
         attachment_obj: object = json.loads(attachment_pointer.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError) as exc:
-        raise ValueError("SK hynix Q2 attachment pointer is unreadable during certification") from exc
+        raise ValueError(
+            "SK hynix Q2 attachment pointer is unreadable during certification"
+        ) from exc
     if not isinstance(attachment_obj, dict):
         raise ValueError("SK hynix Q2 attachment pointer must be an object")
     pdf_path = Path(str(attachment_obj.get("pdf_path", "")))
