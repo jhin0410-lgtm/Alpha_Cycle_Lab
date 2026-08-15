@@ -37,6 +37,13 @@ when an explicit literal assignment is present for one of:
 - `baseURL`
 - `baseUrl`
 
+Nuxt can serialize an otherwise literal URL with JSON unicode escapes, for example
+`https:\u002F\u002Fhost.example`. Before the explicit-assignment scanner runs, the live
+pipeline decodes only URL-structural slash/colon escapes (`\u002F`, `\u003A`) plus escaped
+slashes. The archived source bytes and source evidence hash remain unchanged; this is only a
+transport-literal normalization step. It does not decode arbitrary JavaScript escapes or
+synthesize a host.
+
 A framework fallback such as `http://localhost:3000`, the issuer page origin, a sibling
 route, a CDN hostname, or a guessed API hostname is not sufficient. Multiple conflicting
 browser bases also fail closed.
