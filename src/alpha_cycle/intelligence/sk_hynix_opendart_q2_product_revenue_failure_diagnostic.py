@@ -13,7 +13,7 @@ import hashlib
 import io
 import json
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import cast
 
@@ -90,7 +90,10 @@ def _verified_path(raw: object, *, base: Path, label: str) -> Path:
 
 
 def _text_contexts(text: str, *, radius: int = 10) -> list[dict[str, object]]:
-    lines = [" ".join(line.replace("\u00a0", " ").split()) for line in text.splitlines()]
+    lines = [
+        " ".join(line.replace("\u00a0", " ").split())
+        for line in text.splitlines()
+    ]
     relevant_indices = [
         index
         for index, line in enumerate(lines)
@@ -167,7 +170,9 @@ def _table_inventory(archive_bytes: bytes) -> list[dict[str, object]]:
                 if not grid or not _table_is_relevant(grid):
                     continue
                 width = max((len(row) for row in grid), default=0)
-                flattened = "\n".join(value for row in grid for value in row if value)
+                flattened = "\n".join(
+                    value for row in grid for value in row if value
+                )
                 normalized = _normalized(flattened)
                 inventory.append(
                     {
@@ -208,7 +213,11 @@ def diagnose_failure(diagnostic_path: str | Path) -> FailureDiagnosticReport:
     if payload.get("status") != "skhynix_opendart_q2_product_revenue_parse_failed":
         raise ValueError("unsupported product-revenue diagnostic status")
 
-    archive_path = _verified_path(payload.get("archive_path"), base=path.parent, label="archive_path")
+    archive_path = _verified_path(
+        payload.get("archive_path"),
+        base=path.parent,
+        label="archive_path",
+    )
     text_path = _verified_path(
         payload.get("normalized_text_path"),
         base=path.parent,
@@ -244,11 +253,13 @@ def write_failure_diagnostic_report(
     output_path: str | Path | None = None,
 ) -> tuple[FailureDiagnosticReport, Path]:
     report = diagnose_failure(diagnostic_path)
-    target = Path(output_path) if output_path is not None else Path(diagnostic_path).with_name(
-        "table_shape_diagnostic.json"
+    target = (
+        Path(output_path)
+        if output_path is not None
+        else Path(diagnostic_path).with_name("table_shape_diagnostic.json")
     )
     target.write_text(
-        json.dumps(report.__dict__, ensure_ascii=False, indent=2, sort_keys=True),
+        json.dumps(asdict(report), ensure_ascii=False, indent=2, sort_keys=True),
         encoding="utf-8",
     )
     return report, target
