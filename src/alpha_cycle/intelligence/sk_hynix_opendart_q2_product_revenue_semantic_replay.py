@@ -1,14 +1,17 @@
-"""Semantic replay for SK hynix 2Q26 OpenDART product-revenue tables.
+"""Semantic replay for SK hynix 2Q26 OpenDART product revenue.
 
 The live half-year XML does not guarantee that the product header grid, the ``수익``
-label, and its eight three-month/cumulative amounts live in one HTML table.  This
-parser therefore treats the current-period consolidated revenue note as one semantic
-stream.  It certifies the unique DRAM/NAND/Other/Total header, then scans all following
-tables inside the same note and period for a revenue label plus an eight-number window
-whose current-quarter and cumulative subtotals both reconcile.
+label, and its eight three-month/cumulative amounts live in one HTML table. This parser
+therefore uses two independent views over the archived official bytes:
 
-No residual allocation is permitted.  The direct current-quarter amounts are replayed
-from archived source bytes and later must also agree with independently normalized text.
+* table geometry certifies the unique current-period consolidated
+  DRAM/NAND/Other/Total product order and unit;
+* a raw-source text-token replay reconstructs the revenue row across arbitrary table or
+  paragraph boundaries inside the same consolidated revenue note.
+
+A candidate is accepted only when both the current-quarter and cumulative product sums
+reconcile to their directly reported totals. The capture layer then additionally requires
+this raw-source replay to equal the independently normalized-text parse.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from html.parser import HTMLParser
 from pathlib import PurePosixPath
 
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
@@ -42,6 +46,19 @@ _NOTE_HEADING = re.compile(r"^\s*\d+\.\s*매출액(?:\s*\(연결\))?\s*$")
 _PRODUCT_KEYS = ("dram", "nand", "other", "total")
 _MAX_NUMBERS_AFTER_REVENUE_LABEL = 64
 _RECONCILIATION_TOLERANCE = 0.5
+
+
+class _SourceTokenExtractor(HTMLParser):
+    """Preserve raw document text-token order without relying on HTML table grouping."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.tokens: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.replace("\u00a0", " ").split())
+        if text:
+            self.tokens.append(text)
 
 
 def _accepted(labels: tuple[str, ...]) -> frozenset[str]:
@@ -169,41 +186,29 @@ def _metrics_from_window(
     )
 
 
-def _stream_candidates(
-    spec: PeriodicProductRevenueSpec,
+def _windows_after_revenue_label(
+    tokens: tuple[str, ...],
     *,
-    header: _RawTable,
-    scoped_tables: tuple[_RawTable, ...],
+    unit: str,
+    scale: float,
 ) -> tuple[ProductRevenueMetrics, ...]:
-    if _header_product_order(spec, header) != _PRODUCT_KEYS:
-        raise ValueError("OpenDART product order is not canonical")
-
-    unit, scale = _structured_unit(header, _grid(header))
-    tokens = tuple(
-        token
-        for table in scoped_tables
-        for token in _flatten_table_tokens(table)
-    )
     accepted_revenue = _accepted(_REVENUE_LABELS)
-    revenue_positions = [
-        index
-        for index, token in enumerate(tokens)
-        if _normalized(token) in accepted_revenue
-    ]
-
+    period_markers = _accepted((*_CURRENT_MARKERS, *_PRIOR_MARKERS))
     parsed: list[ProductRevenueMetrics] = []
-    for position in revenue_positions:
+    for position, token in enumerate(tokens):
+        if _normalized(token) not in accepted_revenue:
+            continue
         numeric_values: list[float] = []
-        for token in tokens[position + 1 :]:
-            if _normalized(token) in accepted_revenue:
+        for value in tokens[position + 1 :]:
+            normalized = _normalized(value)
+            if normalized in accepted_revenue or normalized in period_markers:
                 break
-            amount = _parse_amount(token)
+            amount = _parse_amount(value)
             if amount is None:
                 continue
             numeric_values.append(amount)
             if len(numeric_values) >= _MAX_NUMBERS_AFTER_REVENUE_LABEL:
                 break
-
         for offset in range(max(0, len(numeric_values) - 7)):
             window = tuple(numeric_values[offset : offset + 8])
             if not _reconciles(window):
@@ -217,58 +222,124 @@ def _stream_candidates(
     return tuple(parsed)
 
 
-def _table_candidates(
+def _table_stream_candidates(
     spec: PeriodicProductRevenueSpec,
-    tables: list[_RawTable],
+    *,
+    header: _RawTable,
+    scoped_tables: tuple[_RawTable, ...],
 ) -> tuple[ProductRevenueMetrics, ...]:
+    if _header_product_order(spec, header) != _PRODUCT_KEYS:
+        raise ValueError("OpenDART product order is not canonical")
+    unit, scale = _structured_unit(header, _grid(header))
+    tokens = tuple(
+        token for table in scoped_tables for token in _flatten_table_tokens(table)
+    )
+    return _windows_after_revenue_label(tokens, unit=unit, scale=scale)
+
+
+def _product_header_sequence_present(
+    spec: PeriodicProductRevenueSpec,
+    tokens: tuple[str, ...],
+    *,
+    before: int,
+) -> bool:
+    label_sets = {
+        "dram": _accepted(spec.product_labels["dram_total"]),
+        "nand": _accepted(spec.product_labels["nand_and_solutions"]),
+        "other": _accepted(spec.product_labels["other_products_services"]),
+        "total": _accepted(spec.product_labels["reported_company_revenue"]),
+    }
+    observed: list[str] = []
+    for token in tokens[:before]:
+        normalized = _normalized(token)
+        matched = [key for key, labels in label_sets.items() if normalized in labels]
+        if len(matched) == 1 and (not observed or observed[-1] != matched[0]):
+            observed.append(matched[0])
+    for start in range(max(0, len(observed) - 3)):
+        if tuple(observed[start : start + 4]) == _PRODUCT_KEYS:
+            return True
+    return False
+
+
+def _latest_period_before(tokens: tuple[str, ...], position: int) -> str | None:
+    current = {_normalized(value): value for value in _CURRENT_MARKERS}
+    prior = {_normalized(value): value for value in _PRIOR_MARKERS}
+    for token in reversed(tokens[:position]):
+        normalized = _normalized(token)
+        if normalized in current:
+            return current[normalized]
+        if normalized in prior:
+            return prior[normalized]
+    return None
+
+
+def _source_note_sections(
+    source_tokens: tuple[str, ...],
+    heading: str,
+) -> tuple[tuple[str, ...], ...]:
+    normalized_heading = _normalized(heading)
+    sections: list[tuple[str, ...]] = []
+    for start, token in enumerate(source_tokens):
+        if _normalized(token) != normalized_heading:
+            continue
+        end = len(source_tokens)
+        for position in range(start + 1, len(source_tokens)):
+            candidate = " ".join(source_tokens[position].split())
+            if _NOTE_HEADING.fullmatch(candidate):
+                end = position
+                break
+        sections.append(source_tokens[start + 1 : end])
+    return tuple(sections)
+
+
+def _raw_source_candidates(
+    spec: PeriodicProductRevenueSpec,
+    *,
+    header: _RawTable,
+    source_tokens: tuple[str, ...],
+) -> tuple[ProductRevenueMetrics, ...]:
+    if _header_product_order(spec, header) != _PRODUCT_KEYS:
+        raise ValueError("OpenDART product order is not canonical")
+    heading = _nearest_heading(header)
+    if heading is None:
+        return ()
+    unit, scale = _structured_unit(header, _grid(header))
+    accepted_revenue = _accepted(_REVENUE_LABELS)
     parsed: list[ProductRevenueMetrics] = []
-    for header_index, header in enumerate(tables):
-        try:
-            _header_product_order(spec, header)
-        except ValueError:
-            continue
-        heading = _nearest_heading(header)
-        if heading is None:
-            continue
-        scope = _same_note_current_period_scope(
-            tables,
-            header_index=header_index,
-            heading=heading,
-        )
-        parsed.extend(_stream_candidates(spec, header=header, scoped_tables=scope))
+    for section in _source_note_sections(source_tokens, heading):
+        for revenue_position, token in enumerate(section):
+            if _normalized(token) not in accepted_revenue:
+                continue
+            if _latest_period_before(section, revenue_position) not in _CURRENT_MARKERS:
+                continue
+            if not _product_header_sequence_present(
+                spec,
+                section,
+                before=revenue_position,
+            ):
+                continue
+            parsed.extend(
+                _windows_after_revenue_label(
+                    section[revenue_position:],
+                    unit=unit,
+                    scale=scale,
+                )
+            )
     return tuple(parsed)
 
 
-def _diagnostic_counts(
+def _header_candidates(
     spec: PeriodicProductRevenueSpec,
     tables: list[_RawTable],
-) -> tuple[int, int, int]:
-    headers = 0
-    revenue_labels = 0
-    reconciling_windows = 0
-    accepted_revenue = _accepted(_REVENUE_LABELS)
+) -> tuple[tuple[int, _RawTable], ...]:
+    found: list[tuple[int, _RawTable]] = []
     for index, table in enumerate(tables):
-        tokens = _flatten_table_tokens(table)
-        revenue_labels += sum(
-            1 for token in tokens if _normalized(token) in accepted_revenue
-        )
         try:
             _header_product_order(spec, table)
         except ValueError:
             continue
-        headers += 1
-        heading = _nearest_heading(table)
-        if heading is None:
-            continue
-        scope = _same_note_current_period_scope(
-            tables,
-            header_index=index,
-            heading=heading,
-        )
-        reconciling_windows += len(
-            _stream_candidates(spec, header=table, scoped_tables=scope)
-        )
-    return headers, revenue_labels, reconciling_windows
+        found.append((index, table))
+    return tuple(found)
 
 
 def parse_periodic_product_revenue_archive(
@@ -284,9 +355,11 @@ def parse_periodic_product_revenue_archive(
 
     candidates: list[ProductRevenueMetrics] = []
     total_tables = 0
-    header_candidates = 0
-    revenue_labels = 0
+    structural_headers = 0
+    table_revenue_labels = 0
+    raw_revenue_labels = 0
     reconciling_windows = 0
+    accepted_revenue = _accepted(_REVENUE_LABELS)
     with archive:
         for info in archive.infolist():
             if info.is_dir():
@@ -295,15 +368,50 @@ def parse_periodic_product_revenue_archive(
             if PurePosixPath(safe_name).suffix.casefold() not in _TEXT_SUFFIXES:
                 continue
             decoded, _encoding = _decode_text(archive.read(info))
-            parser = _TableExtractor()
-            parser.feed(decoded)
-            parser.close()
-            total_tables += len(parser.tables)
-            headers, labels, windows = _diagnostic_counts(spec, parser.tables)
-            header_candidates += headers
-            revenue_labels += labels
-            reconciling_windows += windows
-            candidates.extend(_table_candidates(spec, parser.tables))
+
+            table_parser = _TableExtractor()
+            table_parser.feed(decoded)
+            table_parser.close()
+            total_tables += len(table_parser.tables)
+
+            source_parser = _SourceTokenExtractor()
+            source_parser.feed(decoded)
+            source_parser.close()
+            source_tokens = tuple(source_parser.tokens)
+            raw_revenue_labels += sum(
+                1 for token in source_tokens if _normalized(token) in accepted_revenue
+            )
+            table_revenue_labels += sum(
+                1
+                for table in table_parser.tables
+                for token in _flatten_table_tokens(table)
+                if _normalized(token) in accepted_revenue
+            )
+
+            headers = _header_candidates(spec, table_parser.tables)
+            structural_headers += len(headers)
+            for header_index, header in headers:
+                heading = _nearest_heading(header)
+                if heading is None:
+                    continue
+                scope = _same_note_current_period_scope(
+                    table_parser.tables,
+                    header_index=header_index,
+                    heading=heading,
+                )
+                table_candidates = _table_stream_candidates(
+                    spec,
+                    header=header,
+                    scoped_tables=scope,
+                )
+                raw_candidates = _raw_source_candidates(
+                    spec,
+                    header=header,
+                    source_tokens=source_tokens,
+                )
+                reconciling_windows += len(table_candidates) + len(raw_candidates)
+                candidates.extend(table_candidates)
+                candidates.extend(raw_candidates)
 
     unique = {
         (
@@ -319,9 +427,10 @@ def parse_periodic_product_revenue_archive(
         raise ValueError(
             "OpenDART semantic current-quarter product revenue must resolve uniquely: "
             f"candidates={len(unique)} total_tables={total_tables} "
-            f"current_consolidated_headers={header_candidates} "
-            f"revenue_labels={revenue_labels} "
-            f"reconciling_eight_number_windows={reconciling_windows}"
+            f"current_consolidated_headers={structural_headers} "
+            f"table_revenue_labels={table_revenue_labels} "
+            f"raw_source_revenue_labels={raw_revenue_labels} "
+            f"reconciling_windows={reconciling_windows}"
         )
     return next(iter(unique.values()))
 
