@@ -17,8 +17,6 @@ issuers:
           - 3개월
           - 누적
           - 백만원
-          - "수익(매출액)"
-          - "매출액 (연결)"
         product_labels:
           dram_total:
             - DRAM
