@@ -481,7 +481,7 @@ def _verify_current_stack(
         raise ValueError("SK hynix Q2 current product segments do not share a width")
 
     ordered = sorted(rectangles, key=lambda item: item.y_min)
-    for lower, upper in zip(ordered, ordered[1:]):
+    for lower, upper in zip(ordered, ordered[1:], strict=False):
         if abs(lower.y_max - upper.y_min) > _SEGMENT_CONTIGUITY_TOLERANCE:
             raise ValueError("SK hynix Q2 current product segments are not contiguous")
     if ordered != [dram, nand, others]:
