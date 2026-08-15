@@ -49,6 +49,12 @@ _EXPECTED_EARNINGS_MAPPING = "실적발표=105"
 _EXPECTED_PAGE_SIZE_TOKEN = "pageSize=200"
 _EXPECTED_LANG_TOKENS = ('?"KOR":"ENG"', '?"KOR":"ENG"')
 _SHARED_BOARD_SOURCE_FILE = "script_03.js"
+_NUXT_URL_ESCAPES = (
+    (b"\\u002F", b"/"),
+    (b"\\u002f", b"/"),
+    (b"\\u003A", b":"),
+    (b"\\u003a", b":"),
+)
 
 
 def _validate_shared_earnings_board_contract(
@@ -99,6 +105,15 @@ def _validate_shared_earnings_board_contract(
         raise ValueError("SK hynix Earnings Release fileUrl2 download binding is not verified")
 
 
+def _normalize_transport_source_bytes(data: bytes) -> bytes:
+    """Decode only URL-structural JSON escapes used in archived Nuxt config literals."""
+
+    normalized = data.replace(b"\\/", b"/")
+    for encoded, decoded in _NUXT_URL_ESCAPES:
+        normalized = normalized.replace(encoded, decoded)
+    return normalized
+
+
 def build_api_transport_contract(
     source_pointer_path: str | Path = DEFAULT_DISCOVERY_POINTER,
     component_pointer_path: str | Path = DEFAULT_COMPONENT_CONTRACT_POINTER,
@@ -133,7 +148,7 @@ def build_api_transport_contract(
             source_file=source_file,
             source_url=source_url,
             page_origin=page_origin,
-            data=data,
+            data=_normalize_transport_source_bytes(data),
         )
         signals.extend(source_signals)
         config_contexts.extend(source_configs)
