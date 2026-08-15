@@ -61,9 +61,10 @@ def _text() -> str:
 
 
 def _zip() -> bytes:
+    markup = f"<html><body>{_text().replace(chr(10), '<br>')}</body></html>"
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("document.xml", f"<html><body>{_text().replace(chr(10), '<br>')}</body></html>")
+        archive.writestr("document.xml", markup)
     return buffer.getvalue()
 
 
