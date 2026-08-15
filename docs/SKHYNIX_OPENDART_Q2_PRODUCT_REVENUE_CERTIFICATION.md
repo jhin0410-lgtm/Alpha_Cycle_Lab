@@ -8,28 +8,34 @@ This stage instead discovers the official OpenDART `반기보고서 (2026.06)` a
 
 ## Source boundary
 
-The collector:
+The collector and verifier:
 
-1. resolves SK hynix through the OpenDART corporation registry;
-2. searches only the configured filing window;
-3. requires exactly one non-correction disclosure whose report name is exactly `반기보고서 (2026.06)`;
-4. downloads the original `/api/document.xml` ZIP exactly once;
-5. archives the exact ZIP bytes and SHA-256 digest;
-6. archives the exact parser/source contract used for that capture;
-7. binds the certification evidence ID and parser-contract SHA-256 into a separate chain evidence ID;
-8. replays the archived ZIP through the same safe OpenDART document parser;
-9. refuses truncated normalized text;
-10. requires an explicit KRW unit and explicit `3개월` / `누적` column semantics;
-11. requires direct DRAM, NAND, Other, and Total rows in one unique candidate table; and
-12. requires `DRAM + NAND + Other == reported total` within the source's integer-unit tolerance.
+1. resolve SK hynix through the OpenDART corporation registry;
+2. search only the configured filing window;
+3. require exactly one non-correction disclosure whose report name is exactly `반기보고서 (2026.06)`;
+4. download the original `/api/document.xml` ZIP exactly once;
+5. archive the exact ZIP bytes and SHA-256 digest;
+6. archive the exact parser/source contract used for that capture;
+7. bind the certification evidence ID and parser-contract SHA-256 into a separate chain evidence ID;
+8. replay the archived ZIP through the same safe OpenDART document parser;
+9. refuse truncated normalized text;
+10. require an explicit KRW unit and explicit `3개월` / `누적` semantics;
+11. reconstruct the original HTML/XML table grid, including `rowspan` and `colspan`;
+12. require a unique current-period `3개월` column and a separate comparison-period `3개월` column;
+13. accept explicit DART current/comparison labels such as `당반기/전반기` or `당분기/전분기`, rather than assuming one wording;
+14. require direct DRAM, NAND, Other, and Total rows in the same table label column;
+15. require the structured-table amounts to reproduce the normalized-text parser amounts exactly; and
+16. require `DRAM + NAND + Other == reported total` within the source's integer-unit tolerance.
 
 The offline verifier reconstructs the `PeriodicProductRevenueSpec` from the archived `parser_contract.json`, not from whatever registry happens to exist later. A future YAML label/anchor change therefore cannot silently reinterpret an old source artifact. Contract tampering breaks the parser-contract hash and chain evidence ID.
+
+A low-level `certification.json` by itself is **not** a promotion boundary. Production consumers must enter through the bound `latest_certification.json` pointer and the offline verifier. An unbound pointer is rejected before any product-revenue values can reach the decision chain.
 
 No receipt number is hard-coded. `OPENDART_API_KEY` is read from the environment by the existing provider and is never written to artifacts or logs.
 
 ## What may become certified
 
-If the official filing matches the bound parser contract, the artifact may certify:
+If the official filing matches the bound parser contract and both text and structured-table replays agree, the verified chain may certify:
 
 - current 2Q26 DRAM revenue amount;
 - current 2Q26 NAND revenue amount;
@@ -62,7 +68,7 @@ The final calibrated chain now routes:
 
 `accounting identity -> direct product revenue -> derived allocation -> company actual -> ...`
 
-For SK hynix the direct-product layer exposes verified DRAM/NAND/Other/Total revenue amounts to scorecards, decision records, and the Markdown report. It is explicitly non-scoring. Missing or invalid direct-product evidence is surfaced as an evidence gap rather than converted into a zero factor score.
+For SK hynix the direct-product layer exposes verified DRAM/NAND/Other/Total revenue amounts to scorecards, decision records, and the Markdown report. It is explicitly non-scoring. Missing, unbound, structurally ambiguous, or otherwise invalid direct-product evidence is surfaced as an evidence gap rather than converted into a zero factor score.
 
 The legacy derived-allocation layer remains downstream as a separate fallback/diagnostic evidence type. Direct OpenDART source facts do not require an allocation resolver.
 
