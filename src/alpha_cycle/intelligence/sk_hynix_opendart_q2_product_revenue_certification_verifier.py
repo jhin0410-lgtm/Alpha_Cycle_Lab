@@ -13,13 +13,13 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
     OpenDartPeriodicProductRevenueCertification,
     ProductRevenueMetrics,
     _payload,
-    parse_periodic_product_revenue_text,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_contract import (
     load_bound_periodic_product_revenue_parser_contract,
 )
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_table import (
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
     parse_periodic_product_revenue_archive,
+    parse_periodic_product_revenue_text,
 )
 from alpha_cycle.providers.opendart import CorpCode
 from alpha_cycle.providers.opendart_documents import _parse_document_archive

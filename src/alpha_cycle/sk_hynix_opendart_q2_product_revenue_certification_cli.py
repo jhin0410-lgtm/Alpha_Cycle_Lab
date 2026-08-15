@@ -14,9 +14,11 @@ from alpha_cycle.intelligence.sk_hynix_official_ir_q2_product_assignment_certifi
 from alpha_cycle.intelligence.sk_hynix_official_ir_q2_product_assignment_certification_verifier import (  # noqa: E501
     load_q2_product_assignment_certification,
 )
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_capture import (
+    capture_periodic_product_revenue_certification,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     DEFAULT_PERIODIC_PRODUCT_REVENUE_OUTPUT,
-    capture_periodic_product_revenue_certification,
     load_periodic_product_revenue_registry,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification_verifier import (

@@ -22,9 +22,11 @@ issuers:
             - DRAM
           nand_and_solutions:
             - NAND
+            - NAND Flash
           other_products_services:
             - 기타
             - 기타 제품 및 서비스
           reported_company_revenue:
             - 합계
             - 매출액 합계
+            - 부문 합계
