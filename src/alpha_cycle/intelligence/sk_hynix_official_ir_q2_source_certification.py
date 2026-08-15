@@ -247,7 +247,9 @@ def build_q2_source_certification(
         readiness_status = "identity_not_verified"
     elif not source_published_date_verified:
         readiness_status = "publication_date_unresolved"
-    elif not layout_pages or not any(page.dram_anchor and page.nand_anchor for page in layout_pages):
+    elif not layout_pages or not any(
+        page.dram_anchor and page.nand_anchor for page in layout_pages
+    ):
         readiness_status = "product_layout_missing"
     else:
         readiness_status = "layout_ready_for_contract_review"
@@ -331,7 +333,12 @@ def capture_q2_source_certification(
     try:
         report_path = temporary / "source_certification.json"
         report_path.write_text(
-            json.dumps(_certification_payload(certification), ensure_ascii=False, indent=2, sort_keys=True),
+            json.dumps(
+                _certification_payload(certification),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            ),
             encoding="utf-8",
         )
         temporary.rename(directory)
