@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 from typing import cast
@@ -38,7 +39,7 @@ def periodic_product_revenue_contract_payload(
     }
 
 
-def _canonical_bytes(payload: dict[str, object]) -> bytes:
+def _canonical_bytes(payload: Mapping[str, object]) -> bytes:
     return json.dumps(
         payload,
         ensure_ascii=False,
