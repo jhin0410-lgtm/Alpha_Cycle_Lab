@@ -1,4 +1,4 @@
-"""Attach verified derived-revenue allocation after company accounting identities."""
+"""Attach verified derived-revenue allocation after direct product-revenue source facts."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import pandas as pd
 
 from alpha_cycle.intelligence.decision import InvestmentDecisionSnapshot
 from alpha_cycle.intelligence.decision_scoring import CompanyExposure, DecisionPolicy
-from alpha_cycle.intelligence.decision_semiconductor_accounting_identity_calibrated import (
-    build_investment_decision_snapshot as _build_accounting_identity_snapshot,
+from alpha_cycle.intelligence.decision_semiconductor_product_revenue_calibrated import (
+    build_investment_decision_snapshot as _build_product_revenue_snapshot,
 )
 from alpha_cycle.intelligence.semiconductor_baseline_allocation_decision_evidence import (
     DEFAULT_BASELINE_ALLOCATION_POINTER,
@@ -118,6 +118,7 @@ def _unavailable_report(report: str, reason: str) -> str:
         + "\n\n## Semiconductor Derived Revenue Allocation (사용 불가)\n\n"
         + f"- 상태: `{reason}`\n"
         + "- direct-fact baseline reconciliation과 company accounting identity는 그대로 유지합니다.\n"
+        + "- direct SK hynix product-revenue source facts도 그대로 유지합니다.\n"
         + "- source-specific resolver가 없거나 재현 검증에 실패한 persisted allocation은 신뢰하지 않습니다.\n"
         + "- profitability/full baseline, numeric forecast, Expectation Gap, decision score는 열지 않습니다.\n"
     )
@@ -161,9 +162,9 @@ def build_investment_decision_snapshot(
     policy: DecisionPolicy | None = None,
     now: datetime | None = None,
 ) -> InvestmentDecisionSnapshot:
-    """Build through company accounting identity, then attach derived-revenue evidence only."""
+    """Build through direct product revenue, then attach derived allocation evidence only."""
 
-    snapshot = _build_accounting_identity_snapshot(
+    snapshot = _build_product_revenue_snapshot(
         research_snapshot,
         market_snapshot,
         valuation_snapshot=valuation_snapshot,
