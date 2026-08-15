@@ -21,11 +21,7 @@ def _live_component_contract(
     include_mapping: bool = True,
     page_size: str = "200",
 ) -> SimpleNamespace:
-    mappings = (
-        (_signal(value="실적발표=105"),)
-        if include_mapping
-        else ()
-    )
+    mappings = ((_signal(value="실적발표=105"),) if include_mapping else ())
     return SimpleNamespace(
         evidence_id=COMPONENT_EVIDENCE_ID,
         source_evidence_id=SOURCE_EVIDENCE_ID,
@@ -73,6 +69,7 @@ def _patch_live_sources(
     monkeypatch: pytest.MonkeyPatch,
     *,
     component: SimpleNamespace | None = None,
+    script_bytes: bytes = b'browserBaseURL:"https://api.example.test"',
 ) -> None:
     monkeypatch.setattr(
         pipeline,
@@ -94,7 +91,7 @@ def _patch_live_sources(
                 (
                     "script_02.js",
                     "https://www.skhynix.com/_nuxt/runtime.js",
-                    b'browserBaseURL:"https://api.example.test"',
+                    script_bytes,
                 ),
             ),
         ),
@@ -118,6 +115,48 @@ def test_live_shared_route_shape_builds_transport_without_false_component_attrib
     assert contract.component_evidence_id == COMPONENT_EVIDENCE_ID
     assert contract.product_baseline_eligible is False
     assert contract.allocation_resolver_registered is False
+
+
+def test_live_nuxt_unicode_escaped_baseurl_resolves_from_archived_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_live_sources(
+        monkeypatch,
+        script_bytes=(
+            b'window.__NUXT__={config:{axios:{baseURL:"https:\\u002F\\u002F'
+            b'homeapi.skhynix.com"}}};'
+        ),
+    )
+
+    contract = pipeline.build_api_transport_contract(
+        "source.json",
+        "component.json",
+        evaluation_date=OBSERVED_DATE,
+    )
+
+    assert contract.resolution_status == "resolved"
+    assert contract.resolved_api_base == "https://homeapi.skhynix.com"
+    assert [(item.key, item.resolved_value) for item in contract.base_signals] == [
+        ("baseURL", "https://homeapi.skhynix.com")
+    ]
+    assert contract.product_baseline_eligible is False
+    assert contract.allocation_resolver_registered is False
+    assert contract.numeric_forecast_enabled is False
+    assert contract.decision_score_enabled is False
+
+
+def test_nuxt_url_normalization_does_not_promote_localhost_fallback() -> None:
+    normalized = pipeline._normalize_transport_source_bytes(
+        b'baseURL:"http:\\u002F\\u002Flocalhost:3000"'
+    )
+    signals, _, _ = pipeline.board_api.scan_api_transport_source(
+        source_file="official_ir_page.html",
+        source_url="https://www.skhynix.com/ir/UI-FR-IR06/",
+        page_origin="https://www.skhynix.com",
+        data=normalized,
+    )
+
+    assert signals == ()
 
 
 def test_shared_route_may_not_be_missing(monkeypatch: pytest.MonkeyPatch) -> None:
