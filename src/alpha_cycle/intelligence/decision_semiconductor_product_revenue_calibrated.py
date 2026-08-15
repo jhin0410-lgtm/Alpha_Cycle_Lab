@@ -1,8 +1,10 @@
 """Attach verified SK hynix direct product-revenue source facts to decision snapshots.
 
 This layer sits after direct/company accounting bridges and before any derived revenue
-allocation. It surfaces source facts and independent IR cross-check readiness without
-promoting revenue evidence into product profitability, a numeric forecast, or a score.
+allocation. Direct OpenDART revenue readiness is governed by the bound source-fact
+certification. The independent IR chart remains a comparability diagnostic and cannot
+invalidate otherwise verified direct revenue. Product profitability, numeric forecast,
+fair value, and score gates remain closed.
 """
 
 from __future__ import annotations
@@ -44,6 +46,8 @@ _FIELDS = [
     "semiconductor_direct_product_revenue_total_krw_million",
     "semiconductor_direct_product_revenue_reconciliation_certified",
     "semiconductor_direct_product_revenue_ir_crosscheck_certified",
+    "semiconductor_direct_product_revenue_ir_share_identity_match",
+    "semiconductor_direct_product_revenue_ir_comparison_status",
     "semiconductor_direct_product_revenue_model_input_ready",
     "semiconductor_direct_product_revenue_source_fact",
     "semiconductor_direct_product_revenue_profitability_certified",
@@ -65,6 +69,8 @@ def _defaults(scorecards: pd.DataFrame) -> pd.DataFrame:
     result["semiconductor_direct_product_revenue_total_krw_million"] = pd.NA
     result["semiconductor_direct_product_revenue_reconciliation_certified"] = False
     result["semiconductor_direct_product_revenue_ir_crosscheck_certified"] = False
+    result["semiconductor_direct_product_revenue_ir_share_identity_match"] = False
+    result["semiconductor_direct_product_revenue_ir_comparison_status"] = pd.NA
     result["semiconductor_direct_product_revenue_model_input_ready"] = False
     result["semiconductor_direct_product_revenue_source_fact"] = False
     result["semiconductor_direct_product_revenue_profitability_certified"] = False
@@ -84,7 +90,10 @@ def _attach(
     other_revenue: float,
     total_revenue: float,
     reconciliation_certified: bool,
+    direct_baseline_eligible: bool,
     ir_crosscheck_certified: bool,
+    ir_share_identity_match: bool,
+    ir_comparison_status: str,
 ) -> pd.DataFrame:
     result = _defaults(scorecards)
     target = result["ticker"].eq("000660")
@@ -110,8 +119,16 @@ def _attach(
         target,
         "semiconductor_direct_product_revenue_ir_crosscheck_certified",
     ] = ir_crosscheck_certified
+    result.loc[
+        target,
+        "semiconductor_direct_product_revenue_ir_share_identity_match",
+    ] = ir_share_identity_match
+    result.loc[
+        target,
+        "semiconductor_direct_product_revenue_ir_comparison_status",
+    ] = ir_comparison_status
     result.loc[target, "semiconductor_direct_product_revenue_model_input_ready"] = (
-        reconciliation_certified and ir_crosscheck_certified
+        reconciliation_certified and direct_baseline_eligible
     )
     result.loc[target, "semiconductor_direct_product_revenue_source_fact"] = True
     return result
@@ -164,7 +181,9 @@ def _report(
     nand_revenue: float,
     other_revenue: float,
     total_revenue: float,
+    model_input_ready: bool,
     crosscheck_certified: bool,
+    ir_comparison_status: str,
 ) -> str:
     return (
         report.rstrip()
@@ -175,7 +194,9 @@ def _report(
         + f"- Other revenue: `{other_revenue:,.0f} KRW million`\n"
         + f"- Reported product revenue total: `{total_revenue:,.0f} KRW million`\n"
         + "- direct source reconciliation: `certified`\n"
-        + f"- independent official-IR rounded-share cross-check: `{crosscheck_certified}`\n"
+        + f"- revenue-only model input ready: `{model_input_ready}`\n"
+        + f"- independent official-IR cross-check: `{crosscheck_certified}`\n"
+        + f"- IR comparison status: `{ir_comparison_status}`\n"
         + "- source fact: `true`; allocation resolver: `false`\n"
         + "- product profitability/full baseline/numeric forecast/decision score: `false`\n"
     )
@@ -255,6 +276,8 @@ def build_investment_decision_snapshot(
         else DEFAULT_Q2_PRODUCT_ASSIGNMENT_POINTER
     )
     crosscheck_certified = False
+    ir_share_identity_match = False
+    ir_comparison_status = "official_ir_product_assignment_evidence_missing"
     crosscheck_reason = "semiconductor_direct_product_revenue_ir_crosscheck_missing"
     if ir_pointer.is_file():
         try:
@@ -264,15 +287,22 @@ def build_investment_decision_snapshot(
             )
             crosscheck = build_product_revenue_ir_crosscheck(evidence, assignment)
             crosscheck_certified = crosscheck.crosscheck_certified
+            ir_share_identity_match = crosscheck.share_identity_match
+            ir_comparison_status = crosscheck.comparison_status
             crosscheck_reason = (
                 "semiconductor_direct_product_revenue_ir_crosscheck_certified"
                 if crosscheck_certified
-                else "semiconductor_direct_product_revenue_ir_crosscheck_failed"
+                else f"semiconductor_direct_product_revenue_ir:{crosscheck.comparison_status}"
             )
         except (OSError, TypeError, ValueError):
+            ir_comparison_status = "official_ir_crosscheck_unavailable"
             crosscheck_reason = "semiconductor_direct_product_revenue_ir_crosscheck_unavailable"
 
     metrics = evidence.metrics
+    model_input_ready = (
+        evidence.company_revenue_reconciliation_certified
+        and evidence.product_revenue_baseline_eligible
+    )
     scorecards = _attach(
         snapshot.scorecards,
         evidence_id=evidence.evidence_id,
@@ -281,7 +311,10 @@ def build_investment_decision_snapshot(
         other_revenue=metrics.other_products_services,
         total_revenue=metrics.reported_company_revenue,
         reconciliation_certified=evidence.company_revenue_reconciliation_certified,
+        direct_baseline_eligible=evidence.product_revenue_baseline_eligible,
         ir_crosscheck_certified=crosscheck_certified,
+        ir_share_identity_match=ir_share_identity_match,
+        ir_comparison_status=ir_comparison_status,
     )
     records = _sync_records(snapshot.decision_records, scorecards)
     warnings = list(snapshot.warnings)
@@ -290,6 +323,7 @@ def build_investment_decision_snapshot(
             f"semiconductor_direct_product_revenue:{evidence.evidence_id[:12]}",
             crosscheck_reason,
             "semiconductor_direct_product_revenue_source_fact",
+            "semiconductor_direct_product_revenue_ir_comparability_diagnostic_only",
             "semiconductor_direct_product_revenue_allocation_resolver_not_required",
             "semiconductor_direct_product_revenue_profitability_blocked",
             "semiconductor_direct_product_revenue_numeric_forecast_disabled",
@@ -307,7 +341,9 @@ def build_investment_decision_snapshot(
             nand_revenue=metrics.nand_and_solutions,
             other_revenue=metrics.other_products_services,
             total_revenue=metrics.reported_company_revenue,
+            model_input_ready=model_input_ready,
             crosscheck_certified=crosscheck_certified,
+            ir_comparison_status=ir_comparison_status,
         ),
         warnings=tuple(dict.fromkeys(warnings)),
     )
