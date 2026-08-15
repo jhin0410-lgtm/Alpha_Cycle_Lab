@@ -5,13 +5,11 @@ import json
 from datetime import date
 from pathlib import Path
 
-from alpha_cycle.intelligence.sk_hynix_official_ir_q2_product_assignment_certification import (
-    DEFAULT_Q2_PRODUCT_ASSIGNMENT_OUTPUT,
-    DEFAULT_Q2_PRODUCT_ASSIGNMENT_POINTER,
-    capture_q2_product_assignment_certification,
+from alpha_cycle.intelligence import (
+    sk_hynix_official_ir_q2_product_assignment_certification as assignment,
 )
-from alpha_cycle.intelligence.sk_hynix_official_ir_q2_product_assignment_certification_verifier import (
-    load_q2_product_assignment_certification,
+from alpha_cycle.intelligence import (
+    sk_hynix_official_ir_q2_product_assignment_certification_verifier as verifier,
 )
 from alpha_cycle.intelligence.sk_hynix_official_ir_q2_share_column_certification import (
     DEFAULT_Q2_SHARE_COLUMN_POINTER,
@@ -33,19 +31,23 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_Q2_SHARE_COLUMN_POINTER,
     )
-    parser.add_argument("--output", type=Path, default=DEFAULT_Q2_PRODUCT_ASSIGNMENT_OUTPUT)
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=assignment.DEFAULT_Q2_PRODUCT_ASSIGNMENT_OUTPUT,
+    )
     return parser
 
 
 def main() -> int:
     args = _parser().parse_args()
-    pointer = capture_q2_product_assignment_certification(
+    pointer = assignment.capture_q2_product_assignment_certification(
         args.share_column_pointer,
         evaluation_date=args.evaluation_date,
         output=args.output,
     )
-    item = load_q2_product_assignment_certification(
-        args.output / DEFAULT_Q2_PRODUCT_ASSIGNMENT_POINTER.name,
+    item = verifier.load_q2_product_assignment_certification(
+        args.output / assignment.DEFAULT_Q2_PRODUCT_ASSIGNMENT_POINTER.name,
         evaluation_date=args.evaluation_date,
     )
     result = {
