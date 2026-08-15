@@ -341,7 +341,14 @@ def _painted_rectangles(pdf_bytes: bytes, *, page_number: int) -> tuple[PaintedR
         elif operator == b"re":
             if len(operands) != 4:
                 raise ValueError("SK hynix Q2 rectangle operator shape is invalid")
-            pending.append(tuple(float(value) for value in operands))
+            pending.append(
+                (
+                    float(operands[0]),
+                    float(operands[1]),
+                    float(operands[2]),
+                    float(operands[3]),
+                )
+            )
         elif operator in {b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*"}:
             commit()
         elif operator in {b"n", b"S", b"s"}:
@@ -389,7 +396,10 @@ def _legend_binding(
         horizontal_gap = label.text_x - rectangle.x_max
         if horizontal_gap < -2.0 or horizontal_gap > _SWATCH_HORIZONTAL_GAP_MAX:
             continue
-        if abs(((rectangle.y_min + rectangle.y_max) / 2.0) - label.text_y) > _SWATCH_VERTICAL_TOLERANCE:
+        vertical_delta = abs(
+            ((rectangle.y_min + rectangle.y_max) / 2.0) - label.text_y
+        )
+        if vertical_delta > _SWATCH_VERTICAL_TOLERANCE:
             continue
         candidates.append(rectangle)
     if len(candidates) != 1:
@@ -495,7 +505,10 @@ def build_q2_product_assignment_certification(
         raise ValueError("SK hynix Q2 share-column token pair drifted")
     if share_item.geometry_evidence_id != geometry_item.evidence_id:
         raise ValueError("SK hynix Q2 assignment geometry evidence does not match share column")
-    if share_item.source_certification_evidence_id != geometry_item.source_certification_evidence_id:
+    if (
+        share_item.source_certification_evidence_id
+        != geometry_item.source_certification_evidence_id
+    ):
         raise ValueError("SK hynix Q2 assignment source-certification chain diverged")
     if share_item.pdf_sha256 != geometry_item.pdf_sha256:
         raise ValueError("SK hynix Q2 assignment PDF hash chain diverged")
