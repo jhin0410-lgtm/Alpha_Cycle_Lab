@@ -11,7 +11,7 @@ from pathlib import Path
 from alpha_cycle.intelligence.sk_hynix_official_ir_q2_product_assignment_certification import (
     DEFAULT_Q2_PRODUCT_ASSIGNMENT_POINTER,
 )
-from alpha_cycle.intelligence.sk_hynix_official_ir_q2_product_assignment_certification_verifier import (
+from alpha_cycle.intelligence.sk_hynix_official_ir_q2_product_assignment_certification_verifier import (  # noqa: E501
     load_q2_product_assignment_certification,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
