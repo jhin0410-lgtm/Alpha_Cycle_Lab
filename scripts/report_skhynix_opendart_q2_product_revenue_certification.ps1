@@ -48,10 +48,11 @@ if (-not (Test-Path $IrAssignmentPointer)) {
 }
 
 Write-Host "Discovering the exact SK hynix 2026 half-year filing through official OpenDART."
+Write-Host "Semantic replay scans the current consolidated revenue note instead of assuming adjacent HTML tables."
 Write-Host "The exact ZIP bytes will be archived; Q2 DRAM/NAND/Other amounts must be directly reported and reconcile."
 Write-Host "Direct product revenue does not certify product profitability, numeric forecast, fair value, or decision score."
 Write-Host "Python: $ProjectPython"
-& $ProjectPython -m alpha_cycle.sk_hynix_opendart_q2_product_revenue_certification_cli `
+& $ProjectPython -m alpha_cycle.sk_hynix_opendart_q2_product_revenue_semantic_cli `
     --evaluation-date $EvaluationDate `
     --registry $Registry `
     --output $Output `
