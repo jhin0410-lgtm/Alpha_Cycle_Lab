@@ -22,6 +22,9 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification_verifier import (
     load_periodic_product_revenue_certification,
 )
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_contract import (
+    bind_periodic_product_revenue_parser_contract,
+)
 from alpha_cycle.intelligence.sk_hynix_q2_product_revenue_ir_crosscheck import (
     build_product_revenue_ir_crosscheck,
 )
@@ -60,14 +63,17 @@ def main() -> int:
     specs = load_periodic_product_revenue_registry(args.registry)
     if args.document_id not in specs:
         raise SystemExit(f"unknown document-id: {args.document_id}")
-    pointer = capture_periodic_product_revenue_certification(
+    spec = specs[args.document_id]
+    capture_periodic_product_revenue_certification(
         OpenDartReadOnlyClient.from_env(),
-        specs[args.document_id],
+        spec,
         evaluation_date=evaluation_date,
         output=args.output,
     )
+    pointer_path = Path(args.output) / "latest_certification.json"
+    pointer = bind_periodic_product_revenue_parser_contract(pointer_path, spec)
     certification = load_periodic_product_revenue_certification(
-        Path(args.output) / "latest_certification.json",
+        pointer_path,
         evaluation_date=evaluation_date,
     )
 
@@ -94,6 +100,8 @@ def main() -> int:
         "status": "skhynix_q2_direct_product_revenue_readiness",
         "evaluation_date": evaluation_date.isoformat(),
         "product_revenue_evidence_id": certification.evidence_id,
+        "product_revenue_chain_evidence_id": pointer["chain_evidence_id"],
+        "parser_contract_sha256": pointer["parser_contract_sha256"],
         "rcept_no": certification.rcept_no,
         "report_name": certification.report_name,
         "source_url": certification.source_url,
