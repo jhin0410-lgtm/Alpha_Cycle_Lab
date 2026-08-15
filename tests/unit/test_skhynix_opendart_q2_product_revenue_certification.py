@@ -91,7 +91,12 @@ class _FakeDisclosureClient:
         return DisclosureBatch(self.frame, raw_payload={"pages": []})
 
 
-def _row(*, receipt: str = RECEIPT, report_name: str | None = None, correction: bool = False):
+def _row(
+    *,
+    receipt: str = RECEIPT,
+    report_name: str | None = None,
+    correction: bool = False,
+):
     return {
         "ticker": "000660",
         "corp_code": "00164779",
@@ -106,9 +111,10 @@ def _row(*, receipt: str = RECEIPT, report_name: str | None = None, correction: 
 
 def _archive(text: str | None = None) -> DisclosureDocumentArchive:
     body = text if text is not None else _text()
+    markup = f"<html><body>{body.replace(chr(10), '<br>')}</body></html>"
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("document.xml", f"<html><body>{body.replace(chr(10), '<br>')}</body></html>")
+        archive.writestr("document.xml", markup)
     raw = buffer.getvalue()
     evidence = _parse_document_archive(
         raw,
@@ -129,12 +135,18 @@ def test_registry_requires_exact_half_year_report_without_receipt_number() -> No
 
 def test_discovery_requires_one_exact_non_correction_periodic_filing() -> None:
     frame = pd.DataFrame([_row(), _row(receipt="20260814009999", correction=True)])
-    found = discover_periodic_product_revenue(_FakeDisclosureClient(frame), _spec())  # type: ignore[arg-type]
+    found = discover_periodic_product_revenue(  # type: ignore[arg-type]
+        _FakeDisclosureClient(frame),
+        _spec(),
+    )
     assert found.rcept_no == RECEIPT
 
     duplicate = pd.DataFrame([_row(), _row(receipt="20260814001235")])
     with pytest.raises(ValueError, match="exact disclosure match must be unique"):
-        discover_periodic_product_revenue(_FakeDisclosureClient(duplicate), _spec())  # type: ignore[arg-type]
+        discover_periodic_product_revenue(  # type: ignore[arg-type]
+            _FakeDisclosureClient(duplicate),
+            _spec(),
+        )
 
 
 def test_parser_uses_current_three_month_direct_rows_and_preserves_other() -> None:
@@ -149,10 +161,13 @@ def test_parser_uses_current_three_month_direct_rows_and_preserves_other() -> No
 
 
 def test_parser_fails_closed_on_missing_other_or_nonreconciling_total() -> None:
+    missing_other = _text().replace("기타\n400,000", "서비스\n400,000")
     with pytest.raises(ValueError, match="resolve uniquely"):
-        parse_periodic_product_revenue_text(_spec(), _text().replace("기타\n400,000", "서비스\n400,000"))
+        parse_periodic_product_revenue_text(_spec(), missing_other)
+
+    wrong_total = _text().replace("40,000,000", "40,100,000", 1)
     with pytest.raises(ValueError, match="resolve uniquely"):
-        parse_periodic_product_revenue_text(_spec(), _text().replace("40,000,000", "40,100,000", 1))
+        parse_periodic_product_revenue_text(_spec(), wrong_total)
 
 
 def test_direct_product_revenue_can_certify_revenue_baseline_but_not_profit_or_forecast() -> None:
