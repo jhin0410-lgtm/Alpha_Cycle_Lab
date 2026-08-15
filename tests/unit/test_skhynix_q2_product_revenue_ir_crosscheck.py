@@ -76,19 +76,23 @@ def test_direct_amount_shares_crosscheck_rounded_ir_labels_without_inferring_oth
     item = build_product_revenue_ir_crosscheck(_direct(), _ir())  # type: ignore[arg-type]
     assert item.dram_rounded_match is True
     assert item.nand_rounded_match is True
+    assert item.share_identity_match is True
     assert item.others_presence_match is True
+    assert item.comparison_status == "matched"
     assert item.crosscheck_certified is True
+    assert item.direct_source_fact_remains_valid is True
     assert item.other_direct_share_percent > 0
     assert item.allocation_resolver_registered is False
     assert item.numeric_forecast_enabled is False
     assert item.decision_score_enabled is False
 
 
-def test_ir_crosscheck_blocks_promotion_when_direct_amount_scope_does_not_match() -> None:
+def test_ir_crosscheck_blocks_cross_source_promotion_when_share_identity_does_not_match() -> None:
     direct = _direct(other=2_000_000)
     item = build_product_revenue_ir_crosscheck(direct, _ir())  # type: ignore[arg-type]
     assert item.crosscheck_certified is False
     assert item.product_revenue_promotion_ready is False
+    assert item.direct_source_fact_remains_valid is True
 
 
 def test_live_2026_dart_source_fact_survives_ir_share_definition_mismatch() -> None:
@@ -102,7 +106,10 @@ def test_live_2026_dart_source_fact_survives_ir_share_definition_mismatch() -> N
     assert item.other_direct_share_percent == 100.0 * 376_105.0 / 79_318_746.0
     assert item.dram_rounded_match is False
     assert item.nand_rounded_match is False
+    assert item.share_identity_match is False
     assert item.others_presence_match is True
     assert item.period_match is True
+    assert item.comparison_status == "official_source_share_identity_mismatch"
     assert item.crosscheck_certified is False
     assert item.product_revenue_promotion_ready is False
+    assert item.direct_source_fact_remains_valid is True

@@ -1,4 +1,10 @@
-"""Cross-check direct OpenDART product revenue against certified SK hynix Q2 IR shares."""
+"""Cross-check direct OpenDART product revenue against certified SK hynix Q2 IR shares.
+
+The OpenDART amounts and the IR chart are both first-party evidence, but observed 2026
+filings show that their product-share definitions are not numerically identical. This
+module therefore treats the IR comparison as an independent comparability diagnostic;
+it never invalidates an otherwise verified direct OpenDART source fact.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +20,11 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
     OpenDartPeriodicProductRevenueCertification,
 )
 
+_MATCHED = "matched"
+_SHARE_IDENTITY_MISMATCH = "official_source_share_identity_mismatch"
+_PERIOD_MISMATCH = "period_mismatch"
+_OTHER_PRESENCE_MISMATCH = "other_presence_mismatch"
+
 
 @dataclass(frozen=True)
 class ProductRevenueIrCrosscheck:
@@ -27,10 +38,13 @@ class ProductRevenueIrCrosscheck:
     nand_ir_rounded_percent: int
     dram_rounded_match: bool
     nand_rounded_match: bool
+    share_identity_match: bool
     others_presence_match: bool
     period_match: bool
+    comparison_status: str
     crosscheck_certified: bool
     product_revenue_promotion_ready: bool
+    direct_source_fact_remains_valid: bool = True
     allocation_resolver_registered: bool = False
     product_profitability_certified: bool = False
     numeric_forecast_enabled: bool = False
@@ -39,16 +53,22 @@ class ProductRevenueIrCrosscheck:
     def __post_init__(self) -> None:
         if len(self.evidence_id) != 64:
             raise ValueError("Product revenue IR cross-check evidence_id must be SHA-256")
-        expected = (
-            self.dram_rounded_match
-            and self.nand_rounded_match
-            and self.others_presence_match
-            and self.period_match
-        )
+        expected_share_identity = self.dram_rounded_match and self.nand_rounded_match
+        if self.share_identity_match != expected_share_identity:
+            raise ValueError("Product revenue IR share-identity flags diverged")
+        expected = self.share_identity_match and self.others_presence_match and self.period_match
         if self.crosscheck_certified != expected:
             raise ValueError("Product revenue IR cross-check certification flags diverged")
         if self.product_revenue_promotion_ready != self.crosscheck_certified:
             raise ValueError("Product revenue promotion readiness must follow cross-check")
+        if not self.direct_source_fact_remains_valid:
+            raise ValueError("IR diagnostic cannot invalidate verified direct source facts")
+        if self.comparison_status != _comparison_status(
+            share_identity_match=self.share_identity_match,
+            others_presence_match=self.others_presence_match,
+            period_match=self.period_match,
+        ):
+            raise ValueError("Product revenue IR comparison status diverged")
         if (
             self.allocation_resolver_registered
             or self.product_profitability_certified
@@ -60,6 +80,21 @@ class ProductRevenueIrCrosscheck:
 
 def _round_percent(value: float) -> int:
     return int(math.floor(value + 0.5))
+
+
+def _comparison_status(
+    *,
+    share_identity_match: bool,
+    others_presence_match: bool,
+    period_match: bool,
+) -> str:
+    if not period_match:
+        return _PERIOD_MISMATCH
+    if not others_presence_match:
+        return _OTHER_PRESENCE_MISMATCH
+    if not share_identity_match:
+        return _SHARE_IDENTITY_MISMATCH
+    return _MATCHED
 
 
 def build_product_revenue_ir_crosscheck(
@@ -83,6 +118,7 @@ def build_product_revenue_ir_crosscheck(
     nand_ir = int(ir_assignment.nand_share_percent)
     dram_match = _round_percent(dram_share) == dram_ir
     nand_match = _round_percent(nand_share) == nand_ir
+    share_identity_match = dram_match and nand_match
     others_match = (
         ir_assignment.others_segment_present
         and product_revenue.metrics.other_products_services > 0.0
@@ -92,7 +128,12 @@ def build_product_revenue_ir_crosscheck(
         and product_revenue.period_end.isoformat() == "2026-06-30"
         and ir_assignment.current_period_label == "'26 Q2"
     )
-    certified = dram_match and nand_match and others_match and period_match
+    status = _comparison_status(
+        share_identity_match=share_identity_match,
+        others_presence_match=others_match,
+        period_match=period_match,
+    )
+    certified = share_identity_match and others_match and period_match
     payload: dict[str, object] = {
         "product_revenue_evidence_id": product_revenue.evidence_id,
         "ir_assignment_evidence_id": ir_assignment.evidence_id,
@@ -103,10 +144,13 @@ def build_product_revenue_ir_crosscheck(
         "nand_ir_rounded_percent": nand_ir,
         "dram_rounded_match": dram_match,
         "nand_rounded_match": nand_match,
+        "share_identity_match": share_identity_match,
         "others_presence_match": others_match,
         "period_match": period_match,
+        "comparison_status": status,
         "crosscheck_certified": certified,
         "product_revenue_promotion_ready": certified,
+        "direct_source_fact_remains_valid": True,
         "allocation_resolver_registered": False,
         "product_profitability_certified": False,
         "numeric_forecast_enabled": False,
@@ -126,10 +170,13 @@ def build_product_revenue_ir_crosscheck(
         nand_ir_rounded_percent=nand_ir,
         dram_rounded_match=dram_match,
         nand_rounded_match=nand_match,
+        share_identity_match=share_identity_match,
         others_presence_match=others_match,
         period_match=period_match,
+        comparison_status=status,
         crosscheck_certified=certified,
         product_revenue_promotion_ready=certified,
+        direct_source_fact_remains_valid=True,
         allocation_resolver_registered=False,
         product_profitability_certified=False,
         numeric_forecast_enabled=False,
