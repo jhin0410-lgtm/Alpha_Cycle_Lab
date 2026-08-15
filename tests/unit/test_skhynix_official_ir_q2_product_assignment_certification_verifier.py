@@ -6,7 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from alpha_cycle.intelligence import sk_hynix_official_ir_q2_product_assignment_certification as assignment
+from alpha_cycle.intelligence import (
+    sk_hynix_official_ir_q2_product_assignment_certification as assignment,
+)
 from alpha_cycle.intelligence import (
     sk_hynix_official_ir_q2_product_assignment_certification_verifier as verifier,
 )
