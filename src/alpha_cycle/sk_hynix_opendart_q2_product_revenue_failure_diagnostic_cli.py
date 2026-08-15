@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
@@ -16,7 +17,9 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_failure_diagn
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Inspect preserved OpenDART failure evidence offline")
+    parser = argparse.ArgumentParser(
+        description="Inspect preserved OpenDART failure evidence offline"
+    )
     parser.add_argument("--root", default=str(DEFAULT_PERIODIC_PRODUCT_REVENUE_OUTPUT))
     parser.add_argument("--diagnostic", default="")
     return parser
@@ -24,9 +27,13 @@ def _parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = _parser().parse_args()
-    path = Path(args.diagnostic) if args.diagnostic else latest_failure_diagnostic(args.root)
+    path = (
+        Path(args.diagnostic)
+        if args.diagnostic
+        else latest_failure_diagnostic(args.root)
+    )
     report, output = write_failure_diagnostic_report(path)
-    payload = dict(report.__dict__)
+    payload = asdict(report)
     payload["report_path"] = str(output)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
