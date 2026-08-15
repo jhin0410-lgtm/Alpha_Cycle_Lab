@@ -18,8 +18,8 @@ from pathlib import Path, PurePosixPath
 from typing import cast
 
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_table import (
-    _TableExtractor,
     _grid,
+    _TableExtractor,
 )
 from alpha_cycle.providers.opendart_documents import _decode_text, _safe_member_name
 
