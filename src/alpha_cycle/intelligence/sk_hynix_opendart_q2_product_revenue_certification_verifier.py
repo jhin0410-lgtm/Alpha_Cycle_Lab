@@ -13,8 +13,10 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
     OpenDartPeriodicProductRevenueCertification,
     ProductRevenueMetrics,
     _payload,
-    load_periodic_product_revenue_registry,
     parse_periodic_product_revenue_text,
+)
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_contract import (
+    load_bound_periodic_product_revenue_parser_contract,
 )
 from alpha_cycle.providers.opendart import CorpCode
 from alpha_cycle.providers.opendart_documents import _parse_document_archive
@@ -96,12 +98,21 @@ def load_periodic_product_revenue_certification(
         raise ValueError("Periodic product revenue pointer status is invalid")
     if date.fromisoformat(str(pointer.get("evaluation_date", ""))) != evaluation_date:
         raise ValueError("Periodic product revenue evaluation date mismatch")
+    spec, _contract_hash = load_bound_periodic_product_revenue_parser_contract(pointer)
 
     certification = _certification(Path(str(pointer.get("certification_path", ""))))
     if certification.evaluation_date != evaluation_date:
         raise ValueError("Periodic product revenue certification evaluation date mismatch")
     if str(pointer.get("evidence_id", "")) != certification.evidence_id:
         raise ValueError("Periodic product revenue pointer/certification evidence mismatch")
+    if certification.document_id != spec.document_id:
+        raise ValueError("Periodic product revenue certification/contract document mismatch")
+    if certification.ticker != spec.ticker or certification.issuer_name != spec.issuer_name:
+        raise ValueError("Periodic product revenue certification/contract issuer mismatch")
+    if certification.report_name != spec.report_name_exact:
+        raise ValueError("Periodic product revenue certification/contract report mismatch")
+    if certification.period_start != spec.period_start or certification.period_end != spec.period_end:
+        raise ValueError("Periodic product revenue certification/contract period mismatch")
 
     archive_path = Path(str(pointer.get("archive_path", "")))
     try:
@@ -131,10 +142,6 @@ def load_periodic_product_revenue_certification(
     if persisted_text != document.text:
         raise ValueError("Periodic product revenue normalized text does not reproduce from ZIP")
 
-    specs = load_periodic_product_revenue_registry()
-    if certification.document_id not in specs:
-        raise ValueError("Periodic product revenue document_id is not registered")
-    spec = specs[certification.document_id]
     metrics = parse_periodic_product_revenue_text(spec, document.text)
     if metrics != certification.metrics:
         raise ValueError("Periodic product revenue parser output does not reproduce")
