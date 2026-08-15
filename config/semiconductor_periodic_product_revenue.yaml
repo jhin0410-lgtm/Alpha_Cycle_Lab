@@ -14,8 +14,6 @@ issuers:
         expected_identity_anchors:
           - DRAM
           - NAND
-          - 당반기
-          - 전반기
           - 3개월
           - 누적
           - 백만원
