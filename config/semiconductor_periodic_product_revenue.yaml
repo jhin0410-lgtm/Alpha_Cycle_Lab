@@ -10,7 +10,7 @@ issuers:
         discovery_end_date: 2026-08-14
         period_start: 2026-04-01
         period_end: 2026-06-30
-        parser_id: skhynix_opendart_half_year_product_revenue_2026q2_v2_raw_note_stream
+        parser_id: skhynix_opendart_half_year_product_revenue_2026q2_v1
         expected_identity_anchors:
           - DRAM
           - NAND
