@@ -125,7 +125,9 @@ def _sha_payload(payload: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _matrix(value: list[float] | tuple[float, ...]) -> tuple[float, float, float, float, float, float]:
+def _matrix(
+    value: list[float] | tuple[float, ...],
+) -> tuple[float, float, float, float, float, float]:
     if len(value) != 6:
         raise ValueError("PDF text matrix must contain six values")
     return (
@@ -186,6 +188,45 @@ def _is_focus_text(text: str) -> bool:
     return bool(_FOCUS.search(text) or _PERCENTAGE.search(text) or _COMMA_NUMBER.search(text))
 
 
+def _extract_page_geometry(page: Any, *, page_number: int) -> ProductGeometryPage:
+    fragments: list[TextFragment] = []
+
+    def visitor_text(
+        text: str,
+        cm: list[float],
+        tm: list[float],
+        font_dict: dict[str, Any] | None,
+        font_size: float,
+    ) -> None:
+        del font_dict
+        cleaned = " ".join(text.split())
+        if not cleaned:
+            return
+        fragments.append(
+            TextFragment(
+                page_number=page_number,
+                text=cleaned[:500],
+                text_matrix=_matrix(tm),
+                current_matrix=_matrix(cm),
+                font_size=float(font_size),
+            )
+        )
+
+    try:
+        page.extract_text(visitor_text=visitor_text)
+    except Exception as exc:
+        raise ValueError("SK hynix Q2 geometry text extraction failed") from exc
+
+    focus = tuple(item for item in fragments if _is_focus_text(item.text))
+    return ProductGeometryPage(
+        page_number=page_number,
+        width=float(page.mediabox.width),
+        height=float(page.mediabox.height),
+        fragments=tuple(fragments),
+        focus_fragments=focus,
+    )
+
+
 def _extract_geometry_pages(
     pdf_bytes: bytes,
     *,
@@ -202,43 +243,10 @@ def _extract_geometry_pages(
     for page_number in page_numbers:
         if page_number <= 0 or page_number > len(reader.pages):
             raise ValueError("SK hynix Q2 geometry page number is out of range")
-        page = reader.pages[page_number - 1]
-        fragments: list[TextFragment] = []
-
-        def visitor_text(
-            text: str,
-            cm: list[float],
-            tm: list[float],
-            font_dict: dict[str, Any] | None,
-            font_size: float,
-        ) -> None:
-            del font_dict
-            cleaned = " ".join(text.split())
-            if not cleaned:
-                return
-            fragments.append(
-                TextFragment(
-                    page_number=page_number,
-                    text=cleaned[:500],
-                    text_matrix=_matrix(tm),
-                    current_matrix=_matrix(cm),
-                    font_size=float(font_size),
-                )
-            )
-
-        try:
-            page.extract_text(visitor_text=visitor_text)
-        except Exception as exc:
-            raise ValueError("SK hynix Q2 geometry text extraction failed") from exc
-
-        focus = tuple(item for item in fragments if _is_focus_text(item.text))
         pages.append(
-            ProductGeometryPage(
+            _extract_page_geometry(
+                reader.pages[page_number - 1],
                 page_number=page_number,
-                width=float(page.mediabox.width),
-                height=float(page.mediabox.height),
-                fragments=tuple(fragments),
-                focus_fragments=focus,
             )
         )
     return tuple(pages)
