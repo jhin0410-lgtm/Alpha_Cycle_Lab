@@ -111,7 +111,10 @@ def load_periodic_product_revenue_certification(
         raise ValueError("Periodic product revenue certification/contract issuer mismatch")
     if certification.report_name != spec.report_name_exact:
         raise ValueError("Periodic product revenue certification/contract report mismatch")
-    if certification.period_start != spec.period_start or certification.period_end != spec.period_end:
+    if (
+        certification.period_start != spec.period_start
+        or certification.period_end != spec.period_end
+    ):
         raise ValueError("Periodic product revenue certification/contract period mismatch")
 
     archive_path = Path(str(pointer.get("archive_path", "")))
