@@ -3,7 +3,7 @@
 The normalized-text parser is useful for discovery and diagnostics, but it cannot retain
 HTML colspan/rowspan semantics. This verifier reconstructs the source table grid from the
 archived official document and accepts values only from the unique column whose header
-path contains both the current-half marker and the three-month marker.
+path contains both a current-period marker and the three-month marker.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
 from alpha_cycle.providers.opendart_documents import _decode_text, _safe_member_name
 
 _TEXT_SUFFIXES = frozenset({".xml", ".html", ".htm", ".xhtml"})
-_CURRENT_MARKERS = ("당반기", "당기")
-_PRIOR_MARKERS = ("전반기", "전기")
+_CURRENT_MARKERS = ("당반기", "당분기", "당기")
+_PRIOR_MARKERS = ("전반기", "전분기", "전기")
 _THREE_MONTH_MARKER = "3개월"
 _CUMULATIVE_MARKER = "누적"
 _UNIT_MARKERS = {"백만원": ("KRW_million", 1.0), "억원": ("KRW_million", 100.0)}
@@ -313,7 +313,7 @@ def parse_periodic_product_revenue_archive(
     spec: PeriodicProductRevenueSpec,
     archive_bytes: bytes,
 ) -> ProductRevenueMetrics:
-    """Rebuild table geometry and read the unique current-half three-month column."""
+    """Rebuild table geometry and read the unique current-period three-month column."""
 
     if spec.parser_id != "skhynix_opendart_half_year_product_revenue_2026q2_v1":
         raise ValueError("Unsupported periodic product revenue structural parser_id")
