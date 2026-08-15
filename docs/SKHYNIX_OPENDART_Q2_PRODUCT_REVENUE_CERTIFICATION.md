@@ -8,11 +8,13 @@ This stage discovers the official OpenDART `반기보고서 (2026.06)` and certi
 
 ## Actual 2026 filing layout
 
-Preserved receipt `20260814003509` proves that the consolidated product header and the revenue row are emitted as adjacent tables. Under `21. 매출액 (연결)`, the product header contains:
+Preserved receipt `20260814003509` proves that the consolidated product disclosure cannot be treated as one stable HTML table. Under `21. 매출액 (연결)`, the structural header certifies the product order:
 
 `DRAM | NAND Flash | 기타 | 부문 합계`
 
-Each group has `3개월` and `누적` subcolumns. The immediately following data table contains a plain `수익` row with eight corresponding amounts. The production parser binds those adjacent tables, selects the current-period `3개월` cells, and separately excludes the standalone `20. 매출액` table.
+Each group has `3개월` and `누적` semantics, but the `수익` label and eight corresponding current/cumulative amounts may be emitted across separate tables or intervening layout elements. Production replay therefore does **not** require adjacency or identical physical column geometry between the header and data containers.
+
+The parser first certifies the unique current-period consolidated product header and unit from table geometry. It then replays raw HTML/XML text-token order inside the same consolidated revenue note, finds the product revenue sequence across arbitrary table/paragraph boundaries, and accepts a candidate only when both current-quarter and cumulative product sums reconcile to their directly reported totals. The standalone `20. 매출액` note and prior-period section remain excluded.
 
 ## Observed 2Q26 direct source facts
 
@@ -29,7 +31,7 @@ The source reconciles exactly:
 
 `56,982,743 + 21,959,898 + 376,105 = 79,318,746`.
 
-These values are direct source facts. They are not produced by a share-allocation resolver.
+The cumulative values are independently required to reconcile as a second structural guard. These values are direct source facts. They are not produced by a share-allocation resolver.
 
 ## Source boundary
 
@@ -44,21 +46,24 @@ The collector and verifier:
 7. refuse truncated normalized text;
 8. require a supported KRW unit;
 9. require the consolidated `매출액 (연결)` scope;
-10. require a unique current-period DRAM/NAND/Other/Total `3개월` mapping;
-11. accept the live `수익` row and retained compatibility aliases;
-12. reconstruct raw HTML/XML table geometry, including split adjacent header/data tables;
-13. require normalized-text and structured-source parses to reproduce the same metrics; and
-14. require direct product amounts to reconcile to the reported total.
+10. require a unique current-period DRAM/NAND/Other/Total `3개월` structural header mapping;
+11. accept the live plain `수익` label and retained compatibility aliases;
+12. allow the revenue label and amounts to cross arbitrary table or paragraph boundaries inside the same note;
+13. require both Q2 and half-year cumulative DRAM + NAND + Other sums to reconcile to their respective direct totals;
+14. require raw-source-token replay and normalized-text parsing to reproduce exactly the same metrics; and
+15. reject source-note, period, product-order, unit, or reconciliation ambiguity.
 
-No `Other=100-DRAM-NAND`, chart-height allocation, or hidden residual is permitted.
+No `Other=100-DRAM-NAND`, chart-height allocation, consolidated-margin allocation, or hidden residual is permitted.
 
-## Failure diagnostics
+## Failure diagnostics and offline preflight
 
 A failed live parse preserves the source under:
 
 `data/private/research/skhynix-opendart-q2-product-revenue-certification/failed/`
 
-The bundle contains the exact ZIP, normalized text, and diagnostic metadata. The offline diagnostic command verifies hashes and inventories relevant text/table grids without making another OpenDART request.
+The bundle contains the exact ZIP, normalized text, and diagnostic metadata. Semantic replay failures now report the total table count, structural current-consolidated header count, table-cell revenue-label count, raw-source revenue-label count, and number of reconciling eight-number windows.
+
+On the next Windows launcher run, the newest preserved failure bundle is automatically replayed **offline before any new OpenDART request**. The offline preflight parses both the archived raw ZIP and archived normalized text and requires identical metrics. If that preflight fails, execution stops locally; if it succeeds, the launcher proceeds to the live source capture.
 
 ## Bound replay
 
@@ -124,4 +129,6 @@ git pull --ff-only
 .\scripts\report_skhynix_opendart_q2_product_revenue_certification.ps1
 ```
 
-The launcher reads `OPENDART_API_KEY` only for live OpenDART access and never writes the key to logs/artifacts. Successful private artifacts include the original ZIP, normalized text, certification, bound parser contract, certification pointer, and product-revenue readiness report.
+If a preserved failed bundle exists, this same command first runs the offline preflight against that exact ZIP and normalized text. No separate diagnostic command is required. Only after successful offline replay does the launcher use `OPENDART_API_KEY` for a new official OpenDART capture. The key is never written to logs or artifacts.
+
+Successful private artifacts include the original ZIP, normalized text, certification, bound parser contract, certification pointer, and product-revenue readiness report.
