@@ -36,3 +36,31 @@ def test_research_windows_scripts_prefer_project_venv_and_preflight_dependencies
     assert "py -3.12 -m venv .venv" in script
     assert ".\\.venv\\Scripts\\python.exe -m pip install -e ." in script
     assert ("SEC_EDGAR_USER_AGENT" in script) is requires_sec_user_agent
+
+
+def test_skhynix_q2_source_launcher_bootstraps_missing_source_contracts() -> None:
+    script = Path("scripts/capture_skhynix_official_ir_q2_source.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    discovery_index = script.index(
+        "alpha_cycle.sk_hynix_official_ir_attachment_discovery_cli"
+    )
+    component_index = script.index(
+        "alpha_cycle.sk_hynix_official_ir_component_contract_diagnostic_cli"
+    )
+    board_index = script.index("alpha_cycle.sk_hynix_official_ir_board_api_capture_cli")
+    attachment_index = script.index(
+        "alpha_cycle.sk_hynix_official_ir_q2_attachment_capture_cli"
+    )
+    readiness_index = script.index(
+        "alpha_cycle.sk_hynix_official_ir_q2_parser_readiness_cli"
+    )
+
+    assert discovery_index < component_index < board_index < attachment_index < readiness_index
+    assert "!(Test-Path $SourcePointer)" in script
+    assert "!(Test-Path $ComponentPointer)" in script
+    assert "$SourceWasCaptured" in script
+    assert "[switch]$RefreshPrerequisites" in script
+    assert "--source-pointer $SourcePointer" in script
+    assert "--component-pointer $ComponentPointer" in script

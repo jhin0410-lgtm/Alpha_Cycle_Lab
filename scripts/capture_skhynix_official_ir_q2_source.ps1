@@ -2,14 +2,17 @@
 param(
     [string]$ObservedDate = "",
     [double]$BoardTimeoutSeconds = 20.0,
-    [double]$PdfTimeoutSeconds = 30.0
+    [double]$PdfTimeoutSeconds = 30.0,
+    [switch]$RefreshPrerequisites
 )
 
 $ErrorActionPreference = "Stop"
 $ScriptDirectory = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepositoryRoot = Split-Path -Parent $ScriptDirectory
-$SourcePointer = Join-Path $RepositoryRoot "data/private/research/skhynix-official-ir-attachment-discovery/latest_skhynix_ir_attachment_discovery.json"
-$ComponentPointer = Join-Path $RepositoryRoot "data/private/research/skhynix-official-ir-component-contract-diagnostic/latest_skhynix_ir_component_contract_diagnostic.json"
+$SourceOutput = Join-Path $RepositoryRoot "data/private/research/skhynix-official-ir-attachment-discovery"
+$SourcePointer = Join-Path $SourceOutput "latest_skhynix_ir_attachment_discovery.json"
+$ComponentOutput = Join-Path $RepositoryRoot "data/private/research/skhynix-official-ir-component-contract-diagnostic"
+$ComponentPointer = Join-Path $ComponentOutput "latest_skhynix_ir_component_contract_diagnostic.json"
 $BoardOutput = Join-Path $RepositoryRoot "data/private/research/skhynix-official-ir-board-api-capture"
 $BoardPointer = Join-Path $BoardOutput "latest_skhynix_ir_board_api_capture.json"
 $AttachmentOutput = Join-Path $RepositoryRoot "data/private/research/skhynix-official-ir-q2-attachment"
@@ -48,9 +51,41 @@ if ([string]::IsNullOrWhiteSpace($ObservedDate)) {
     ).ToString("yyyy-MM-dd")
 }
 
+$SourceWasCaptured = $false
+if ($RefreshPrerequisites -or !(Test-Path $SourcePointer)) {
+    Write-Host "[bootstrap 1/2] Capturing the official SK hynix IR page and issuer JavaScript."
+    Write-Host "Only issuer-controlled source bytes and literal URLs are accepted."
+    Write-Host "Python: $ProjectPython"
+    & $ProjectPython -m alpha_cycle.sk_hynix_official_ir_attachment_discovery_cli `
+        --observed-date $ObservedDate `
+        --output $SourceOutput
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "SK hynix official IR source discovery failed; later stages were not attempted."
+        exit $LASTEXITCODE
+    }
+    $SourceWasCaptured = $true
+}
+else {
+    Write-Host "[bootstrap 1/2] Reusing the existing official IR source pointer; downstream loaders will reverify its archived bytes."
+}
+
+if ($RefreshPrerequisites -or $SourceWasCaptured -or !(Test-Path $ComponentPointer)) {
+    Write-Host "[bootstrap 2/2] Rebuilding the Earnings Release component contract from archived issuer bytes."
+    & $ProjectPython -m alpha_cycle.sk_hynix_official_ir_component_contract_diagnostic_cli `
+        --evaluation-date $ObservedDate `
+        --source-pointer $SourcePointer `
+        --output $ComponentOutput
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "SK hynix component-contract diagnostic failed; network capture was not attempted."
+        exit $LASTEXITCODE
+    }
+}
+else {
+    Write-Host "[bootstrap 2/2] Reusing the existing component-contract pointer; board capture will reverify it."
+}
+
 Write-Host "[1/3] Resolving the official SK hynix IR transport and capturing /board/list."
 Write-Host "No request is sent if the Axios API base is not uniquely source-derived."
-Write-Host "Python: $ProjectPython"
 & $ProjectPython -m alpha_cycle.sk_hynix_official_ir_board_api_capture_cli `
     --observed-date $ObservedDate `
     --source-pointer $SourcePointer `
