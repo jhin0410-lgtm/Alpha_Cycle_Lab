@@ -18,14 +18,20 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
     PeriodicProductRevenueSpec,
     ProductRevenueMetrics,
     _parse_amount,
+)
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     parse_periodic_product_revenue_text as _legacy_text_parser,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_table import (
-    _RawTable,
-    _TableExtractor,
     _grid,
     _normalized,
+    _RawTable,
+    _TableExtractor,
+)
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_table import (
     _unit as _structured_unit,
+)
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_table import (
     parse_periodic_product_revenue_archive as _legacy_archive_parser,
 )
 from alpha_cycle.providers.opendart_documents import _decode_text, _safe_member_name
