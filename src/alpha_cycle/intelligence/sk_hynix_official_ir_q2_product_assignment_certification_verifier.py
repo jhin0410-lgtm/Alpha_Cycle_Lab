@@ -6,7 +6,9 @@ import json
 from datetime import date
 from pathlib import Path
 
-from alpha_cycle.intelligence import sk_hynix_official_ir_q2_product_assignment_certification as assignment
+from alpha_cycle.intelligence import (
+    sk_hynix_official_ir_q2_product_assignment_certification as assignment,
+)
 
 
 def load_q2_product_assignment_certification(
