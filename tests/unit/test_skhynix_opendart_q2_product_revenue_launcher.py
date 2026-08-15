@@ -18,5 +18,6 @@ def test_launcher_rebuilds_ir_assignment_before_live_product_revenue_when_missin
     text = _script_text()
     assert "Test-Path $IrAssignmentPointer" in text
     assert "report_skhynix_official_ir_q2_product_assignment_certification.ps1" in text
-    assert "alpha_cycle.sk_hynix_opendart_q2_product_revenue_certification_cli" in text
+    assert "alpha_cycle.sk_hynix_opendart_q2_product_revenue_semantic_cli" in text
+    assert "alpha_cycle.sk_hynix_opendart_q2_product_revenue_certification_cli" not in text
     assert "--ir-assignment-pointer $IrAssignmentPointer" in text
