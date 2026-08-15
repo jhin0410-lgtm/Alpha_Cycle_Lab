@@ -8,5 +8,8 @@ def test_windows_launcher_routes_through_semantic_replay_bootstrap() -> None:
     text = script.read_text(encoding="utf-8")
 
     assert "alpha_cycle.sk_hynix_opendart_q2_product_revenue_semantic_cli" in text
-    assert "Semantic replay scans raw source tokens across the current consolidated revenue note" in text
+    assert (
+        "Semantic replay scans raw source tokens across the current consolidated revenue note"
+        in text
+    )
     assert "alpha_cycle.sk_hynix_opendart_q2_product_revenue_certification_cli" not in text
