@@ -53,15 +53,18 @@ def _data_table(*, total: str = "79,318,746") -> str:
     """
 
 
-def _fragmented_data_tables() -> str:
-    return """
-    <table><tr><td>수익</td></tr></table>
+def _fragmented_data_tables(*, revenue_label_in_paragraph: bool = False) -> str:
+    label = "<p>수익</p>" if revenue_label_in_paragraph else "<table><tr><td>수익</td></tr></table>"
+    return (
+        label
+        + """
     <table><tr><td>56,982,743</td><td>97,641,379</td></tr></table>
     <table><tr><td>layout-only</td></tr></table>
     <table><tr><td>21,959,898</td><td>33,534,133</td></tr></table>
     <table><tr><td>376,105</td><td>719,521</td></tr></table>
     <table><tr><td>79,318,746</td><td>131,895,033</td></tr></table>
     """
+    )
 
 
 def _archive(
@@ -69,9 +72,12 @@ def _archive(
     include_separate: bool = True,
     bad_total: bool = False,
     fragmented: bool = False,
+    revenue_label_in_paragraph: bool = False,
 ) -> bytes:
     data = (
-        _fragmented_data_tables()
+        _fragmented_data_tables(
+            revenue_label_in_paragraph=revenue_label_in_paragraph,
+        )
         if fragmented
         else _data_table(total="79,318,745" if bad_total else "79,318,746")
     )
@@ -119,6 +125,23 @@ def test_semantic_replay_reassembles_revenue_row_split_across_many_tables() -> N
     metrics = parse_periodic_product_revenue_archive(
         _spec(),
         _archive(include_separate=False, fragmented=True),
+    )
+
+    assert metrics.dram_total == 56_982_743
+    assert metrics.nand_and_solutions == 21_959_898
+    assert metrics.other_products_services == 376_105
+    assert metrics.reported_company_revenue == 79_318_746
+    assert metrics.reconciliation_delta == 0
+
+
+def test_semantic_replay_reads_revenue_label_outside_table_from_raw_source() -> None:
+    metrics = parse_periodic_product_revenue_archive(
+        _spec(),
+        _archive(
+            include_separate=False,
+            fragmented=True,
+            revenue_label_in_paragraph=True,
+        ),
     )
 
     assert metrics.dram_total == 56_982_743
