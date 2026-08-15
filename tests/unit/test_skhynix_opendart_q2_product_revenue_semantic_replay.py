@@ -67,12 +67,30 @@ def _fragmented_data_tables(*, revenue_label_in_paragraph: bool = False) -> str:
     )
 
 
+def _overlapping_span_helper_table() -> str:
+    """Produce a helper layout that the strict grid expander intentionally rejects."""
+
+    return """
+    <table>
+      <tr>
+        <td rowspan="2">left</td>
+        <td>middle</td>
+        <td rowspan="2">right</td>
+      </tr>
+      <tr>
+        <td colspan="2">overlapping-helper-layout</td>
+      </tr>
+    </table>
+    """
+
+
 def _archive(
     *,
     include_separate: bool = True,
     bad_total: bool = False,
     fragmented: bool = False,
     revenue_label_in_paragraph: bool = False,
+    overlapping_span_helper: bool = False,
 ) -> bytes:
     data = (
         _fragmented_data_tables(
@@ -89,6 +107,7 @@ def _archive(
         "<p>당반기</p><p>(단위 : 백만원)</p>",
         _header_table(),
         "<table><tr><td>helper-layout-a</td></tr></table>",
+        _overlapping_span_helper_table() if overlapping_span_helper else "",
         "<table><tr><td>helper-layout-b</td></tr></table>",
         "<table><tr><td>helper-layout-c</td></tr></table>",
         data,
@@ -141,6 +160,23 @@ def test_semantic_replay_reads_revenue_label_outside_table_from_raw_source() -> 
             include_separate=False,
             fragmented=True,
             revenue_label_in_paragraph=True,
+        ),
+    )
+
+    assert metrics.dram_total == 56_982_743
+    assert metrics.nand_and_solutions == 21_959_898
+    assert metrics.other_products_services == 376_105
+    assert metrics.reported_company_revenue == 79_318_746
+    assert metrics.reconciliation_delta == 0
+
+
+def test_semantic_replay_ignores_unrelated_overlapping_span_geometry() -> None:
+    metrics = parse_periodic_product_revenue_archive(
+        _spec(),
+        _archive(
+            include_separate=False,
+            fragmented=True,
+            overlapping_span_helper=True,
         ),
     )
 
