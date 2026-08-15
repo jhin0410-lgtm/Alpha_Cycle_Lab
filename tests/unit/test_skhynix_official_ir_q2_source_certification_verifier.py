@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 from alpha_cycle.intelligence import sk_hynix_official_ir_q2_source_certification as cert
-from alpha_cycle.intelligence import sk_hynix_official_ir_q2_source_certification_verifier as verifier
+from alpha_cycle.intelligence import (
+    sk_hynix_official_ir_q2_source_certification_verifier as verifier,
+)
 from alpha_cycle.intelligence.sk_hynix_official_ir_q2_attachment_capture import (
     OfficialIrQ2AttachmentEvidence,
     OfficialIrQ2PdfFingerprint,
@@ -100,7 +102,6 @@ def _certification() -> cert.OfficialIrQ2SourceCertification:
 
 
 def _write_bundle(tmp_path: Path) -> Path:
-    attachment = _attachment()
     certification = _certification()
     pdf_path = tmp_path / "earnings_release.pdf"
     pdf_path.write_bytes(PDF_BYTES)
