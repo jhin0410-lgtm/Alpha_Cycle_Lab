@@ -198,10 +198,10 @@ def _table_candidates(
         if heading is None:
             continue
 
-        # Search semantically within the same note instead of assuming adjacency.  The
-        # bound is deliberately generous enough for layout/helper tables while still
-        # preventing a product header from pairing with distant unrelated disclosures.
-        for data in tables[header_index : min(len(tables), header_index + 16)]:
+        # Search the complete semantic note scope.  Physical distance between the
+        # header and data row is intentionally irrelevant; a new revenue-note heading
+        # terminates the search and prevents cross-note pairing.
+        for data in tables[header_index:]:
             data_heading = _nearest_heading(data)
             if data_heading is not None and _normalized(data_heading) != _normalized(heading):
                 break
@@ -210,6 +210,26 @@ def _table_candidates(
             except ValueError:
                 continue
     return tuple(parsed)
+
+
+def _diagnostic_counts(
+    spec: PeriodicProductRevenueSpec,
+    tables: list[_RawTable],
+) -> tuple[int, int]:
+    headers = 0
+    revenue_rows = 0
+    for table in tables:
+        try:
+            _header_product_order(spec, table)
+            headers += 1
+        except ValueError:
+            pass
+        try:
+            _data_amounts(table)
+            revenue_rows += 1
+        except ValueError:
+            pass
+    return headers, revenue_rows
 
 
 def parse_periodic_product_revenue_archive(
@@ -224,6 +244,9 @@ def parse_periodic_product_revenue_archive(
         raise ValueError("OpenDART product-revenue semantic replay source is not a ZIP") from exc
 
     candidates: list[ProductRevenueMetrics] = []
+    total_tables = 0
+    header_candidates = 0
+    revenue_row_candidates = 0
     with archive:
         for info in archive.infolist():
             if info.is_dir():
@@ -235,6 +258,10 @@ def parse_periodic_product_revenue_archive(
             parser = _TableExtractor()
             parser.feed(decoded)
             parser.close()
+            total_tables += len(parser.tables)
+            headers, rows = _diagnostic_counts(spec, parser.tables)
+            header_candidates += headers
+            revenue_row_candidates += rows
             candidates.extend(_table_candidates(spec, parser.tables))
 
     unique = {
@@ -250,7 +277,9 @@ def parse_periodic_product_revenue_archive(
     if len(unique) != 1:
         raise ValueError(
             "OpenDART semantic current-quarter product revenue must resolve uniquely: "
-            f"candidates={len(unique)}"
+            f"candidates={len(unique)} total_tables={total_tables} "
+            f"current_consolidated_headers={header_candidates} "
+            f"eight_amount_revenue_tables={revenue_row_candidates}"
         )
     return next(iter(unique.values()))
 
