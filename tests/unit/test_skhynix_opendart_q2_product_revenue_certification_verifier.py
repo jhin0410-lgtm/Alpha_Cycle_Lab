@@ -27,48 +27,46 @@ RECEIPT = "20260814001234"
 DOCUMENT_ID = "skhynix_000660_2026q2_half_year_product_revenue"
 
 
-def _text(*, other_label: str = "기타") -> str:
-    return "\n".join(
-        [
-            "반기보고서 (2026.06)",
-            "제품별 매출액",
-            "당반기",
-            "(단위 : 백만원)",
-            "구분",
-            "3개월",
-            "누적",
-            "전반기",
-            "3개월",
-            "누적",
-            "DRAM",
-            "28,900,000",
-            "51,000,000",
-            "16,000,000",
-            "30,000,000",
-            "NAND",
-            "10,700,000",
-            "19,000,000",
-            "7,000,000",
-            "13,000,000",
-            other_label,
-            "400,000",
-            "700,000",
-            "300,000",
-            "500,000",
-            "합계",
-            "40,000,000",
-            "70,700,000",
-            "23,300,000",
-            "43,500,000",
-        ]
-    )
+def _markup(*, other_label: str = "기타") -> str:
+    return f"""
+    <html><body>
+      <h1>반기보고서 (2026.06)</h1>
+      <p>제품별 매출액</p>
+      <p>(단위 : 백만원)</p>
+      <table>
+        <tr>
+          <th rowspan="2">구분</th>
+          <th colspan="2">당반기</th>
+          <th colspan="2">전반기</th>
+        </tr>
+        <tr>
+          <th>3개월</th><th>누적</th><th>3개월</th><th>누적</th>
+        </tr>
+        <tr>
+          <td>DRAM</td><td>28,900,000</td><td>51,000,000</td>
+          <td>16,000,000</td><td>30,000,000</td>
+        </tr>
+        <tr>
+          <td>NAND</td><td>10,700,000</td><td>19,000,000</td>
+          <td>7,000,000</td><td>13,000,000</td>
+        </tr>
+        <tr>
+          <td>{other_label}</td><td>400,000</td><td>700,000</td>
+          <td>300,000</td><td>500,000</td>
+        </tr>
+        <tr>
+          <td>합계</td><td>40,000,000</td><td>70,700,000</td>
+          <td>23,300,000</td><td>43,500,000</td>
+        </tr>
+      </table>
+    </body></html>
+    """
 
 
 def _zip(*, other_label: str = "기타") -> bytes:
-    markup = f"<html><body>{_text(other_label=other_label).replace(chr(10), '<br>')}</body></html>"
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("document.xml", markup)
+        archive.writestr("document.xml", _markup(other_label=other_label))
     return buffer.getvalue()
 
 
@@ -148,7 +146,7 @@ def _capture(
     return pointer
 
 
-def test_verifier_replays_archived_zip_and_bound_parser_contract(tmp_path: Path) -> None:
+def test_verifier_replays_archived_zip_table_and_bound_parser_contract(tmp_path: Path) -> None:
     pointer = _capture(tmp_path)
     pointer_payload = json.loads(pointer.read_text(encoding="utf-8"))
     assert pointer_payload["parser_contract_bound"] is True
@@ -159,7 +157,10 @@ def test_verifier_replays_archived_zip_and_bound_parser_contract(tmp_path: Path)
         pointer,
         evaluation_date=EVALUATION,
     )
+    assert item.metrics.dram_total == 28_900_000
+    assert item.metrics.nand_and_solutions == 10_700_000
     assert item.metrics.other_products_services == 400_000
+    assert item.metrics.reported_company_revenue == 40_000_000
     assert item.product_revenue_baseline_eligible is True
     assert item.numeric_forecast_enabled is False
 
