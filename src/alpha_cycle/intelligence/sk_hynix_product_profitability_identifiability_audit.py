@@ -1,9 +1,9 @@
 """Structural identifiability audit for latent SK hynix DRAM/NAND profitability.
 
-This audit runs before parameter estimation. Aggregate company gross-profit constraints
-and textual product-cycle-driver bands are useful support, but they do not by themselves
-identify separately varying product margins. A company-profitability observation only
-contributes a structural equation when product revenue is observed for the same period.
+A company-profitability observation contributes a structural equation only when direct
+product revenue is observed for the same economic period. Source modules historically
+used both ``q1_2025`` and ``2025Q1`` naming, so the audit canonicalizes period aliases
+before counting equations and before checking holdout leakage.
 """
 
 from __future__ import annotations
@@ -16,6 +16,19 @@ from alpha_cycle.intelligence.semiconductor_product_profitability_calibration im
 from alpha_cycle.intelligence.sk_hynix_product_profitability_holdout import (
     ProductProfitabilityRetrospectiveHoldoutPlan,
 )
+
+
+def _canonical_period_id(value: str) -> str:
+    text = value.strip()
+    if text.startswith("q1_") and len(text) == 7 and text[3:].isdigit():
+        return f"{text[3:]}Q1"
+    if text.startswith("fy") and len(text) == 6 and text[2:].isdigit():
+        return f"{text[2:]}FY"
+    return text
+
+
+def _canonical_periods(values: tuple[str, ...]) -> set[str]:
+    return {_canonical_period_id(value) for value in values}
 
 
 @dataclass(frozen=True)
@@ -116,12 +129,21 @@ def audit_skhynix_product_profitability_identifiability(
         raise ValueError("Profitability holdout is not bound to the calibration inventory")
     if tuple(inventory.holdout_periods) != holdout.holdout_period_ids:
         raise ValueError("Profitability inventory and holdout period bindings disagree")
-    if set(inventory.historical_product_revenue_periods) != set(holdout.calibration_period_ids):
-        raise ValueError("Profitability inventory fit periods do not match the holdout plan")
+
+    company_periods = _canonical_periods(inventory.company_profitability_constraint_periods)
+    product_periods = _canonical_periods(inventory.historical_product_revenue_periods)
+    holdout_keys = _canonical_periods(
+        (*holdout.holdout_period_ids, *holdout.holdout_cycle_driver_period_ids)
+    )
+    required_fit_keys = _canonical_periods(holdout.calibration_period_ids)
+    if not required_fit_keys.issubset(product_periods):
+        raise ValueError("Profitability inventory lost required fit periods from holdout plan")
+    if product_periods & holdout_keys:
+        raise ValueError("Profitability product-revenue fit view contains holdout period")
+    if company_periods & holdout_keys:
+        raise ValueError("Profitability company fit view contains holdout period")
 
     direct_anchors = len(inventory.direct_product_profitability_periods)
-    company_periods = set(inventory.company_profitability_constraint_periods)
-    product_periods = set(inventory.historical_product_revenue_periods)
     company_constraints = len(company_periods)
     product_revenue_periods = len(product_periods)
     aligned_constraints = len(company_periods & product_periods)
@@ -174,5 +196,6 @@ def audit_skhynix_product_profitability_identifiability(
 
 __all__ = [
     "ProductProfitabilityIdentifiabilityAudit",
+    "_canonical_period_id",
     "audit_skhynix_product_profitability_identifiability",
 ]
