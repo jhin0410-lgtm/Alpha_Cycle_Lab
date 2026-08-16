@@ -88,9 +88,16 @@ def test_parser_aligns_five_product_revenue_and_company_profitability_periods() 
     assert q1.dram_revenue == 40_659
     assert q1.nand_revenue == 11_574
     assert q1.other_products_revenue == 343
+    assert q1.product_revenue_reconciliation_delta_krw_billion == 0
+    assert q1.direct_product_revenue_reconciled is True
     assert q1.gross_profit == 41_679
     assert q1.gross_margin_percent == 79.3
     assert abs(q1.gross_margin_reconciliation_delta_pp) < 0.11
+
+    fy2025 = observations[2]
+    assert fy2025.total_revenue == 97_147
+    assert fy2025.product_revenue_reconciliation_delta_krw_billion == -1
+    assert fy2025.direct_product_revenue_reconciled is True
 
     fy2023 = observations[-1]
     assert fy2023.total_revenue == 32_766
@@ -129,6 +136,12 @@ def test_evidence_rejects_future_observation_date() -> None:
 
 def test_parser_rejects_product_revenue_reconciliation_break() -> None:
     broken = _filing().replace(b"W 52,576 100.0%", b"W 52,500 100.0%")
+    with pytest.raises(ValueError, match="product revenue does not reconcile"):
+        parse_sec_product_profitability_support_html(_spec(), broken)
+
+
+def test_parser_rejects_rounding_gap_larger_than_one_billion() -> None:
+    broken = _filing().replace(b"W 97,147 100.0%", b"W 97,149 100.0%")
     with pytest.raises(ValueError, match="product revenue does not reconcile"):
         parse_sec_product_profitability_support_html(_spec(), broken)
 
