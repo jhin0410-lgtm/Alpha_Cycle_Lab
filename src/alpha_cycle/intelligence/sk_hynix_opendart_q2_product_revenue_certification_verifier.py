@@ -8,6 +8,10 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
+from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_parser_dispatch import (
+    parse_periodic_product_revenue_archive,
+    parse_periodic_product_revenue_text,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     DiscoveredPeriodicProductRevenue,
     OpenDartPeriodicProductRevenueCertification,
@@ -16,12 +20,6 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_contract import (
     load_bound_periodic_product_revenue_parser_contract,
-)
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_expected_replay import (
-    parse_periodic_product_revenue_archive,
-)
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
-    parse_periodic_product_revenue_text,
 )
 from alpha_cycle.providers.opendart import CorpCode
 from alpha_cycle.providers.opendart_documents import _parse_document_archive
