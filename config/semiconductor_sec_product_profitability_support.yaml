@@ -1,0 +1,24 @@
+schema_version: 1
+issuers:
+  "000660":
+    issuer_name: SK hynix
+    filings:
+      skhynix_000660_2026_sec_424b4_product_profitability_support:
+        source_id: sec_edgar
+        cik: "0002120882"
+        form: 424B4
+        filing_date: 2026-07-10
+        expected_accession_number: "0001193125-26-299963"
+        expected_primary_document: d32785d424b4.htm
+        parser_id: skhynix_sec_424b4_product_profitability_support_v1
+        calibration_support_only: true
+        product_profitability_source_fact: false
+        current_baseline_eligible: false
+        numeric_forecast_enabled: false
+        decision_score_enabled: false
+        required_identity_anchors:
+          - "The following table sets forth our revenue by principal product category and the related percentage data for the periods indicated"
+          - "first quarter of 2026"
+          - "gross profit margin increased to 79.3% in the first quarter of 2026 from 57.3% in the first quarter of 2025"
+          - "gross profit margin increased to 60.4% in 2025 from 48.1% in 2024"
+          - "gross profit margin of 48.1% in 2024 compared to gross loss margin of 1.6% in 2023"
