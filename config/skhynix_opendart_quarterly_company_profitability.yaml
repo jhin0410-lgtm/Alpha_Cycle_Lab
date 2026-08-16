@@ -1,0 +1,55 @@
+schema_version: 1
+issuer:
+  ticker: "000660"
+  issuer_name: SK hynix
+  source_id: opendart_fnltt_singl_acnt_all
+  fs_div: CFS
+  periods:
+    - period_id: 2023Q1
+      business_year: 2023
+      report_code: "11013"
+      period_end: 2023-03-31
+    - period_id: 2023Q2
+      business_year: 2023
+      report_code: "11012"
+      period_end: 2023-06-30
+    - period_id: 2023Q3
+      business_year: 2023
+      report_code: "11014"
+      period_end: 2023-09-30
+    - period_id: 2024Q1
+      business_year: 2024
+      report_code: "11013"
+      period_end: 2024-03-31
+    - period_id: 2024Q2
+      business_year: 2024
+      report_code: "11012"
+      period_end: 2024-06-30
+    - period_id: 2024Q3
+      business_year: 2024
+      report_code: "11014"
+      period_end: 2024-09-30
+    - period_id: 2025Q1
+      business_year: 2025
+      report_code: "11013"
+      period_end: 2025-03-31
+    - period_id: 2025Q2
+      business_year: 2025
+      report_code: "11012"
+      period_end: 2025-06-30
+    - period_id: 2025Q3
+      business_year: 2025
+      report_code: "11014"
+      period_end: 2025-09-30
+    - period_id: 2026Q1
+      business_year: 2026
+      report_code: "11013"
+      period_end: 2026-03-31
+  account_ids:
+    revenue:
+      - ifrs-full_Revenue
+      - ifrs-full_RevenueFromContractsWithCustomers
+    cost_of_sales:
+      - ifrs-full_CostOfSales
+    gross_profit:
+      - ifrs-full_GrossProfit
