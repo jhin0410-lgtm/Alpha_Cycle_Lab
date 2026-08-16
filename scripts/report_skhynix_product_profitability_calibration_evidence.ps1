@@ -50,6 +50,8 @@ $cycleDriverPointer = Join-Path $repoRoot `
     "data\private\research\sec-product-cycle-driver-support\latest_sec_product_cycle_driver_support.json"
 $companyProfitabilityPointer = Join-Path $repoRoot `
     "data\private\research\skhynix-opendart-quarterly-company-profitability\latest_quarterly_company_profitability.json"
+$historicalProductPointer = Join-Path $repoRoot `
+    "data\private\research\skhynix-opendart-historical-product-revenue-panel\latest_historical_product_revenue_panel.json"
 
 Write-Host "============================================================"
 Write-Host "SK hynix product-profitability calibration evidence"
@@ -174,6 +176,35 @@ Write-Host "      Parser-incompatible periods are preserved as failed diagnostic
     --evaluation-date $EvaluationDate
 if ($LASTEXITCODE -ne 0) {
     throw "Historical product-revenue batch capture failed before producing a panel."
+}
+
+if (-not (Test-Path $historicalProductPointer)) {
+    throw "Historical product-revenue pointer is missing after step 5."
+}
+try {
+    $historicalProductJson = Get-Content -Raw -Path $historicalProductPointer | ConvertFrom-Json
+}
+catch {
+    throw "Historical product-revenue pointer is unreadable after step 5."
+}
+$historicalFailedPeriodCount = [int]$historicalProductJson.failed_period_count
+if ($historicalFailedPeriodCount -gt 0) {
+    Write-Host (
+        "[5a/7] " + $historicalFailedPeriodCount +
+        " historical periods remain parser-incompatible; replaying preserved failures offline."
+    )
+    Write-Host "       These signatures are diagnostics only and never promote source facts."
+    & $python -m alpha_cycle.sk_hynix_opendart_historical_product_revenue_diagnostics_cli `
+        --evaluation-date $EvaluationDate
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning (
+            "Historical product-revenue offline diagnostics failed; " +
+            "calibration readiness will remain fail-closed."
+        )
+    }
+}
+else {
+    Write-Host "[5a/7] Historical direct product-revenue source coverage is complete."
 }
 
 Write-Host "[6/7] Replaying all evidence and reporting fail-closed calibration readiness."
