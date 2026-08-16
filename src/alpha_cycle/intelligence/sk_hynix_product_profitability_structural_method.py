@@ -496,14 +496,17 @@ def build_structural_rank_probe(
 ) -> StructuralRankProbeResult:
     """Build a rank-only design from period-aligned, independently verified source layers."""
 
-    if historical.ticker != method.ticker or company.ticker != method.ticker or cycle.ticker != method.ticker:
+    evidence_tickers = (historical.ticker, company.ticker, cycle.ticker)
+    if any(ticker != method.ticker for ticker in evidence_tickers):
         raise ValueError("Structural rank probe received evidence for another issuer")
     if historical.evaluation_date != evaluation_date or company.evaluation_date != evaluation_date:
         raise ValueError("Structural rank probe evidence evaluation date mismatch")
     if cycle.observed_date > evaluation_date:
         raise ValueError("Structural rank probe uses future cycle-driver evidence")
     if cycle.numeric_driver_values_available:
-        raise ValueError("Structural rank probe expects source-text cycle drivers, not numeric facts")
+        raise ValueError(
+            "Structural rank probe expects source-text cycle drivers, not numeric facts"
+        )
 
     company_by_period = {item.period_id: item for item in company.observations}
     cycle_by_period = {item.period_id: item for item in cycle.observations}
