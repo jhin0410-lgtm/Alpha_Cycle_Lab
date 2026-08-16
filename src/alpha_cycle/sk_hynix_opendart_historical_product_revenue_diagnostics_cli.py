@@ -12,6 +12,9 @@ from alpha_cycle.intelligence.sk_hynix_historical_product_failure_diagnostics im
 from alpha_cycle.intelligence.sk_hynix_historical_product_failure_layout import (
     build_failure_layout_signature,
 )
+from alpha_cycle.intelligence.sk_hynix_historical_product_table_diagnostics import (
+    build_failure_raw_table_signatures,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel import (
     DEFAULT_HISTORICAL_PRODUCT_REVENUE_OUTPUT,
     DEFAULT_HISTORICAL_PRODUCT_REVENUE_POINTER,
@@ -28,7 +31,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Replay preserved SK hynix historical product-revenue failures offline and "
-            "print parser errors plus bounded layout signatures."
+            "print parser errors plus bounded text/raw-table layout signatures."
         )
     )
     parser.add_argument("--evaluation-date", required=True, type=date.fromisoformat)
@@ -65,6 +68,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         build_failure_layout_signature(item, specs[item.period_id]).as_dict()
         for item in inventory.diagnostics
     ]
+    raw_table_signatures = {
+        item.period_id: [
+            signature.as_dict()
+            for signature in build_failure_raw_table_signatures(
+                item,
+                specs[item.period_id],
+            )
+        ]
+        for item in inventory.diagnostics
+    }
     payload = {
         "status": "skhynix_historical_product_revenue_failure_diagnostics",
         "evaluation_date": args.evaluation_date.isoformat(),
@@ -79,6 +92,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "diagnostic_bundle_coverage_complete": inventory.diagnostic_bundle_coverage_complete,
         "diagnostic_bundle_integrity_complete": inventory.diagnostic_bundle_integrity_complete,
         "signatures": signatures,
+        "raw_table_signatures": raw_table_signatures,
         "network_requested": False,
         "source_fact_promoted": False,
         "numeric_forecast_enabled": False,
