@@ -58,6 +58,7 @@ def test_inventory_verifies_latest_preserved_failure_bundle_and_exposes_path(tmp
     assert diagnostic.source_certification_promoted is False
     assert diagnostic.product_profitability_source_fact is False
     assert result.diagnostic_paths == {"2024Q1": str(latest.resolve())}
+    assert result.diagnostic_errors == {"2024Q1": "historical layout differs"}
     assert result.invalid_diagnostics == ()
     assert result.missing_diagnostic_periods == ()
     assert result.diagnostic_bundle_coverage_complete is True
@@ -71,6 +72,7 @@ def test_inventory_reports_discovery_failure_without_raw_bundle_as_missing(tmp_p
         output=tmp_path,
     )
     assert result.diagnostic_paths == {"2023Q2": str(present.resolve())}
+    assert result.diagnostic_errors == {"2023Q2": "historical layout differs"}
     assert result.missing_diagnostic_periods == ("2025Q3",)
     assert result.diagnostic_bundle_coverage_complete is False
     assert result.diagnostic_bundle_integrity_complete is True
@@ -87,6 +89,7 @@ def test_inventory_quarantines_tampered_text_without_raising(tmp_path) -> None:
     )
 
     assert result.diagnostics == ()
+    assert result.diagnostic_errors == {}
     assert len(result.invalid_diagnostics) == 1
     issue = result.invalid_diagnostics[0]
     assert issue.period_id == "2023Q1"
