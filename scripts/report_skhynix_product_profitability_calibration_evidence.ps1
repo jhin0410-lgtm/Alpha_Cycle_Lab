@@ -46,6 +46,10 @@ $currentProductPointer = Join-Path $repoRoot `
     "data\private\research\skhynix-opendart-q2-product-revenue-certification\latest_certification.json"
 $secSupportPointer = Join-Path $repoRoot `
     "data\private\research\sec-product-profitability-support\latest_sec_product_profitability_support.json"
+$cycleDriverPointer = Join-Path $repoRoot `
+    "data\private\research\sec-product-cycle-driver-support\latest_sec_product_cycle_driver_support.json"
+$companyProfitabilityPointer = Join-Path $repoRoot `
+    "data\private\research\skhynix-opendart-quarterly-company-profitability\latest_quarterly_company_profitability.json"
 
 Write-Host "============================================================"
 Write-Host "SK hynix product-profitability calibration evidence"
@@ -100,21 +104,71 @@ else {
     Write-Host "[2/7] SEC historical profitability support pointer already exists."
 }
 
-Write-Host "[3/7] Replaying 13-quarter DRAM/NAND cycle-driver bands from archived SEC bytes."
-& $python -m alpha_cycle.sec_product_cycle_driver_support_cli `
-    --evaluation-date $EvaluationDate
-if ($LASTEXITCODE -ne 0) {
-    throw "SEC cycle-driver support capture/replay failed."
+$secSupportJson = $null
+try {
+    $secSupportJson = Get-Content -Raw -Path $secSupportPointer | ConvertFrom-Json
+}
+catch {
+    throw "SEC historical profitability support pointer is unreadable after step 2."
 }
 
-Write-Host "[4/7] Capturing 10 direct OpenDART company profitability quarters."
-& $python -m alpha_cycle.sk_hynix_opendart_quarterly_company_profitability_cli `
-    --evaluation-date $EvaluationDate
-if ($LASTEXITCODE -ne 0) {
-    throw "OpenDART quarterly company profitability capture failed."
+$cycleDriverReusable = $false
+if (Test-Path $cycleDriverPointer) {
+    try {
+        $cycleDriverJson = Get-Content -Raw -Path $cycleDriverPointer | ConvertFrom-Json
+        $cycleDriverReusable = (
+            [string]$cycleDriverJson.status -eq "sec_product_cycle_driver_support_captured" -and
+            [string]$cycleDriverJson.observed_date -eq $EvaluationDate -and
+            [int]$cycleDriverJson.observation_count -eq 13 -and
+            [string]$cycleDriverJson.source_profitability_support_evidence_id -eq `
+                [string]$secSupportJson.evidence_id
+        )
+    }
+    catch {
+        $cycleDriverReusable = $false
+    }
+}
+if ($cycleDriverReusable) {
+    Write-Host "[3/7] Reusing 13-quarter SEC cycle-driver support for the current source evidence."
+}
+else {
+    Write-Host "[3/7] Replaying 13-quarter DRAM/NAND cycle-driver bands from archived SEC bytes."
+    & $python -m alpha_cycle.sec_product_cycle_driver_support_cli `
+        --evaluation-date $EvaluationDate
+    if ($LASTEXITCODE -ne 0) {
+        throw "SEC cycle-driver support capture/replay failed."
+    }
 }
 
-Write-Host "[5/7] Capturing historical direct product-revenue periods."
+$companyProfitabilityReusable = $false
+if (Test-Path $companyProfitabilityPointer) {
+    try {
+        $companyProfitabilityJson = `
+            Get-Content -Raw -Path $companyProfitabilityPointer | ConvertFrom-Json
+        $companyProfitabilityReusable = (
+            [string]$companyProfitabilityJson.status -eq `
+                "skhynix_opendart_quarterly_company_profitability_captured" -and
+            [string]$companyProfitabilityJson.evaluation_date -eq $EvaluationDate -and
+            [int]$companyProfitabilityJson.observation_count -eq 10
+        )
+    }
+    catch {
+        $companyProfitabilityReusable = $false
+    }
+}
+if ($companyProfitabilityReusable) {
+    Write-Host "[4/7] Reusing 10-quarter OpenDART company-profitability panel."
+}
+else {
+    Write-Host "[4/7] Capturing 10 direct OpenDART company profitability quarters."
+    & $python -m alpha_cycle.sk_hynix_opendart_quarterly_company_profitability_cli `
+        --evaluation-date $EvaluationDate
+    if ($LASTEXITCODE -ne 0) {
+        throw "OpenDART quarterly company profitability capture failed."
+    }
+}
+
+Write-Host "[5/7] Recapturing historical direct product-revenue periods with exact text bytes."
 Write-Host "      Parser-incompatible periods are preserved as failed diagnostics, not inferred."
 & $python -m alpha_cycle.sk_hynix_opendart_historical_product_revenue_panel_cli `
     --evaluation-date $EvaluationDate
