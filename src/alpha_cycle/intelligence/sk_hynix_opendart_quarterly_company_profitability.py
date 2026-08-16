@@ -1,12 +1,11 @@
 """Source-bounded SK hynix quarterly company-profitability panel from OpenDART.
 
 OpenDART's all-accounts endpoint documents ``thstrm_amount`` as the three-month amount
-for quarterly/semiannual income statements.  The existing provider already normalizes
-that field into the financial frame.  This module selects directly reported consolidated
-Revenue, Cost of Sales, and Gross Profit facts, requires a single filing revision per
-quarter, and reconciles the accounting identity before admitting an observation.
+for quarterly/semiannual income statements. The existing provider downloads the official
+response; this module then parses the preserved raw payload itself so offline replay can
+reproduce the exact company Revenue, Cost of Sales, and Gross Profit observations.
 
-The panel is historical calibration support only.  It is not product profitability and
+The panel is historical calibration support only. It is not product profitability and
 is not point-in-time backtest evidence because the API is queried at the current date.
 """
 
@@ -23,14 +22,9 @@ from pathlib import Path
 from typing import cast
 from zoneinfo import ZoneInfo
 
-import pandas as pd
 import yaml
 
-from alpha_cycle.providers.opendart import (
-    REPORT_PERIODS,
-    FinancialBatch,
-    OpenDartReadOnlyClient,
-)
+from alpha_cycle.providers.opendart import REPORT_PERIODS, FinancialBatch, OpenDartReadOnlyClient
 
 DEFAULT_QUARTERLY_COMPANY_PROFITABILITY_REGISTRY = Path(
     "config/skhynix_opendart_quarterly_company_profitability.yaml"
@@ -83,6 +77,31 @@ def _string_tuple(value: object, label: str) -> tuple[str, ...]:
     return result
 
 
+def _date_yyyymmdd(value: object, label: str) -> date:
+    text = str(value).strip()
+    if len(text) != 8 or not text.isdigit():
+        raise ValueError(f"Quarterly profitability {label} must use YYYYMMDD")
+    return date(int(text[:4]), int(text[4:6]), int(text[6:]))
+
+
+def _integral_krw(value: object, label: str) -> int:
+    text = str(value).strip().replace(",", "")
+    if text in {"", "-", "None", "nan"}:
+        raise ValueError(f"Quarterly profitability {label} is missing")
+    negative = text.startswith("(") and text.endswith(")")
+    if negative:
+        text = text[1:-1]
+    try:
+        amount = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError(f"Quarterly profitability {label} is not numeric") from exc
+    if negative:
+        amount = -amount
+    if not amount.is_finite() or amount != amount.to_integral_value():
+        raise ValueError(f"Quarterly profitability {label} must be integral KRW")
+    return int(amount)
+
+
 @dataclass(frozen=True)
 class QuarterlyCompanyProfitabilityPeriodSpec:
     period_id: str
@@ -98,6 +117,8 @@ class QuarterlyCompanyProfitabilityPeriodSpec:
         _, month, day = REPORT_PERIODS[self.report_code]
         if self.period_end != date(self.business_year, month, day):
             raise ValueError("Quarterly profitability report code/period end mismatch")
+        if not self.period_id.startswith(str(self.business_year)):
+            raise ValueError("Quarterly profitability period id/business year mismatch")
 
 
 @dataclass(frozen=True)
@@ -142,8 +163,6 @@ class QuarterlyCompanyProfitabilityObservation:
             raise ValueError("Quarterly profitability observation period is unsupported")
         if len(self.rcept_no) != 14 or not self.rcept_no.isdigit():
             raise ValueError("Quarterly profitability receipt number must be 14 digits")
-        if self.available_date > self.period_end.replace(year=self.available_date.year) and False:
-            raise ValueError("unreachable")
         if self.revenue_krw <= 0 or self.cost_of_sales_krw < 0:
             raise ValueError("Quarterly profitability revenue/cost values are invalid")
         if self.revenue_krw - self.cost_of_sales_krw != self.gross_profit_krw:
@@ -246,44 +265,53 @@ def load_quarterly_company_profitability_registry(
     )
 
 
-def _metric_parts(metric: object) -> tuple[str, str]:
-    text = str(metric).strip()
-    if ":" not in text:
-        return "", ""
-    statement, remainder = text.split(":", 1)
-    account_key = remainder.split(":", 1)[0].split("#", 1)[0]
-    return statement, account_key
+def _financial_rows(raw_payload: object) -> tuple[dict[str, object], ...]:
+    if not isinstance(raw_payload, dict):
+        raise ValueError("Quarterly profitability raw payload must be an object")
+    financials = cast(dict[object, object], raw_payload).get("financials")
+    if not isinstance(financials, dict):
+        raise ValueError("Quarterly profitability raw payload is missing financials")
+    raw_rows = cast(dict[object, object], financials).get("list")
+    if not isinstance(raw_rows, list):
+        raise ValueError("Quarterly profitability financial list must be an array")
+    rows: list[dict[str, object]] = []
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            raise ValueError("Quarterly profitability financial row must be an object")
+        rows.append({str(key): value for key, value in cast(dict[object, object], row).items()})
+    if not rows:
+        raise ValueError("Quarterly profitability financial list is empty")
+    return tuple(rows)
 
 
-def _integral_krw(value: object, label: str) -> int:
-    try:
-        amount = Decimal(str(value))
-    except InvalidOperation as exc:
-        raise ValueError(f"Quarterly profitability {label} is not numeric") from exc
-    if not amount.is_finite() or amount != amount.to_integral_value():
-        raise ValueError(f"Quarterly profitability {label} must be integral KRW")
-    return int(amount)
-
-
-def _select_account(
-    frame: pd.DataFrame,
+def _select_raw_account(
+    rows: tuple[dict[str, object], ...],
     account_ids: tuple[str, ...],
+    spec: QuarterlyCompanyProfitabilityPeriodSpec,
     *,
     label: str,
 ) -> tuple[int, str, date]:
     accepted = {item.casefold() for item in account_ids}
     matches: list[tuple[int, str, date]] = []
-    for row in frame.itertuples(index=False):
-        statement, account_key = _metric_parts(getattr(row, "metric"))
-        if statement not in _ALLOWED_STATEMENTS or account_key.casefold() not in accepted:
+    for row in rows:
+        statement = str(row.get("sj_div", "")).strip()
+        account_id = str(row.get("account_id", "")).strip()
+        if statement not in _ALLOWED_STATEMENTS or account_id.casefold() not in accepted:
             continue
-        revision_id = str(getattr(row, "revision_id")).strip()
-        available_date = cast(date, getattr(row, "available_date"))
+        row_year = str(row.get("bsns_year", "")).strip()
+        row_report_code = str(row.get("reprt_code", "")).strip()
+        if row_year and row_year != str(spec.business_year):
+            continue
+        if row_report_code and row_report_code != spec.report_code:
+            continue
+        receipt = str(row.get("rcept_no", "")).strip()
+        if len(receipt) != 14 or not receipt.isdigit():
+            raise ValueError(f"Quarterly profitability {label} receipt number is invalid")
         matches.append(
             (
-                _integral_krw(getattr(row, "value"), label),
-                revision_id,
-                available_date,
+                _integral_krw(row.get("thstrm_amount"), label),
+                receipt,
+                _date_yyyymmdd(receipt[:8], f"{label}.rcept_no"),
             )
         )
     unique = tuple(dict.fromkeys(matches))
@@ -294,34 +322,34 @@ def _select_account(
     return unique[0]
 
 
-def extract_quarterly_company_profitability(
+def extract_quarterly_company_profitability_raw_payload(
     registry: QuarterlyCompanyProfitabilityRegistry,
     spec: QuarterlyCompanyProfitabilityPeriodSpec,
-    batch: FinancialBatch,
+    raw_payload: object,
 ) -> QuarterlyCompanyProfitabilityObservation:
-    if batch.corp.stock_code != registry.ticker:
-        raise ValueError("Quarterly profitability financial batch has another ticker")
-    frame = batch.frame
-    revenue, revenue_receipt, revenue_date = _select_account(
-        frame,
+    rows = _financial_rows(raw_payload)
+    revenue, revenue_receipt, revenue_date = _select_raw_account(
+        rows,
         registry.revenue_account_ids,
+        spec,
         label="revenue",
     )
-    cost, cost_receipt, cost_date = _select_account(
-        frame,
+    cost, cost_receipt, cost_date = _select_raw_account(
+        rows,
         registry.cost_of_sales_account_ids,
+        spec,
         label="cost_of_sales",
     )
-    gross, gross_receipt, gross_date = _select_account(
-        frame,
+    gross, gross_receipt, gross_date = _select_raw_account(
+        rows,
         registry.gross_profit_account_ids,
+        spec,
         label="gross_profit",
     )
     receipts = {revenue_receipt, cost_receipt, gross_receipt}
     available_dates = {revenue_date, cost_date, gross_date}
     if len(receipts) != 1 or len(available_dates) != 1:
         raise ValueError("Quarterly profitability selected accounts cross filing revisions")
-    raw_sha = _sha_payload(batch.raw_payload)
     identity_delta = revenue - cost - gross
     if identity_delta != 0:
         raise ValueError(
@@ -340,7 +368,58 @@ def extract_quarterly_company_profitability(
         gross_profit_krw=gross,
         gross_margin_percent=gross / revenue * 100.0,
         accounting_identity_delta_krw=identity_delta,
-        raw_payload_sha256=raw_sha,
+        raw_payload_sha256=_sha_payload(raw_payload),
+    )
+
+
+def extract_quarterly_company_profitability(
+    registry: QuarterlyCompanyProfitabilityRegistry,
+    spec: QuarterlyCompanyProfitabilityPeriodSpec,
+    batch: FinancialBatch,
+) -> QuarterlyCompanyProfitabilityObservation:
+    if batch.corp.stock_code != registry.ticker:
+        raise ValueError("Quarterly profitability financial batch has another ticker")
+    return extract_quarterly_company_profitability_raw_payload(
+        registry,
+        spec,
+        batch.raw_payload,
+    )
+
+
+def build_quarterly_company_profitability_evidence(
+    registry: QuarterlyCompanyProfitabilityRegistry,
+    *,
+    evaluation_date: date,
+    raw_payloads: dict[str, object],
+) -> QuarterlyCompanyProfitabilityEvidence:
+    expected = tuple(item.period_id for item in registry.periods)
+    if tuple(raw_payloads) != expected:
+        raise ValueError("Quarterly profitability raw payload periods are not bound/in order")
+    observations = tuple(
+        extract_quarterly_company_profitability_raw_payload(
+            registry,
+            spec,
+            raw_payloads[spec.period_id],
+        )
+        for spec in registry.periods
+    )
+    if any(item.available_date > evaluation_date for item in observations):
+        raise ValueError("Quarterly profitability panel contains an unobservable period")
+    source_payload = {
+        "evaluation_date": evaluation_date.isoformat(),
+        "ticker": registry.ticker,
+        "observations": [asdict(item) for item in observations],
+        "calibration_support_only": True,
+        "historical_vintage_certified": False,
+        "point_in_time_backtest_eligible": False,
+    }
+    return QuarterlyCompanyProfitabilityEvidence(
+        evidence_id=_sha_payload(source_payload),
+        evaluation_date=evaluation_date,
+        ticker=registry.ticker,
+        issuer_name=registry.issuer_name,
+        observations=observations,
+        observation_count=len(observations),
     )
 
 
@@ -351,7 +430,6 @@ def collect_quarterly_company_profitability(
     evaluation_date: date,
 ) -> tuple[QuarterlyCompanyProfitabilityEvidence, dict[str, object]]:
     corp = client.resolve_stock_codes([registry.ticker])[registry.ticker]
-    observations: list[QuarterlyCompanyProfitabilityObservation] = []
     raw_payloads: dict[str, object] = {}
     for spec in registry.periods:
         batch = client.financial_statements(
@@ -360,28 +438,13 @@ def collect_quarterly_company_profitability(
             report_code=spec.report_code,
             fs_div=registry.fs_div,
         )
-        observation = extract_quarterly_company_profitability(registry, spec, batch)
-        if observation.available_date > evaluation_date:
-            raise ValueError(
-                f"Quarterly profitability period is not observable: {spec.period_id}"
-            )
-        observations.append(observation)
+        if batch.corp.stock_code != registry.ticker:
+            raise ValueError("Quarterly profitability financial batch has another ticker")
         raw_payloads[spec.period_id] = batch.raw_payload
-    source_payload = {
-        "evaluation_date": evaluation_date.isoformat(),
-        "ticker": registry.ticker,
-        "observations": [asdict(item) for item in observations],
-        "calibration_support_only": True,
-        "historical_vintage_certified": False,
-        "point_in_time_backtest_eligible": False,
-    }
-    evidence = QuarterlyCompanyProfitabilityEvidence(
-        evidence_id=_sha_payload(source_payload),
+    evidence = build_quarterly_company_profitability_evidence(
+        registry,
         evaluation_date=evaluation_date,
-        ticker=registry.ticker,
-        issuer_name=registry.issuer_name,
-        observations=tuple(observations),
-        observation_count=len(observations),
+        raw_payloads=raw_payloads,
     )
     return evidence, raw_payloads
 
@@ -498,8 +561,10 @@ __all__ = [
     "QuarterlyCompanyProfitabilityObservation",
     "QuarterlyCompanyProfitabilityPeriodSpec",
     "QuarterlyCompanyProfitabilityRegistry",
+    "build_quarterly_company_profitability_evidence",
     "capture_quarterly_company_profitability",
     "collect_quarterly_company_profitability",
     "extract_quarterly_company_profitability",
+    "extract_quarterly_company_profitability_raw_payload",
     "load_quarterly_company_profitability_registry",
 ]
