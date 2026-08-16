@@ -130,7 +130,10 @@ class ProductProfitabilityCalibrationReadiness:
             raise ValueError("Profitability-calibration readiness ticker must be six digits")
         if self.status not in _ALLOWED_STATUSES:
             raise ValueError("Profitability-calibration readiness status is invalid")
-        if any(item not in _ALLOWED_EVIDENCE_CATEGORIES for item in self.missing_evidence_categories):
+        if any(
+            item not in _ALLOWED_EVIDENCE_CATEGORIES
+            for item in self.missing_evidence_categories
+        ):
             raise ValueError("Profitability-calibration missing evidence category is invalid")
         if len(set(self.missing_evidence_categories)) != len(self.missing_evidence_categories):
             raise ValueError("Profitability-calibration missing evidence categories must be unique")
