@@ -66,9 +66,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "failed_periods": verified.failed_periods,
         "failed_diagnostic_bundle_count": len(diagnostics.diagnostics),
         "failed_diagnostic_paths": diagnostics.diagnostic_paths,
+        "failed_diagnostic_invalid_count": len(diagnostics.invalid_diagnostics),
+        "failed_diagnostic_invalid_paths": diagnostics.invalid_diagnostic_paths,
+        "failed_diagnostic_invalid_errors": diagnostics.invalid_diagnostic_errors,
         "failed_diagnostic_missing_periods": diagnostics.missing_diagnostic_periods,
         "failed_diagnostic_bundle_coverage_complete": (
             diagnostics.diagnostic_bundle_coverage_complete
+        ),
+        "failed_diagnostic_bundle_integrity_complete": (
+            diagnostics.diagnostic_bundle_integrity_complete
         ),
         "full_source_coverage_certified": verified.full_source_coverage_certified,
         "product_profitability_source_fact": verified.product_profitability_source_fact,
