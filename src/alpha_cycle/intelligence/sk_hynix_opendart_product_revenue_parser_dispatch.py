@@ -5,7 +5,9 @@ from __future__ import annotations
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_fallback import (
     HISTORICAL_PRODUCT_REVENUE_PARSER_ID,
     parse_historical_product_revenue_archive_fallback,
-    parse_historical_product_revenue_text_fallback,
+)
+from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_text_policy import (
+    parse_historical_product_revenue_text_prioritized,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     PeriodicProductRevenueSpec,
@@ -31,7 +33,7 @@ def parse_periodic_product_revenue_text(
         if spec.parser_id != HISTORICAL_PRODUCT_REVENUE_PARSER_ID:
             raise
         try:
-            return parse_historical_product_revenue_text_fallback(spec, text)
+            return parse_historical_product_revenue_text_prioritized(spec, text)
         except ValueError as historical_error:
             raise ValueError(
                 "OpenDART product revenue text failed current and historical parsers: "
