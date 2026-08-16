@@ -17,8 +17,10 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_contract import (
     load_bound_periodic_product_revenue_parser_contract,
 )
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_expected_replay import (
     parse_periodic_product_revenue_archive,
+)
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
     parse_periodic_product_revenue_text,
 )
 from alpha_cycle.providers.opendart import CorpCode
@@ -153,7 +155,7 @@ def load_periodic_product_revenue_certification(
         raise ValueError("Periodic product revenue text parser output does not reproduce")
     structured_metrics = parse_periodic_product_revenue_archive(spec, archive_bytes)
     if structured_metrics != certification.metrics:
-        raise ValueError("Periodic product revenue table structure does not reproduce metrics")
+        raise ValueError("Periodic product revenue certified source structure does not reproduce metrics")
 
     discovery = DiscoveredPeriodicProductRevenue(
         spec=spec,
