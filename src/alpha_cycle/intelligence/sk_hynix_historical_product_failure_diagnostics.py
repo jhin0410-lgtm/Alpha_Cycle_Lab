@@ -125,6 +125,10 @@ class HistoricalProductRevenueFailureDiagnosticInventory:
         return {item.period_id: item.diagnostic_path for item in self.diagnostics}
 
     @property
+    def diagnostic_errors(self) -> dict[str, str]:
+        return {item.period_id: item.error for item in self.diagnostics}
+
+    @property
     def invalid_diagnostic_paths(self) -> dict[str, str]:
         return {item.period_id: item.diagnostic_path for item in self.invalid_diagnostics}
 

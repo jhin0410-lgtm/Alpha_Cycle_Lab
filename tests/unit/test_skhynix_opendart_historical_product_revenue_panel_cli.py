@@ -39,6 +39,7 @@ def test_cli_exposes_verified_and_invalid_failure_diagnostic_paths(
         lambda *args, **kwargs: SimpleNamespace(
             diagnostics=(object(),),
             diagnostic_paths={"2024Q2": "/tmp/2024Q2/diagnostic.json"},
+            diagnostic_errors={"2024Q2": "historical layout differs"},
             invalid_diagnostics=(object(),),
             invalid_diagnostic_paths={"2023Q2": "/tmp/2023Q2/diagnostic.json"},
             invalid_diagnostic_errors={"2023Q2": "normalized text hash mismatch"},
@@ -60,6 +61,9 @@ def test_cli_exposes_verified_and_invalid_failure_diagnostic_paths(
     assert payload["failed_diagnostic_bundle_count"] == 1
     assert payload["failed_diagnostic_paths"] == {
         "2024Q2": "/tmp/2024Q2/diagnostic.json"
+    }
+    assert payload["failed_diagnostic_errors"] == {
+        "2024Q2": "historical layout differs"
     }
     assert payload["failed_diagnostic_invalid_count"] == 1
     assert payload["failed_diagnostic_invalid_paths"] == {
