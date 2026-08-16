@@ -10,8 +10,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_capture import (
     capture_periodic_product_revenue_certification,
+)
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     load_periodic_product_revenue_registry,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification_verifier import (
@@ -31,34 +33,32 @@ def _markup(*, other_label: str = "기타") -> str:
     return f"""
     <html><body>
       <h1>반기보고서 (2026.06)</h1>
-      <p>제품별 매출액</p>
+      <h3>21. 매출액 (연결)</h3>
+      <p>고객과의 계약에서 생기는 수익의 품목별 구분에 대한 공시</p>
+      <p>당반기</p>
       <p>(단위 : 백만원)</p>
       <table>
         <tr>
-          <th rowspan="2">구분</th>
-          <th colspan="2">당반기</th>
-          <th colspan="2">전반기</th>
+          <th rowspan="2">부문</th>
+          <th colspan="2">DRAM</th>
+          <th colspan="2">NAND Flash</th>
+          <th colspan="2">{other_label}</th>
+          <th colspan="2">부문 합계</th>
         </tr>
         <tr>
-          <th>3개월</th><th>누적</th><th>3개월</th><th>누적</th>
-        </tr>
-        <tr>
-          <td>DRAM</td><td>28,900,000</td><td>51,000,000</td>
-          <td>16,000,000</td><td>30,000,000</td>
-        </tr>
-        <tr>
-          <td>NAND</td><td>10,700,000</td><td>19,000,000</td>
-          <td>7,000,000</td><td>13,000,000</td>
-        </tr>
-        <tr>
-          <td>{other_label}</td><td>400,000</td><td>700,000</td>
-          <td>300,000</td><td>500,000</td>
-        </tr>
-        <tr>
-          <td>합계</td><td>40,000,000</td><td>70,700,000</td>
-          <td>23,300,000</td><td>43,500,000</td>
+          <th>3개월</th><th>누적</th>
+          <th>3개월</th><th>누적</th>
+          <th>3개월</th><th>누적</th>
+          <th>3개월</th><th>누적</th>
         </tr>
       </table>
+      <p>수익</p>
+      <table><tr>
+        <td>28,900,000</td><td>51,000,000</td>
+        <td>10,700,000</td><td>19,000,000</td>
+        <td>400,000</td><td>700,000</td>
+        <td>40,000,000</td><td>70,700,000</td>
+      </tr></table>
     </body></html>
     """
 

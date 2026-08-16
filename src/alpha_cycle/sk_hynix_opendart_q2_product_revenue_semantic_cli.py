@@ -1,21 +1,14 @@
-"""Bootstrap the live SK hynix product-revenue CLI with expected-value raw replay."""
+"""Stable entrypoint for SK hynix OpenDART product-revenue certification."""
 
 from __future__ import annotations
 
+from alpha_cycle.sk_hynix_opendart_q2_product_revenue_certification_cli import (
+    main as certification_main,
+)
+
 
 def main() -> int:
-    """Patch only the structural replay entrypoint before loading the existing CLI."""
-
-    from alpha_cycle.intelligence import sk_hynix_opendart_q2_product_revenue_layout as layout
-    from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_expected_replay import (
-        parse_periodic_product_revenue_archive,
-    )
-
-    layout.parse_periodic_product_revenue_archive = parse_periodic_product_revenue_archive
-
-    from alpha_cycle.sk_hynix_opendart_q2_product_revenue_certification_cli import (
-        main as certification_main,
-    )
+    """Run certification with production parser bindings declared by each component."""
 
     return certification_main()
 
