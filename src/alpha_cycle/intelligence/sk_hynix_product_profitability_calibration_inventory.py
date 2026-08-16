@@ -61,12 +61,18 @@ def build_skhynix_product_profitability_calibration_inventory(
     if not revenue.product_revenue_baseline_eligible:
         raise ValueError("Current direct product revenue is not baseline eligible")
     if support.product_profitability_source_fact:
-        raise ValueError("Historical profitability support cannot claim product-margin source facts")
+        raise ValueError(
+            "Historical profitability support cannot claim product-margin source facts"
+        )
     if support.direct_product_profitability_observations != 0:
-        raise ValueError("Historical support cannot contain direct product-profitability observations")
+        raise ValueError(
+            "Historical support cannot contain direct product-profitability observations"
+        )
     period_ids = _independent_period_ids(support.observations)
     if len(period_ids) != support.independent_non_overlapping_period_count:
-        raise ValueError("Historical profitability support independent-period count does not reproduce")
+        raise ValueError(
+            "Historical profitability support independent-period count does not reproduce"
+        )
 
     return ProfitabilityCalibrationEvidenceInventory(
         direct_product_revenue_evidence_id=revenue.evidence_id,
