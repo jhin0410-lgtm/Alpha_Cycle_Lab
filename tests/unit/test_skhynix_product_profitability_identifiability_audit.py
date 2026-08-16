@@ -11,13 +11,22 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_identifiability_aud
 )
 
 
-def _inventory(*, direct_anchor_periods: tuple[str, ...] = ()):
+def _inventory(
+    *,
+    direct_anchor_periods: tuple[str, ...] = (),
+    extra_company_periods: tuple[str, ...] = (),
+):
     return ProfitabilityCalibrationEvidenceInventory(
         direct_product_revenue_evidence_id="d" * 64,
         direct_product_revenue_ready=True,
         direct_product_profitability_periods=direct_anchor_periods,
         historical_product_revenue_periods=("fy2023", "fy2024", "q1_2025"),
-        company_profitability_constraint_periods=("fy2023", "fy2024", "q1_2025"),
+        company_profitability_constraint_periods=(
+            "fy2023",
+            "fy2024",
+            "q1_2025",
+            *extra_company_periods,
+        ),
         cycle_driver_history_periods=tuple(
             f"{year}Q{quarter}"
             for year, quarters in ((2023, 4), (2024, 4), (2025, 4), (2026, 1))
@@ -44,6 +53,7 @@ def test_current_evidence_remains_structurally_unidentified_before_fitting() -> 
     assert result.direct_product_profitability_anchor_periods == 0
     assert result.calibration_company_profitability_constraints == 3
     assert result.calibration_product_revenue_periods == 3
+    assert result.aligned_company_product_constraint_periods == 3
     assert result.textual_cycle_driver_periods == 13
     assert result.numeric_cycle_driver_periods == 0
     assert result.holdout_periods == 1
@@ -57,6 +67,17 @@ def test_current_evidence_remains_structurally_unidentified_before_fitting() -> 
     assert result.fair_value_estimate_enabled is False
     assert result.target_price_enabled is False
     assert result.decision_score_enabled is False
+
+
+def test_unmatched_company_profitability_periods_do_not_create_structural_equations() -> None:
+    result = audit_skhynix_product_profitability_identifiability(
+        _inventory(extra_company_periods=("2023Q1", "2023Q2", "2024Q1", "2025Q2")),
+        _holdout(),
+    )
+    assert result.calibration_company_profitability_constraints == 7
+    assert result.calibration_product_revenue_periods == 3
+    assert result.aligned_company_product_constraint_periods == 3
+    assert result.independent_training_constraint_count == 3
 
 
 def test_parameterization_and_driver_encoding_still_require_temporal_alignment() -> None:
@@ -93,7 +114,7 @@ def test_full_rank_two_parameter_aggregate_design_can_be_identifiable() -> None:
     assert result.numeric_forecast_enabled is False
 
 
-def test_more_parameters_than_independent_training_constraints_remain_blocked() -> None:
+def test_more_parameters_than_period_aligned_training_constraints_remain_blocked() -> None:
     result = audit_skhynix_product_profitability_identifiability(
         _inventory(direct_anchor_periods=("anchor_2022",)),
         _holdout(),
@@ -106,4 +127,4 @@ def test_more_parameters_than_independent_training_constraints_remain_blocked() 
     )
     assert result.independent_training_constraint_count == 4
     assert result.structurally_identifiable is False
-    assert result.reason == "insufficient_independent_training_constraints"
+    assert result.reason == "insufficient_period_aligned_training_constraints"
