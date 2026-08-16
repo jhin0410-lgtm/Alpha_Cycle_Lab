@@ -409,7 +409,7 @@ def _row_pairs(
         raise ValueError(f"SEC product-profitability row end missing: {label}")
     row = tail[: end_match.start()]
     pairs = re.findall(
-        r"(?:W\s+)?([0-9][0-9,]*)\s+([0-9]+(?:\.[0-9]+)?)\s*%",
+        r"(?:W\s+)?([0-9][0-9,]*)\s+([0-9]+(?:\.[0-9]+)?)\s*%?",
         row,
         flags=re.IGNORECASE,
     )
@@ -418,6 +418,8 @@ def _row_pairs(
         raise ValueError(
             f"SEC product-profitability row must resolve five periods: {label} count={len(result)}"
         )
+    if any(amount <= 0.0 or share < 0.0 or share > 100.0 for amount, share in result):
+        raise ValueError(f"SEC product-profitability row contains invalid amount/share: {label}")
     return result
 
 
