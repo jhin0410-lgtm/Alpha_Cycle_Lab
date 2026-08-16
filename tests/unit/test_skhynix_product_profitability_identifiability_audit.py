@@ -47,39 +47,63 @@ def test_current_evidence_remains_structurally_unidentified_before_fitting() -> 
     assert result.textual_cycle_driver_periods == 13
     assert result.numeric_cycle_driver_periods == 0
     assert result.holdout_periods == 1
+    assert result.registered_parameter_count == 0
+    assert result.independent_training_constraint_count == 3
     assert result.structurally_identifiable is False
     assert result.fit_attempt_allowed is False
     assert result.holdout_evaluation_allowed is False
-    assert result.reason == "no_direct_product_profitability_anchors"
+    assert result.reason == "structural_parameterization_not_registered"
     assert result.numeric_forecast_enabled is False
     assert result.fair_value_estimate_enabled is False
     assert result.target_price_enabled is False
     assert result.decision_score_enabled is False
 
 
-def test_method_flags_cannot_bypass_missing_direct_product_profitability_anchor() -> None:
+def test_parameterization_and_driver_encoding_still_require_temporal_alignment() -> None:
     result = audit_skhynix_product_profitability_identifiability(
         _inventory(),
         _holdout(),
         parameterization_registered=True,
+        registered_parameter_count=2,
         driver_encoding_method_registered=True,
         numeric_cycle_driver_periods=13,
     )
     assert result.structurally_identifiable is False
     assert result.fit_attempt_allowed is False
-    assert result.reason == "no_direct_product_profitability_anchors"
+    assert result.reason == "cycle_driver_profitability_temporal_alignment_not_registered"
 
 
-def test_with_anchor_parameterization_and_numeric_driver_contract_pre_fit_gate_can_open() -> None:
+def test_full_rank_two_parameter_aggregate_design_can_be_identifiable_without_direct_anchor() -> None:
     result = audit_skhynix_product_profitability_identifiability(
-        _inventory(direct_anchor_periods=("anchor_2022",)),
+        _inventory(),
         _holdout(),
         parameterization_registered=True,
+        registered_parameter_count=2,
         driver_encoding_method_registered=True,
         numeric_cycle_driver_periods=13,
+        temporal_alignment_method_registered=True,
+        design_rank_certified=True,
     )
+    assert result.direct_product_profitability_anchor_periods == 0
+    assert result.independent_training_constraint_count == 3
     assert result.structurally_identifiable is True
     assert result.fit_attempt_allowed is True
     assert result.holdout_evaluation_allowed is False
     assert result.reason == "pre_fit_identification_contract_satisfied"
     assert result.numeric_forecast_enabled is False
+
+
+def test_more_parameters_than_independent_training_constraints_remain_blocked() -> None:
+    result = audit_skhynix_product_profitability_identifiability(
+        _inventory(direct_anchor_periods=("anchor_2022",)),
+        _holdout(),
+        parameterization_registered=True,
+        registered_parameter_count=5,
+        driver_encoding_method_registered=True,
+        numeric_cycle_driver_periods=13,
+        temporal_alignment_method_registered=True,
+        design_rank_certified=False,
+    )
+    assert result.independent_training_constraint_count == 4
+    assert result.structurally_identifiable is False
+    assert result.reason == "insufficient_independent_training_constraints"
