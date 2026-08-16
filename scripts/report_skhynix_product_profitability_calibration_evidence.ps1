@@ -176,6 +176,14 @@ if ($LASTEXITCODE -ne 0) {
     throw "Historical product-revenue batch capture failed before producing a panel."
 }
 
+Write-Host "[5b/7] Replaying any remaining historical parser failures offline."
+Write-Host "       No network request or source-fact promotion occurs in this diagnostic step."
+& $python -m alpha_cycle.sk_hynix_opendart_historical_product_revenue_diagnostics_cli `
+    --evaluation-date $EvaluationDate
+if ($LASTEXITCODE -ne 0) {
+    throw "Historical product-revenue offline failure diagnostics failed."
+}
+
 Write-Host "[6/7] Replaying all evidence and reporting fail-closed calibration readiness."
 & $python -m alpha_cycle.sk_hynix_product_profitability_calibration_readiness_cli `
     --evaluation-date $EvaluationDate

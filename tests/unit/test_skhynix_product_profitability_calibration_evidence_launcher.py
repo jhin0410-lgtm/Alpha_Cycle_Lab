@@ -40,6 +40,18 @@ def test_launcher_recaptures_historical_product_panel_after_exact_byte_fix() -> 
     assert module > step5
 
 
+def test_launcher_runs_offline_failure_diagnostics_after_historical_capture() -> None:
+    text = _script()
+    capture = text.index("alpha_cycle.sk_hynix_opendart_historical_product_revenue_panel_cli")
+    diagnostics = text.index(
+        "alpha_cycle.sk_hynix_opendart_historical_product_revenue_diagnostics_cli"
+    )
+    readiness = text.index("alpha_cycle.sk_hynix_product_profitability_calibration_readiness_cli")
+    assert capture < diagnostics < readiness
+    assert "[5b/7]" in text
+    assert "No network request or source-fact promotion" in text
+
+
 def test_launcher_runs_complete_profitability_evidence_chain_and_rank_probe() -> None:
     text = _script()
     required_modules = (
@@ -47,6 +59,7 @@ def test_launcher_runs_complete_profitability_evidence_chain_and_rank_probe() ->
         "alpha_cycle.sec_product_cycle_driver_support_cli",
         "alpha_cycle.sk_hynix_opendart_quarterly_company_profitability_cli",
         "alpha_cycle.sk_hynix_opendart_historical_product_revenue_panel_cli",
+        "alpha_cycle.sk_hynix_opendart_historical_product_revenue_diagnostics_cli",
         "alpha_cycle.sk_hynix_product_profitability_calibration_readiness_cli",
         "alpha_cycle.sk_hynix_product_profitability_structural_rank_probe_cli",
     )
