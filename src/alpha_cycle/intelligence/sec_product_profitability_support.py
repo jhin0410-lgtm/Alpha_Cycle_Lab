@@ -1,8 +1,8 @@
 """Historical SK hynix profitability calibration support from official SEC bytes.
 
-This layer binds company gross profit/gross margin to directly disclosed product revenue
-for aligned historical periods. It is calibration support only: it does not disclose or
-infer DRAM/NAND product margins and cannot become a current product-profitability baseline.
+This layer aligns directly disclosed product revenue with company gross profit and gross
+margin for historical periods. It is calibration support only: it never discloses or
+infers DRAM/NAND product margins and cannot become a current profitability baseline.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ DEFAULT_SEC_PRODUCT_PROFITABILITY_POINTER = (
     DEFAULT_SEC_PRODUCT_PROFITABILITY_OUTPUT / "latest_sec_product_profitability_support.json"
 )
 _KOREA_TIME_ZONE = ZoneInfo("Asia/Seoul")
+_REVENUE_RECONCILIATION_TOLERANCE_KRW_BILLION = 1.0
 _MARGIN_RECONCILIATION_TOLERANCE_PP = 0.11
 _PERIOD_ORDER = ("q1_2026", "q1_2025", "fy2025", "fy2024", "fy2023")
 _PERIOD_DATES = {
@@ -53,11 +54,13 @@ def _sha_bytes(data: bytes) -> str:
 
 
 def _sha_payload(payload: object) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
-            "utf-8"
-        )
-    ).hexdigest()
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _valid_sha(value: str) -> bool:
@@ -151,6 +154,7 @@ class HistoricalProductProfitabilityConstraint:
     dram_share_percent: float
     nand_share_percent: float
     other_share_percent: float
+    product_revenue_reconciliation_delta_krw_billion: float
     gross_profit: float
     gross_margin_percent: float
     gross_margin_reconciliation_delta_pp: float
@@ -160,8 +164,7 @@ class HistoricalProductProfitabilityConstraint:
     def __post_init__(self) -> None:
         if self.period_id not in _PERIOD_ORDER:
             raise ValueError("SEC product-profitability period is unsupported")
-        expected_dates = _PERIOD_DATES[self.period_id]
-        if (self.period_start, self.period_end) != expected_dates:
+        if (self.period_start, self.period_end) != _PERIOD_DATES[self.period_id]:
             raise ValueError("SEC product-profitability period dates are inconsistent")
         if self.unit != "KRW_billion":
             raise ValueError("SEC product-profitability support normalizes to KRW_billion")
@@ -173,6 +176,7 @@ class HistoricalProductProfitabilityConstraint:
             self.dram_share_percent,
             self.nand_share_percent,
             self.other_share_percent,
+            self.product_revenue_reconciliation_delta_krw_billion,
             self.gross_profit,
             self.gross_margin_percent,
             self.gross_margin_reconciliation_delta_pp,
@@ -187,16 +191,19 @@ class HistoricalProductProfitabilityConstraint:
         ) <= 0:
             raise ValueError("SEC product-profitability revenue values must be positive")
         product_sum = self.dram_revenue + self.nand_revenue + self.other_products_revenue
-        if abs(product_sum - self.total_revenue) > 1e-9:
+        revenue_delta = product_sum - self.total_revenue
+        if abs(revenue_delta - self.product_revenue_reconciliation_delta_krw_billion) > 1e-9:
+            raise ValueError("SEC product-profitability revenue delta is inconsistent")
+        if abs(revenue_delta) > _REVENUE_RECONCILIATION_TOLERANCE_KRW_BILLION:
             raise ValueError("SEC product-profitability product revenue does not reconcile")
         share_sum = self.dram_share_percent + self.nand_share_percent + self.other_share_percent
         if abs(share_sum - 100.0) > 0.11:
             raise ValueError("SEC product-profitability product shares do not reconcile")
         calculated_margin = self.gross_profit / self.total_revenue * 100.0
-        expected_delta = calculated_margin - self.gross_margin_percent
-        if abs(expected_delta - self.gross_margin_reconciliation_delta_pp) > 1e-9:
+        margin_delta = calculated_margin - self.gross_margin_percent
+        if abs(margin_delta - self.gross_margin_reconciliation_delta_pp) > 1e-9:
             raise ValueError("SEC product-profitability margin delta is inconsistent")
-        if abs(expected_delta) > _MARGIN_RECONCILIATION_TOLERANCE_PP:
+        if abs(margin_delta) > _MARGIN_RECONCILIATION_TOLERANCE_PP:
             raise ValueError("SEC product-profitability gross margin does not reconcile")
         if not self.direct_product_revenue_reconciled or not self.company_gross_margin_reconciled:
             raise ValueError("SEC product-profitability required reconciliations are false")
@@ -237,11 +244,10 @@ class SecProductProfitabilitySupportEvidence:
             raise ValueError("SEC product-profitability observations are not in bound order")
         if self.observation_count != len(self.observations):
             raise ValueError("SEC product-profitability observation count is inconsistent")
-        expected_independent = _max_non_overlapping_periods(self.observations)
-        if self.independent_non_overlapping_period_count != expected_independent:
+        independent = _max_non_overlapping_periods(self.observations)
+        if self.independent_non_overlapping_period_count != independent:
             raise ValueError("SEC product-profitability independent period count is inconsistent")
-        expected_overlap = expected_independent < len(self.observations)
-        if self.overlapping_periods_present != expected_overlap:
+        if self.overlapping_periods_present != (independent < len(self.observations)):
             raise ValueError("SEC product-profitability overlap flag is inconsistent")
         if (
             not self.calibration_support_only
@@ -366,29 +372,35 @@ def _normalized_text(filing_bytes: bytes) -> str:
 
 
 def _require_anchor(text: str, anchor: str) -> None:
-    normalized = " ".join(anchor.split()).casefold()
-    if normalized not in text.casefold():
+    if " ".join(anchor.split()).casefold() not in text.casefold():
         raise ValueError(f"SEC product-profitability identity anchor missing: {anchor}")
 
 
 def _section(text: str, start_anchor: str, end_anchor: str) -> str:
-    start = text.casefold().find(start_anchor.casefold())
+    folded = text.casefold()
+    start = folded.find(start_anchor.casefold())
     if start < 0:
         raise ValueError(f"SEC product-profitability section start missing: {start_anchor}")
-    end = text.casefold().find(end_anchor.casefold(), start + len(start_anchor))
+    end = folded.find(end_anchor.casefold(), start + len(start_anchor))
     if end < 0:
         raise ValueError(f"SEC product-profitability section end missing: {end_anchor}")
     return text[start:end]
 
 
-def _row_pairs(section: str, start_pattern: str, end_pattern: str, label: str) -> tuple[tuple[float, float], ...]:
+def _row_pairs(
+    section: str,
+    start_pattern: str,
+    end_pattern: str,
+    label: str,
+) -> tuple[tuple[float, float], ...]:
     start_match = re.search(start_pattern, section, flags=re.IGNORECASE)
     if start_match is None:
         raise ValueError(f"SEC product-profitability row missing: {label}")
-    end_match = re.search(end_pattern, section[start_match.end() :], flags=re.IGNORECASE)
+    tail = section[start_match.end() :]
+    end_match = re.search(end_pattern, tail, flags=re.IGNORECASE)
     if end_match is None:
         raise ValueError(f"SEC product-profitability row end missing: {label}")
-    row = section[start_match.end() : start_match.end() + end_match.start()]
+    row = tail[: end_match.start()]
     pairs = re.findall(
         r"(?:W\s+)?([0-9][0-9,]*)\s+([0-9]+(?:\.[0-9]+)?)\s*%",
         row,
@@ -402,9 +414,15 @@ def _row_pairs(section: str, start_pattern: str, end_pattern: str, label: str) -
     return result
 
 
-def _unique_values(text: str, pattern: str, count: int, label: str) -> tuple[float, ...]:
+def _unique_values(
+    text: str,
+    pattern: str,
+    count: int,
+    label: str,
+) -> tuple[float, ...]:
     matches = re.findall(pattern, text, flags=re.IGNORECASE)
-    values = tuple(dict.fromkeys(tuple(float(item.replace(",", "")) for item in match) for match in matches))
+    parsed = [tuple(float(item.replace(",", "")) for item in match) for match in matches]
+    values = tuple(dict.fromkeys(parsed))
     if len(values) != 1 or len(values[0]) != count:
         raise ValueError(f"SEC product-profitability narrative must resolve uniquely: {label}")
     return values[0]
@@ -485,19 +503,9 @@ def parse_sec_product_profitability_support_html(
         "DRAMs are a type",
     )
     dram = _row_pairs(product_section, r"\bDRAM\b", r"\bNAND\s+Flash\b", "dram")
-    nand = _row_pairs(
-        product_section,
-        r"\bNAND\s+Flash\b",
-        r"\bOther\s+Products\b",
-        "nand",
-    )
-    other = _row_pairs(
-        product_section,
-        r"\bOther\s+Products\b",
-        r"\bTotal\b",
-        "other",
-    )
-    total = _row_pairs(product_section, r"\bTotal\b", r"DRAMs\s+are\s+a\s+type|$", "total")
+    nand = _row_pairs(product_section, r"\bNAND\s+Flash\b", r"\bOther\s+Products\b", "nand")
+    other = _row_pairs(product_section, r"\bOther\s+Products\b", r"\bTotal\b", "other")
+    total = _row_pairs(product_section, r"\bTotal\b", r"$", "total")
     profits = _profitability_values(text)
     observations: list[HistoricalProductProfitabilityConstraint] = []
     for index, period_id in enumerate(_PERIOD_ORDER):
@@ -508,7 +516,8 @@ def parse_sec_product_profitability_support_html(
         if abs(total_share - 100.0) > 1e-9:
             raise ValueError("SEC product-profitability total share must be 100%")
         gross_profit, gross_margin = profits[period_id]
-        delta = gross_profit / total_revenue * 100.0 - gross_margin
+        revenue_delta = dram_revenue + nand_revenue + other_revenue - total_revenue
+        margin_delta = gross_profit / total_revenue * 100.0 - gross_margin
         start, end = _PERIOD_DATES[period_id]
         observations.append(
             HistoricalProductProfitabilityConstraint(
@@ -523,11 +532,16 @@ def parse_sec_product_profitability_support_html(
                 dram_share_percent=dram_share,
                 nand_share_percent=nand_share,
                 other_share_percent=other_share,
+                product_revenue_reconciliation_delta_krw_billion=revenue_delta,
                 gross_profit=gross_profit,
                 gross_margin_percent=gross_margin,
-                gross_margin_reconciliation_delta_pp=delta,
-                direct_product_revenue_reconciled=True,
-                company_gross_margin_reconciled=True,
+                gross_margin_reconciliation_delta_pp=margin_delta,
+                direct_product_revenue_reconciled=(
+                    abs(revenue_delta) <= _REVENUE_RECONCILIATION_TOLERANCE_KRW_BILLION
+                ),
+                company_gross_margin_reconciled=(
+                    abs(margin_delta) <= _MARGIN_RECONCILIATION_TOLERANCE_PP
+                ),
             )
         )
     return tuple(observations)
@@ -573,6 +587,14 @@ def build_sec_product_profitability_support_evidence(
 
 
 def _evidence_payload(evidence: SecProductProfitabilitySupportEvidence) -> dict[str, object]:
+    observations = [
+        {
+            **asdict(item),
+            "period_start": item.period_start.isoformat(),
+            "period_end": item.period_end.isoformat(),
+        }
+        for item in evidence.observations
+    ]
     return {
         "evidence_id": evidence.evidence_id,
         "observed_date": evidence.observed_date.isoformat(),
@@ -584,18 +606,9 @@ def _evidence_payload(evidence: SecProductProfitabilitySupportEvidence) -> dict[
         "filing_date": evidence.filing_date.isoformat(),
         "submissions_sha256": evidence.submissions_sha256,
         "filing_sha256": evidence.filing_sha256,
-        "observations": [
-            {
-                **asdict(item),
-                "period_start": item.period_start.isoformat(),
-                "period_end": item.period_end.isoformat(),
-            }
-            for item in evidence.observations
-        ],
+        "observations": observations,
         "observation_count": evidence.observation_count,
-        "independent_non_overlapping_period_count": (
-            evidence.independent_non_overlapping_period_count
-        ),
+        "independent_non_overlapping_period_count": evidence.independent_non_overlapping_period_count,
         "overlapping_periods_present": evidence.overlapping_periods_present,
         "calibration_support_only": True,
         "product_profitability_source_fact": False,
