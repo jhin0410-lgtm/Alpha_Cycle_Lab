@@ -1,0 +1,57 @@
+schema_version: 1
+method:
+  method_id: skhynix_aggregate_direction_rank_probe
+  method_version: 0.1-draft
+  status: draft_rank_probe_only
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+  target_product_blocks:
+    - dram_total
+    - nand_and_solutions
+  nuisance_product_blocks:
+    - other_products_services
+  temporal_alignment: contemporaneous_same_quarter
+  holdout_period: 2026Q1
+  driver_encoding:
+    encoding_id: issuer_direction_sign_v1
+    increase_code: 1.0
+    flat_code: 0.0
+    decrease_code: -1.0
+    preserves_magnitude_text: true
+    numeric_magnitude_assumed: false
+    rank_probe_only: true
+    estimation_input_ready: false
+  parameters:
+    - dram_margin_intercept
+    - dram_asp_direction_sensitivity
+    - dram_bit_volume_direction_sensitivity
+    - nand_margin_intercept
+    - nand_asp_direction_sensitivity
+    - nand_bit_volume_direction_sensitivity
+    - other_margin_constant
+  equation_terms:
+    - dram_revenue
+    - dram_revenue_x_dram_asp_direction
+    - dram_revenue_x_dram_bit_volume_direction
+    - nand_revenue
+    - nand_revenue_x_nand_asp_direction
+    - nand_revenue_x_nand_bit_volume_direction
+    - other_revenue
+  company_revenue_reconciliation_tolerance_krw: 1000000
+  minimum_training_rows_for_rank_probe: 7
+  fit_enabled: false
+  historical_validation_complete: false
+  holdout_validation_complete: false
+  method_version_frozen: false
+  product_profitability_source_fact: false
+  numeric_forecast_enabled: false
+  fair_value_estimate_enabled: false
+  target_price_enabled: false
+  decision_score_enabled: false
+  required_future_checks:
+    - magnitude_or_measurement_error_encoding_registered
+    - coefficient_stability_validated
+    - collinearity_and_conditioning_reviewed
+    - aggregate_historical_residuals_validated
+    - q1_2026_holdout_evaluated_once
+    - method_version_frozen_after_validation
