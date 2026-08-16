@@ -53,12 +53,19 @@ def _sha_bytes(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _json_default(value: object) -> str:
+    if isinstance(value, date):
+        return value.isoformat()
+    raise TypeError(f"Unsupported SEC product-profitability evidence value: {type(value)!r}")
+
+
 def _sha_payload(payload: object) -> str:
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
+        default=_json_default,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
