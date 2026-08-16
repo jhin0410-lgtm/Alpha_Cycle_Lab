@@ -46,6 +46,40 @@ The machine-readable identifiability gate reports the current product-profitabil
 - `numeric_forecast_enabled=false`
 - `decision_score_enabled=false`
 
+## Calibration-readiness contract
+
+The calibration path is deliberately split into evidence inventory and method requirements. Historical data volume by itself cannot make a product-margin estimate model-use-ready because the required sample size depends on the chosen identification strategy and parameterization.
+
+`ProfitabilityCalibrationEvidenceInventory` records only observed support:
+
+- number of directly observed product-profitability periods;
+- historical product-revenue periods;
+- company-level profitability constraint periods;
+- cycle-driver history periods;
+- holdout periods; and
+- verified evidence IDs.
+
+`ProductProfitabilityCalibrationMethod` separately declares:
+
+- identification strategy (`direct_target_model` or `aggregate_structural_model`);
+- target metric and target product blocks;
+- minimum evidence periods required by that method;
+- whether the method is documented;
+- whether historical/holdout validation is complete; and
+- whether the method version is frozen.
+
+The readiness state can progress only through explicit gates such as:
+
+- `identification_method_not_selected`
+- `calibration_method_not_documented`
+- `calibration_evidence_incomplete`
+- `calibration_evidence_unverified`
+- `historical_validation_incomplete`
+- `calibration_method_not_frozen`
+- `observationally_calibrated`
+
+Even `observationally_calibrated` means only that an internal **assumption** may become model-use-ready. It does not relabel the estimate as a source fact and does not itself enable numeric forecast, fair value, target price, or decision score.
+
 ## Calibration route
 
 A future calibrated product-profitability method should remain inside the existing semiconductor operating-assumption framework and should not mutate the direct-source baseline. At minimum, the method should define:
@@ -60,5 +94,11 @@ A future calibrated product-profitability method should remain inside the existi
 8. acceptable error bands and invalidation criteria;
 9. frozen method/version and reproducible evidence IDs; and
 10. a clear distinction between source facts, calibrated assumptions, and forward scenario outputs.
+
+## Immediate evidence gap
+
+The repository already has a source-bounded historical SEC product-mix calibration path, but the product-profitability calibration path still needs a separately certified history of **company-level gross profit/gross margin** and aligned product-revenue periods before an aggregate structural method can even be evaluated. Registry entries or qualitative commentary are not counted as verified observations merely because code knows where a filing exists.
+
+The next source task is therefore to capture and bind historical first-party company profitability observations that can be aligned with direct product revenue. Only after that evidence exists should Alpha Cycle choose and test a structural DRAM/NAND profitability calibration method.
 
 Until those conditions are implemented and verified, product profitability remains a known missing model dimension rather than an estimated fact.
