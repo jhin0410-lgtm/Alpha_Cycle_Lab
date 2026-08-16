@@ -9,6 +9,8 @@ This module is deliberately non-estimating. It records the evidence gap and reje
 convenient revenue-share, residual, and peer-margin substitutions as source facts.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 
