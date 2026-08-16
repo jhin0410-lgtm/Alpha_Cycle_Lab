@@ -39,6 +39,16 @@ def _certification_dict(
     return payload
 
 
+def _write_normalized_text(path: Path, archive: DisclosureDocumentArchive) -> None:
+    """Persist the exact UTF-8 bytes covered by the document text SHA-256."""
+
+    text_bytes = archive.evidence.text.encode("utf-8")
+    text_sha256 = hashlib.sha256(text_bytes).hexdigest()
+    if text_sha256 != archive.evidence.text_sha256:
+        raise ValueError("OpenDART normalized text in-memory hash mismatch")
+    path.write_bytes(text_bytes)
+
+
 def build_periodic_product_revenue_certification(
     discovery: DiscoveredPeriodicProductRevenue,
     archive: DisclosureDocumentArchive,
@@ -140,7 +150,7 @@ def _write_failure_bundle(
     text_path = directory / "normalized_document.txt"
     diagnostic_path = directory / "diagnostic.json"
     archive_path.write_bytes(archive.archive_bytes)
-    text_path.write_text(archive.evidence.text, encoding="utf-8")
+    _write_normalized_text(text_path, archive)
     diagnostic = {
         "status": "skhynix_opendart_q2_product_revenue_parse_failed",
         "rcept_no": discovery.rcept_no,
@@ -211,7 +221,7 @@ def capture_periodic_product_revenue_certification(
         text_path = temporary / "normalized_document.txt"
         certification_path = temporary / "certification.json"
         archive_path.write_bytes(archive.archive_bytes)
-        text_path.write_text(archive.evidence.text, encoding="utf-8")
+        _write_normalized_text(text_path, archive)
         certification_path.write_text(
             json.dumps(
                 _certification_dict(certification),
