@@ -11,11 +11,11 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
     DEFAULT_PERIODIC_PRODUCT_REVENUE_REGISTRY,
     load_periodic_product_revenue_registry,
 )
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_expected_replay import (
+    parse_periodic_product_revenue_archive,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
     parse_periodic_product_revenue_text,
-)
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_semantic_replay import (
-    parse_periodic_product_revenue_archive,
 )
 
 _DEFAULT_DOCUMENT_ID = "skhynix_000660_2026q2_half_year_product_revenue"
