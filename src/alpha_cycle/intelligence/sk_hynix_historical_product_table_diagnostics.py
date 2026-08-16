@@ -18,12 +18,16 @@ from pathlib import Path, PurePosixPath
 from alpha_cycle.intelligence.sk_hynix_historical_product_failure_diagnostics import (
     HistoricalProductRevenueFailureDiagnostic,
 )
+from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_fallback import (
+    _row_table_metrics,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     PeriodicProductRevenueSpec,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_table import (
     _grid,
     _normalized,
+    _RawTable,
     _TableExtractor,
 )
 from alpha_cycle.providers.opendart_documents import _decode_text, _safe_member_name
@@ -111,6 +115,19 @@ def _grid_excerpt(
     return start, excerpt
 
 
+def _historical_row_parser_result(
+    spec: PeriodicProductRevenueSpec,
+    table: _RawTable,
+) -> tuple[bool, str | None]:
+    """Explain whether the strict historical row parser accepts one raw table."""
+
+    try:
+        _row_table_metrics(spec, table)
+    except ValueError as exc:
+        return False, str(exc)
+    return True, None
+
+
 @dataclass(frozen=True)
 class HistoricalProductRevenueRawTableSignature:
     member_name: str
@@ -126,9 +143,17 @@ class HistoricalProductRevenueRawTableSignature:
     unit_markers: tuple[str, ...]
     label_positions: dict[str, tuple[tuple[int, int], ...]]
     revenue_row_positions: tuple[tuple[int, int], ...]
+    historical_row_parser_succeeded: bool
+    historical_row_parser_error: str | None
     grid_row_start: int
     grid_excerpt: tuple[tuple[str, ...], ...]
     source_fact_promoted: bool = False
+
+    def __post_init__(self) -> None:
+        if self.historical_row_parser_succeeded != (self.historical_row_parser_error is None):
+            raise ValueError("Historical raw-table parser diagnostic is inconsistent")
+        if self.source_fact_promoted:
+            raise ValueError("Historical raw-table diagnostics cannot promote source facts")
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -139,7 +164,7 @@ def _signature(
     *,
     member_name: str,
     table_index: int,
-    prefix: tuple[str, ...],
+    table: _RawTable,
     grid: tuple[tuple[str, ...], ...],
 ) -> HistoricalProductRevenueRawTableSignature | None:
     label_positions = {
@@ -156,17 +181,18 @@ def _signature(
     }
     revenue_positions = _positions(grid, _REVENUE_ROW_LABELS)
     product_families = sum(bool(value) for value in label_positions.values())
-    heading = _nearest_revenue_heading(prefix)
+    heading = _nearest_revenue_heading(table.prefix_text)
     if heading is None and not revenue_positions:
         return None
     if product_families < 2 and not (heading is not None and revenue_positions):
         return None
 
-    tokens = _tokens(prefix, grid)
+    tokens = _tokens(table.prefix_text, grid)
     current = _observed_markers(tokens, _CURRENT_MARKERS)
     prior = _observed_markers(tokens, _PRIOR_MARKERS)
     units = _observed_units(tokens)
     connected = heading is not None and "(연결)" in heading.replace(" ", "")
+    row_parser_succeeded, row_parser_error = _historical_row_parser_result(spec, table)
     score = (
         product_families * 3
         + (4 if heading is not None else 0)
@@ -189,7 +215,7 @@ def _signature(
         score=score,
         revenue_heading=heading,
         connected_heading=connected,
-        prefix_tail=_prefix_tail(prefix),
+        prefix_tail=_prefix_tail(table.prefix_text),
         row_count=len(grid),
         column_count=width,
         current_period_markers=current,
@@ -197,6 +223,8 @@ def _signature(
         unit_markers=units,
         label_positions=label_positions,
         revenue_row_positions=revenue_positions,
+        historical_row_parser_succeeded=row_parser_succeeded,
+        historical_row_parser_error=row_parser_error,
         grid_row_start=row_start,
         grid_excerpt=excerpt,
     )
@@ -235,7 +263,7 @@ def build_failure_raw_table_signatures(
                     spec,
                     member_name=safe_name,
                     table_index=table_index,
-                    prefix=table.prefix_text,
+                    table=table,
                     grid=grid,
                 )
                 if item is not None:
