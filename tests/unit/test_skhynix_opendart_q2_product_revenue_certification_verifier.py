@@ -10,8 +10,10 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_capture import (
     capture_periodic_product_revenue_certification,
+)
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     load_periodic_product_revenue_registry,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification_verifier import (
