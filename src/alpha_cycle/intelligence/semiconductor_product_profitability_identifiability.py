@@ -9,8 +9,6 @@ This module is deliberately non-estimating. It records the evidence gap and reje
 convenient revenue-share, residual, and peer-margin substitutions as source facts.
 """
 
-from __future__ import annotations
-
 from dataclasses import dataclass
 
 
@@ -44,6 +42,10 @@ class ProductProfitabilityIdentifiability:
             raise ValueError("Product-profitability assessment requires product blocks")
         if len(set(self.required_product_blocks)) != len(self.required_product_blocks):
             raise ValueError("Product-profitability required blocks must be unique")
+        if len(set(self.directly_disclosed_product_profitability_blocks)) != len(
+            self.directly_disclosed_product_profitability_blocks
+        ):
+            raise ValueError("Disclosed product-profitability blocks must be unique")
         if any(
             item not in self.required_product_blocks
             for item in self.directly_disclosed_product_profitability_blocks
