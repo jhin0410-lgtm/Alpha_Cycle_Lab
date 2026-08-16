@@ -68,7 +68,7 @@ if (Test-Path $currentProductPointer) {
 
 if (-not $currentProductMatchesEvaluationDate) {
     Write-Host (
-        "[1/6] Current 2Q26 direct product revenue is missing/stale for " +
+        "[1/7] Current 2Q26 direct product revenue is missing/stale for " +
         "$EvaluationDate; certifying it first."
     )
     & (Join-Path $PSScriptRoot "report_skhynix_opendart_q2_product_revenue_certification.ps1") `
@@ -78,7 +78,7 @@ if (-not $currentProductMatchesEvaluationDate) {
     }
 }
 else {
-    Write-Host "[1/6] Current 2Q26 direct product-revenue pointer matches evaluation date."
+    Write-Host "[1/7] Current 2Q26 direct product-revenue pointer matches evaluation date."
 }
 
 if (-not (Test-Path $secSupportPointer)) {
@@ -88,7 +88,7 @@ if (-not (Test-Path $secSupportPointer)) {
             "has not been captured yet. Example: AlphaCycleLab your-email@example.com"
         )
     }
-    Write-Host "[2/6] Capturing official SEC historical profitability support."
+    Write-Host "[2/7] Capturing official SEC historical profitability support."
     & $python -m alpha_cycle.sec_product_profitability_support_cli `
         --document-id "skhynix_000660_2026_sec_424b4_product_profitability_support" `
         --observed-date $EvaluationDate
@@ -97,24 +97,24 @@ if (-not (Test-Path $secSupportPointer)) {
     }
 }
 else {
-    Write-Host "[2/6] SEC historical profitability support pointer already exists."
+    Write-Host "[2/7] SEC historical profitability support pointer already exists."
 }
 
-Write-Host "[3/6] Replaying 13-quarter DRAM/NAND cycle-driver bands from archived SEC bytes."
+Write-Host "[3/7] Replaying 13-quarter DRAM/NAND cycle-driver bands from archived SEC bytes."
 & $python -m alpha_cycle.sec_product_cycle_driver_support_cli `
     --evaluation-date $EvaluationDate
 if ($LASTEXITCODE -ne 0) {
     throw "SEC cycle-driver support capture/replay failed."
 }
 
-Write-Host "[4/6] Capturing 10 direct OpenDART company profitability quarters."
+Write-Host "[4/7] Capturing 10 direct OpenDART company profitability quarters."
 & $python -m alpha_cycle.sk_hynix_opendart_quarterly_company_profitability_cli `
     --evaluation-date $EvaluationDate
 if ($LASTEXITCODE -ne 0) {
     throw "OpenDART quarterly company profitability capture failed."
 }
 
-Write-Host "[5/6] Capturing historical direct product-revenue periods."
+Write-Host "[5/7] Capturing historical direct product-revenue periods."
 Write-Host "      Parser-incompatible periods are preserved as failed diagnostics, not inferred."
 & $python -m alpha_cycle.sk_hynix_opendart_historical_product_revenue_panel_cli `
     --evaluation-date $EvaluationDate
@@ -122,14 +122,22 @@ if ($LASTEXITCODE -ne 0) {
     throw "Historical product-revenue batch capture failed before producing a panel."
 }
 
-Write-Host "[6/6] Replaying all evidence and reporting fail-closed calibration readiness."
+Write-Host "[6/7] Replaying all evidence and reporting fail-closed calibration readiness."
 & $python -m alpha_cycle.sk_hynix_product_profitability_calibration_readiness_cli `
     --evaluation-date $EvaluationDate
 if ($LASTEXITCODE -ne 0) {
     throw "Product-profitability calibration readiness replay failed."
 }
 
+Write-Host "[7/7] Probing structural design rank with direction-only issuer semantics."
+Write-Host "      This does not estimate product margins or open the fit gate."
+& $python -m alpha_cycle.sk_hynix_product_profitability_structural_rank_probe_cli `
+    --evaluation-date $EvaluationDate
+if ($LASTEXITCODE -ne 0) {
+    throw "Product-profitability structural rank probe failed before producing a report."
+}
+
 Write-Host "============================================================"
-Write-Host "[OK] Evidence capture/replay completed."
-Write-Host "Numeric product-margin fitting remains disabled unless the readiness audit says otherwise."
+Write-Host "[OK] Evidence capture/replay and structural rank probe completed."
+Write-Host "Numeric product-margin fitting remains disabled; rank readiness is not model readiness."
 Write-Host "============================================================"
