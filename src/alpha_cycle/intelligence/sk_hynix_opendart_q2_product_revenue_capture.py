@@ -9,6 +9,10 @@ from dataclasses import asdict
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_parser_dispatch import (
+    parse_periodic_product_revenue_archive,
+    parse_periodic_product_revenue_text,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     DEFAULT_PERIODIC_PRODUCT_REVENUE_OUTPUT,
     DiscoveredPeriodicProductRevenue,
@@ -16,12 +20,6 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
     PeriodicProductRevenueSpec,
     _payload,
     discover_periodic_product_revenue,
-)
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_expected_replay import (
-    parse_periodic_product_revenue_archive,
-)
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
-    parse_periodic_product_revenue_text,
 )
 from alpha_cycle.providers.opendart import OpenDartReadOnlyClient
 from alpha_cycle.providers.opendart_documents import (
