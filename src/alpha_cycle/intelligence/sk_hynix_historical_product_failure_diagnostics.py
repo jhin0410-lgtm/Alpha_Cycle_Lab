@@ -69,29 +69,68 @@ class HistoricalProductRevenueFailureDiagnostic:
 
 
 @dataclass(frozen=True)
+class HistoricalProductRevenueFailureDiagnosticIntegrityIssue:
+    period_id: str
+    diagnostic_path: str
+    error_type: str
+    error: str
+    source_certification_promoted: bool = False
+    product_profitability_source_fact: bool = False
+    numeric_forecast_enabled: bool = False
+    decision_score_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.period_id or not self.diagnostic_path or not self.error_type or not self.error:
+            raise ValueError("Historical failure diagnostic integrity issue is incomplete")
+        if (
+            self.source_certification_promoted
+            or self.product_profitability_source_fact
+            or self.numeric_forecast_enabled
+            or self.decision_score_enabled
+        ):
+            raise ValueError("Invalid historical failure diagnostic exceeds its trust boundary")
+
+
+@dataclass(frozen=True)
 class HistoricalProductRevenueFailureDiagnosticInventory:
     failed_periods: tuple[str, ...]
     diagnostics: tuple[HistoricalProductRevenueFailureDiagnostic, ...]
+    invalid_diagnostics: tuple[HistoricalProductRevenueFailureDiagnosticIntegrityIssue, ...]
     missing_diagnostic_periods: tuple[str, ...]
     diagnostic_bundle_coverage_complete: bool
+    diagnostic_bundle_integrity_complete: bool
 
     def __post_init__(self) -> None:
         diagnostic_periods = tuple(item.period_id for item in self.diagnostics)
+        invalid_periods = tuple(item.period_id for item in self.invalid_diagnostics)
         if len(set(diagnostic_periods)) != len(diagnostic_periods):
             raise ValueError("Historical failure diagnostic periods must be unique")
-        if not set(diagnostic_periods).issubset(self.failed_periods):
+        if len(set(invalid_periods)) != len(invalid_periods):
+            raise ValueError("Invalid historical failure diagnostic periods must be unique")
+        if set(diagnostic_periods) & set(invalid_periods):
+            raise ValueError("Historical failure diagnostic cannot be both valid and invalid")
+        covered = set(diagnostic_periods) | set(invalid_periods)
+        if not covered.issubset(self.failed_periods):
             raise ValueError("Historical failure diagnostic references a non-failed period")
-        expected_missing = tuple(
-            period for period in self.failed_periods if period not in set(diagnostic_periods)
-        )
+        expected_missing = tuple(period for period in self.failed_periods if period not in covered)
         if self.missing_diagnostic_periods != expected_missing:
             raise ValueError("Historical failure diagnostic missing-period set is inconsistent")
         if self.diagnostic_bundle_coverage_complete != (not expected_missing):
             raise ValueError("Historical failure diagnostic coverage flag is inconsistent")
+        if self.diagnostic_bundle_integrity_complete != (not invalid_periods):
+            raise ValueError("Historical failure diagnostic integrity flag is inconsistent")
 
     @property
     def diagnostic_paths(self) -> dict[str, str]:
         return {item.period_id: item.diagnostic_path for item in self.diagnostics}
+
+    @property
+    def invalid_diagnostic_paths(self) -> dict[str, str]:
+        return {item.period_id: item.diagnostic_path for item in self.invalid_diagnostics}
+
+    @property
+    def invalid_diagnostic_errors(self) -> dict[str, str]:
+        return {item.period_id: item.error for item in self.invalid_diagnostics}
 
 
 def _latest_diagnostic_path(period_output: Path) -> Path | None:
@@ -149,27 +188,42 @@ def inventory_historical_product_revenue_failure_diagnostics(
     *,
     output: str | Path = DEFAULT_HISTORICAL_PRODUCT_REVENUE_OUTPUT,
 ) -> HistoricalProductRevenueFailureDiagnosticInventory:
-    """Verify the newest preserved raw diagnostic bundle for each failed period, if present."""
+    """Verify newest raw diagnostics, quarantining integrity failures as operational issues."""
 
     root = Path(output)
     diagnostics: list[HistoricalProductRevenueFailureDiagnostic] = []
+    invalid: list[HistoricalProductRevenueFailureDiagnosticIntegrityIssue] = []
+    periods_with_bundle: set[str] = set()
     for period_id in failed_periods:
         path = _latest_diagnostic_path(root / period_id)
         if path is None:
             continue
-        diagnostics.append(load_failure_diagnostic(period_id, path))
-    diagnostic_periods = {item.period_id for item in diagnostics}
-    missing = tuple(period for period in failed_periods if period not in diagnostic_periods)
+        periods_with_bundle.add(period_id)
+        try:
+            diagnostics.append(load_failure_diagnostic(period_id, path))
+        except ValueError as exc:
+            invalid.append(
+                HistoricalProductRevenueFailureDiagnosticIntegrityIssue(
+                    period_id=period_id,
+                    diagnostic_path=str(path.resolve()),
+                    error_type=type(exc).__name__,
+                    error=str(exc),
+                )
+            )
+    missing = tuple(period for period in failed_periods if period not in periods_with_bundle)
     return HistoricalProductRevenueFailureDiagnosticInventory(
         failed_periods=failed_periods,
         diagnostics=tuple(diagnostics),
+        invalid_diagnostics=tuple(invalid),
         missing_diagnostic_periods=missing,
         diagnostic_bundle_coverage_complete=not missing,
+        diagnostic_bundle_integrity_complete=not invalid,
     )
 
 
 __all__ = [
     "HistoricalProductRevenueFailureDiagnostic",
+    "HistoricalProductRevenueFailureDiagnosticIntegrityIssue",
     "HistoricalProductRevenueFailureDiagnosticInventory",
     "inventory_historical_product_revenue_failure_diagnostics",
     "load_failure_diagnostic",
