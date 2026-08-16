@@ -29,7 +29,12 @@ def structural_rank_probe_payload(result: StructuralRankProbeResult) -> dict[str
     payload = asdict(result)
     payload["evaluation_date"] = result.evaluation_date.isoformat()
     payload["rows"] = [asdict(item) for item in result.rows]
-    return payload
+    normalized: object = json.loads(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+    if not isinstance(normalized, dict):
+        raise ValueError("Structural rank-probe payload must normalize to an object")
+    return {str(key): value for key, value in cast(dict[object, object], normalized).items()}
 
 
 def capture_structural_rank_probe_report(
