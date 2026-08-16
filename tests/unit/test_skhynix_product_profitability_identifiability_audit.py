@@ -73,7 +73,7 @@ def test_parameterization_and_driver_encoding_still_require_temporal_alignment()
     assert result.reason == "cycle_driver_profitability_temporal_alignment_not_registered"
 
 
-def test_full_rank_two_parameter_aggregate_design_can_be_identifiable_without_direct_anchor() -> None:
+def test_full_rank_two_parameter_aggregate_design_can_be_identifiable() -> None:
     result = audit_skhynix_product_profitability_identifiability(
         _inventory(),
         _holdout(),
