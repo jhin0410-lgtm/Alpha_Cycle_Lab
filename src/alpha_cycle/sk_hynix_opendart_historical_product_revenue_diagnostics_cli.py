@@ -69,9 +69,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": "skhynix_historical_product_revenue_failure_diagnostics",
         "evaluation_date": args.evaluation_date.isoformat(),
         "failed_periods": panel.failed_periods,
-        "verified_diagnostic_periods": tuple(item.period_id for item in inventory.diagnostics),
+        "verified_diagnostic_periods": tuple(
+            item.period_id for item in inventory.diagnostics
+        ),
         "missing_diagnostic_periods": inventory.missing_diagnostic_periods,
-        "invalid_diagnostic_periods": tuple(item.period_id for item in inventory.invalid_diagnostics),
+        "invalid_diagnostic_periods": tuple(
+            item.period_id for item in inventory.invalid_diagnostics
+        ),
         "diagnostic_bundle_coverage_complete": inventory.diagnostic_bundle_coverage_complete,
         "diagnostic_bundle_integrity_complete": inventory.diagnostic_bundle_integrity_complete,
         "signatures": signatures,
