@@ -1,4 +1,4 @@
-"""Live SK hynix product-revenue capture using the filing's actual column layout."""
+"""Live SK hynix product-revenue capture using the filing's certified source structure."""
 
 from __future__ import annotations
 
@@ -17,8 +17,10 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
     _payload,
     discover_periodic_product_revenue,
 )
-from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_expected_replay import (
     parse_periodic_product_revenue_archive,
+)
+from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
     parse_periodic_product_revenue_text,
 )
 from alpha_cycle.providers.opendart import OpenDartReadOnlyClient
@@ -43,7 +45,7 @@ def build_periodic_product_revenue_certification(
     *,
     evaluation_date: date,
 ) -> OpenDartPeriodicProductRevenueCertification:
-    """Certify direct product revenue only when text and source table geometry agree."""
+    """Certify direct product revenue when normalized facts and source structure agree."""
 
     document = archive.evidence
     if document.rcept_no != discovery.rcept_no:
@@ -64,7 +66,7 @@ def build_periodic_product_revenue_certification(
     )
     if structured_metrics != text_metrics:
         raise ValueError(
-            "OpenDART normalized text and structured product table disagree: "
+            "OpenDART normalized text and certified product structure disagree: "
             f"text={text_metrics} structured={structured_metrics}"
         )
     payload = _payload(
