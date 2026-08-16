@@ -45,8 +45,8 @@ def _filing() -> bytes:
     <p>The following table sets forth our revenue by principal product category and the related percentage data for the periods indicated.</p>
     <p>Three Months Ended March 31, 2026 2025 Year Ended December 31, 2025 2024 2023</p>
     <p>DRAM W 40,659 77.3% W 14,037 79.6% W 74,904 77.1% W 44,732 67.6% W 20,769 63.4%</p>
-    <p>NAND Flash 11,574 22.0% 3,229 18.3% 20,690 21.3% 19,274 29.1% 9,653 29.5%</p>
-    <p>Other Products 343 0.7% 373 2.1% 1,552 1.6% 2,187 3.3% 2,344 7.2%</p>
+    <p>NAND Flash 11,574 22.0 3,229 18.3 20,690 21.3 19,274 29.1 9,653 29.5</p>
+    <p>Other Products 343 0.7 373 2.1 1,552 1.6 2,187 3.3 2,344 7.2</p>
     <p>Total W 52,576 100.0% W 17,639 100.0% W 97,147 100.0% W 66,193 100.0% W 32,766 100.0%</p>
     <p>DRAMs are a type of random access memory semiconductor.</p>
     <p>Our gross profit increased by 312.6%, or W 31,577 billion, to W 41,679 billion in the first quarter of 2026 from W 10,102 billion in the first quarter of 2025.</p>
@@ -106,6 +106,12 @@ def test_parser_aligns_five_product_revenue_and_company_profitability_periods() 
     assert abs(fy2023.gross_margin_reconciliation_delta_pp) < 0.11
 
 
+def test_parser_accepts_live_sec_rows_without_repeated_percent_markers() -> None:
+    observations = parse_sec_product_profitability_support_html(_spec(), _filing())
+    assert [item.nand_share_percent for item in observations] == [22.0, 18.3, 21.3, 29.1, 29.5]
+    assert [item.other_share_percent for item in observations] == [0.7, 2.1, 1.6, 3.3, 7.2]
+
+
 def test_evidence_counts_overlapping_q1_2025_and_fy2025_as_non_independent() -> None:
     evidence = build_sec_product_profitability_support_evidence(
         _spec(),
@@ -143,6 +149,12 @@ def test_parser_rejects_product_revenue_reconciliation_break() -> None:
 def test_parser_rejects_rounding_gap_larger_than_one_billion() -> None:
     broken = _filing().replace(b"W 97,147 100.0%", b"W 97,149 100.0%")
     with pytest.raises(ValueError, match="product revenue does not reconcile"):
+        parse_sec_product_profitability_support_html(_spec(), broken)
+
+
+def test_parser_rejects_out_of_range_share_without_percent_marker() -> None:
+    broken = _filing().replace(b"NAND Flash 11,574 22.0", b"NAND Flash 11,574 122.0")
+    with pytest.raises(ValueError, match="invalid amount/share: nand"):
         parse_sec_product_profitability_support_html(_spec(), broken)
 
 
