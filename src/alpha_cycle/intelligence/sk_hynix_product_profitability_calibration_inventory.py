@@ -23,6 +23,9 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification_verifier import (
     load_periodic_product_revenue_certification,
 )
+from alpha_cycle.intelligence.sk_hynix_product_profitability_holdout import (
+    build_skhynix_product_profitability_holdout_plan,
+)
 
 
 def _independent_period_ids(
@@ -49,8 +52,9 @@ def build_skhynix_product_profitability_calibration_inventory(
     product_revenue_pointer: str | Path = DEFAULT_PERIODIC_PRODUCT_REVENUE_POINTER,
     profitability_support_pointer: str | Path,
     cycle_driver_support_pointer: str | Path | None = None,
+    reserve_q1_2026_holdout: bool = False,
 ) -> ProfitabilityCalibrationEvidenceInventory:
-    """Replay verified direct revenue, profitability constraints, and optional cycle drivers."""
+    """Replay verified evidence and optionally reserve Q1 2026 from the fit view."""
 
     revenue = load_periodic_product_revenue_certification(
         product_revenue_pointer,
@@ -96,14 +100,25 @@ def build_skhynix_product_profitability_calibration_inventory(
         cycle_period_ids = tuple(item.period_id for item in cycle.observations)
         evidence_ids = (support.evidence_id, cycle.evidence_id)
 
+    holdout_periods: tuple[str, ...] = ()
+    calibration_period_ids = period_ids
+    if reserve_q1_2026_holdout:
+        holdout = build_skhynix_product_profitability_holdout_plan(support)
+        calibration_period_ids = holdout.calibration_period_ids
+        holdout_periods = holdout.holdout_period_ids
+        if cycle_driver_support_pointer is not None and not set(
+            holdout.holdout_cycle_driver_period_ids
+        ).issubset(cycle_period_ids):
+            raise ValueError("SK hynix holdout cycle-driver period is not available")
+
     return ProfitabilityCalibrationEvidenceInventory(
         direct_product_revenue_evidence_id=revenue.evidence_id,
         direct_product_revenue_ready=True,
         direct_product_profitability_periods=(),
-        historical_product_revenue_periods=period_ids,
-        company_profitability_constraint_periods=period_ids,
+        historical_product_revenue_periods=calibration_period_ids,
+        company_profitability_constraint_periods=calibration_period_ids,
         cycle_driver_history_periods=cycle_period_ids,
-        holdout_periods=(),
+        holdout_periods=holdout_periods,
         verified_evidence_ids=evidence_ids,
         source_evidence_verified=True,
     )
