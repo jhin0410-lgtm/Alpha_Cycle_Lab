@@ -171,8 +171,6 @@ class HistoricalProductRevenuePanelEvidence:
             raise ValueError("Historical product-revenue panel status period sets are inconsistent")
         if self.full_source_coverage_certified != (not failures):
             raise ValueError("Historical product-revenue full-coverage flag is inconsistent")
-        if not successes:
-            raise ValueError("Historical product-revenue panel requires at least one certification")
         if (
             not self.calibration_support_only
             or self.product_profitability_source_fact
