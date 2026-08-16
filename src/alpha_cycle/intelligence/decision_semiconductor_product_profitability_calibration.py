@@ -15,18 +15,21 @@ from alpha_cycle.intelligence.decision_semiconductor_product_profitability_calib
     build_investment_decision_snapshot as _build_profitability_identifiability_snapshot,
 )
 from alpha_cycle.intelligence.semiconductor_product_profitability_calibration import (
-    ProductProfitabilityCalibrationEvidence,
     ProductProfitabilityCalibrationMethod,
     ProductProfitabilityCalibrationReadiness,
+    ProfitabilityCalibrationEvidenceInventory,
     assess_product_profitability_calibration_readiness,
 )
 
 _FIELDS = [
+    "semiconductor_product_profitability_calibration_readiness_status",
     "semiconductor_product_profitability_method_registered",
-    "semiconductor_product_profitability_method_status",
+    "semiconductor_product_profitability_method_documented",
+    "semiconductor_product_profitability_identification_strategy",
     "semiconductor_product_profitability_method_version_frozen",
     "semiconductor_product_profitability_method_evidence_bound",
-    "semiconductor_product_profitability_holdout_validated",
+    "semiconductor_product_profitability_historical_validation_complete",
+    "semiconductor_product_profitability_holdout_validation_complete",
     "semiconductor_product_profitability_prohibited_shortcut_used",
     "semiconductor_product_profitability_calibrated_model_input_ready",
     "semiconductor_product_profitability_missing_requirements",
@@ -36,11 +39,14 @@ _FIELDS = [
 def _defaults(scorecards: pd.DataFrame) -> pd.DataFrame:
     result = scorecards.copy()
     result["ticker"] = result["ticker"].astype("string").str.zfill(6)
+    result["semiconductor_product_profitability_calibration_readiness_status"] = pd.NA
     result["semiconductor_product_profitability_method_registered"] = False
-    result["semiconductor_product_profitability_method_status"] = pd.NA
+    result["semiconductor_product_profitability_method_documented"] = False
+    result["semiconductor_product_profitability_identification_strategy"] = pd.NA
     result["semiconductor_product_profitability_method_version_frozen"] = False
     result["semiconductor_product_profitability_method_evidence_bound"] = False
-    result["semiconductor_product_profitability_holdout_validated"] = False
+    result["semiconductor_product_profitability_historical_validation_complete"] = False
+    result["semiconductor_product_profitability_holdout_validation_complete"] = False
     result["semiconductor_product_profitability_prohibited_shortcut_used"] = False
     result["semiconductor_product_profitability_calibrated_model_input_ready"] = False
     result["semiconductor_product_profitability_missing_requirements"] = pd.NA
@@ -64,11 +70,18 @@ def _attach(
     if not bool(required.all()):
         return result
 
+    result.loc[
+        target,
+        "semiconductor_product_profitability_calibration_readiness_status",
+    ] = readiness.status
     result.loc[target, "semiconductor_product_profitability_method_registered"] = (
         readiness.method_registered
     )
-    result.loc[target, "semiconductor_product_profitability_method_status"] = (
-        readiness.method_status
+    result.loc[target, "semiconductor_product_profitability_method_documented"] = (
+        readiness.method_documented
+    )
+    result.loc[target, "semiconductor_product_profitability_identification_strategy"] = (
+        readiness.identification_strategy
     )
     result.loc[target, "semiconductor_product_profitability_method_version_frozen"] = (
         readiness.method_version_frozen
@@ -76,9 +89,14 @@ def _attach(
     result.loc[target, "semiconductor_product_profitability_method_evidence_bound"] = (
         readiness.method_evidence_bound
     )
-    result.loc[target, "semiconductor_product_profitability_holdout_validated"] = (
-        readiness.holdout_validated
-    )
+    result.loc[
+        target,
+        "semiconductor_product_profitability_historical_validation_complete",
+    ] = readiness.historical_validation_complete
+    result.loc[
+        target,
+        "semiconductor_product_profitability_holdout_validation_complete",
+    ] = readiness.holdout_validation_complete
     result.loc[target, "semiconductor_product_profitability_prohibited_shortcut_used"] = (
         readiness.prohibited_shortcut_used
     )
@@ -122,16 +140,18 @@ def _default_readiness(scorecards: pd.DataFrame) -> ProductProfitabilityCalibrat
         raw_id = row.get("semiconductor_direct_product_revenue_evidence_id", "")
         evidence_id = "" if pd.isna(raw_id) else str(raw_id)
 
-    evidence = ProductProfitabilityCalibrationEvidence(
+    inventory = ProfitabilityCalibrationEvidenceInventory(
         direct_product_revenue_evidence_id=evidence_id,
         direct_product_revenue_ready=revenue_ready,
-        historical_periods=(),
+        direct_product_profitability_periods=(),
+        historical_product_revenue_periods=(),
+        company_profitability_constraint_periods=(),
+        cycle_driver_history_periods=(),
         holdout_periods=(),
-        company_profitability_evidence_ids=(),
-        cycle_driver_evidence_ids=(),
+        verified_evidence_ids=(),
         source_evidence_verified=revenue_source_fact,
     )
-    return assess_product_profitability_calibration_readiness(evidence)
+    return assess_product_profitability_calibration_readiness(inventory)
 
 
 def _report(report: str, readiness: ProductProfitabilityCalibrationReadiness) -> str:
@@ -139,10 +159,13 @@ def _report(report: str, readiness: ProductProfitabilityCalibrationReadiness) ->
     return (
         report.rstrip()
         + "\n\n## SK hynix Product Profitability Calibration Readiness\n\n"
-        + f"- method status: `{readiness.method_status}`\n"
+        + f"- status: `{readiness.status}`\n"
+        + f"- identification strategy: `{readiness.identification_strategy}`\n"
+        + f"- method documented: `{readiness.method_documented}`\n"
         + f"- method version frozen: `{readiness.method_version_frozen}`\n"
         + f"- evidence bound: `{readiness.method_evidence_bound}`\n"
-        + f"- holdout validated: `{readiness.holdout_validated}`\n"
+        + f"- historical validation complete: `{readiness.historical_validation_complete}`\n"
+        + f"- holdout validation complete: `{readiness.holdout_validation_complete}`\n"
         + f"- prohibited shortcut used: `{readiness.prohibited_shortcut_used}`\n"
         + f"- calibrated profitability model input ready: `{readiness.model_input_ready}`\n"
         + f"- missing requirements: `{missing}`\n"
@@ -169,7 +192,7 @@ def build_investment_decision_snapshot(
     semiconductor_accounting_identity_pointer: str | Path | None = None,
     semiconductor_product_revenue_pointer: str | Path | None = None,
     skhynix_ir_assignment_pointer: str | Path | None = None,
-    profitability_calibration_evidence: ProductProfitabilityCalibrationEvidence | None = None,
+    profitability_calibration_inventory: ProfitabilityCalibrationEvidenceInventory | None = None,
     profitability_calibration_method: ProductProfitabilityCalibrationMethod | None = None,
     benchmark: str | None = None,
     exposures: Mapping[str, CompanyExposure] | None = None,
@@ -204,9 +227,9 @@ def build_investment_decision_snapshot(
     )
     readiness = (
         _default_readiness(snapshot.scorecards)
-        if profitability_calibration_evidence is None
+        if profitability_calibration_inventory is None
         else assess_product_profitability_calibration_readiness(
-            profitability_calibration_evidence,
+            profitability_calibration_inventory,
             profitability_calibration_method,
         )
     )
@@ -214,6 +237,7 @@ def build_investment_decision_snapshot(
     records = _sync_records(snapshot.decision_records, scorecards)
     warnings = list(snapshot.warnings)
     if readiness.direct_product_revenue_ready:
+        warnings.append(f"semiconductor_product_profitability_calibration:{readiness.status}")
         warnings.extend(
             f"semiconductor_product_profitability_missing:{item}"
             for item in readiness.missing_requirements
