@@ -20,7 +20,7 @@ def _write_failure_bundle(root: Path, period: str, *, name: str = "20260816T0102
     archive_path = directory / "opendart_document.zip"
     text_path = directory / "normalized_document.txt"
     archive_path.write_bytes(archive)
-    text_path.write_text(text, encoding="utf-8")
+    text_path.write_bytes(text.encode("utf-8"))
     diagnostic_path = directory / "diagnostic.json"
     diagnostic = {
         "status": "skhynix_opendart_q2_product_revenue_parse_failed",
@@ -58,8 +58,10 @@ def test_inventory_verifies_latest_preserved_failure_bundle_and_exposes_path(tmp
     assert diagnostic.source_certification_promoted is False
     assert diagnostic.product_profitability_source_fact is False
     assert result.diagnostic_paths == {"2024Q1": str(latest.resolve())}
+    assert result.invalid_diagnostics == ()
     assert result.missing_diagnostic_periods == ()
     assert result.diagnostic_bundle_coverage_complete is True
+    assert result.diagnostic_bundle_integrity_complete is True
 
 
 def test_inventory_reports_discovery_failure_without_raw_bundle_as_missing(tmp_path) -> None:
@@ -71,6 +73,29 @@ def test_inventory_reports_discovery_failure_without_raw_bundle_as_missing(tmp_p
     assert result.diagnostic_paths == {"2023Q2": str(present.resolve())}
     assert result.missing_diagnostic_periods == ("2025Q3",)
     assert result.diagnostic_bundle_coverage_complete is False
+    assert result.diagnostic_bundle_integrity_complete is True
+
+
+def test_inventory_quarantines_tampered_text_without_raising(tmp_path) -> None:
+    diagnostic_path = _write_failure_bundle(tmp_path, "2023Q1")
+    text_path = diagnostic_path.parent / "normalized_document.txt"
+    text_path.write_bytes(b"tampered\r\nnormalized\r\ntext")
+
+    result = inventory_historical_product_revenue_failure_diagnostics(
+        ("2023Q1",),
+        output=tmp_path,
+    )
+
+    assert result.diagnostics == ()
+    assert len(result.invalid_diagnostics) == 1
+    issue = result.invalid_diagnostics[0]
+    assert issue.period_id == "2023Q1"
+    assert Path(issue.diagnostic_path) == diagnostic_path.resolve()
+    assert "normalized text hash mismatch" in issue.error
+    assert result.invalid_diagnostic_paths == {"2023Q1": str(diagnostic_path.resolve())}
+    assert result.missing_diagnostic_periods == ()
+    assert result.diagnostic_bundle_coverage_complete is True
+    assert result.diagnostic_bundle_integrity_complete is False
 
 
 def test_failure_diagnostic_rejects_tampered_archive(tmp_path) -> None:
@@ -84,6 +109,6 @@ def test_failure_diagnostic_rejects_tampered_archive(tmp_path) -> None:
 def test_failure_diagnostic_rejects_tampered_normalized_text(tmp_path) -> None:
     diagnostic_path = _write_failure_bundle(tmp_path, "2025Q1")
     text_path = diagnostic_path.parent / "normalized_document.txt"
-    text_path.write_text("tampered", encoding="utf-8")
+    text_path.write_bytes(b"tampered")
     with pytest.raises(ValueError, match="normalized text hash mismatch"):
         load_failure_diagnostic("2025Q1", diagnostic_path)
