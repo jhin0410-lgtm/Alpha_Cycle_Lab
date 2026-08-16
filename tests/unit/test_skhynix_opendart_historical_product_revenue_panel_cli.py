@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from alpha_cycle.sk_hynix_opendart_historical_product_revenue_panel_cli import main
 
 
-def test_cli_exposes_verified_failure_diagnostic_paths(monkeypatch, tmp_path, capsys) -> None:
+def test_cli_exposes_verified_and_invalid_failure_diagnostic_paths(
+    monkeypatch, tmp_path, capsys
+) -> None:
     import alpha_cycle.sk_hynix_opendart_historical_product_revenue_panel_cli as module
 
     monkeypatch.setattr(
@@ -25,7 +27,7 @@ def test_cli_exposes_verified_failure_diagnostic_paths(monkeypatch, tmp_path, ca
         lambda *args, **kwargs: SimpleNamespace(
             evidence_id="a" * 64,
             successful_periods=("2023Q1",),
-            failed_periods=("2024Q2", "2025Q3"),
+            failed_periods=("2024Q2", "2025Q3", "2023Q2"),
             full_source_coverage_certified=False,
             product_profitability_source_fact=False,
             numeric_forecast_enabled=False,
@@ -37,8 +39,12 @@ def test_cli_exposes_verified_failure_diagnostic_paths(monkeypatch, tmp_path, ca
         lambda *args, **kwargs: SimpleNamespace(
             diagnostics=(object(),),
             diagnostic_paths={"2024Q2": "/tmp/2024Q2/diagnostic.json"},
+            invalid_diagnostics=(object(),),
+            invalid_diagnostic_paths={"2023Q2": "/tmp/2023Q2/diagnostic.json"},
+            invalid_diagnostic_errors={"2023Q2": "normalized text hash mismatch"},
             missing_diagnostic_periods=("2025Q3",),
             diagnostic_bundle_coverage_complete=False,
+            diagnostic_bundle_integrity_complete=False,
         ),
     )
     exit_code = main(
@@ -55,6 +61,14 @@ def test_cli_exposes_verified_failure_diagnostic_paths(monkeypatch, tmp_path, ca
     assert payload["failed_diagnostic_paths"] == {
         "2024Q2": "/tmp/2024Q2/diagnostic.json"
     }
+    assert payload["failed_diagnostic_invalid_count"] == 1
+    assert payload["failed_diagnostic_invalid_paths"] == {
+        "2023Q2": "/tmp/2023Q2/diagnostic.json"
+    }
+    assert payload["failed_diagnostic_invalid_errors"] == {
+        "2023Q2": "normalized text hash mismatch"
+    }
     assert payload["failed_diagnostic_missing_periods"] == ["2025Q3"]
     assert payload["failed_diagnostic_bundle_coverage_complete"] is False
+    assert payload["failed_diagnostic_bundle_integrity_complete"] is False
     assert payload["numeric_forecast_enabled"] is False
