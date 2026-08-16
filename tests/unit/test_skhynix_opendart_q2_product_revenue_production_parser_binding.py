@@ -30,5 +30,8 @@ def test_capture_and_verifier_bind_directly_to_production_parser_dispatch() -> N
         verifier.parse_periodic_product_revenue_text
         is dispatch.parse_periodic_product_revenue_text
     )
-    assert dispatch.parse_periodic_product_revenue_archive is not current_archive_parser
+    assert (
+        dispatch.parse_periodic_product_revenue_archive
+        is not current_archive_parser
+    )
     assert current_archive_parser is not legacy_layout_archive_parser
