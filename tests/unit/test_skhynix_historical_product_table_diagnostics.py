@@ -109,6 +109,10 @@ def test_raw_table_diagnostics_ignore_market_share_and_capture_verbose_revenue_n
     assert signature.label_positions["nand_and_solutions"] == ((3, 0),)
     assert signature.label_positions["other_products_services"] == ((4, 0),)
     assert signature.label_positions["reported_company_revenue"] == ((5, 0),)
+    assert signature.historical_row_parser_succeeded is False
+    assert signature.historical_row_parser_error == (
+        "Historical product row table is outside consolidated revenue note"
+    )
     assert any("DRAM" in row for row in signature.grid_excerpt)
     assert signature.source_fact_promoted is False
 
@@ -138,4 +142,6 @@ def test_raw_table_diagnostics_capture_split_connected_header_and_revenue_row(
     assert all(item.connected_heading for item in signatures)
     assert any(item.label_positions["dram_total"] for item in signatures)
     assert any(item.revenue_row_positions for item in signatures)
+    assert all(not item.historical_row_parser_succeeded for item in signatures)
+    assert all(item.historical_row_parser_error for item in signatures)
     assert all(item.source_fact_promoted is False for item in signatures)
