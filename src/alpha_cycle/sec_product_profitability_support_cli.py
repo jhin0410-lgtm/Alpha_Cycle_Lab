@@ -7,6 +7,9 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+from alpha_cycle.intelligence.sec_product_profitability_failure_diagnostic import (
+    preserve_sec_product_profitability_failure,
+)
 from alpha_cycle.intelligence.sec_product_profitability_support import (
     DEFAULT_SEC_PRODUCT_PROFITABILITY_OUTPUT,
     DEFAULT_SEC_PRODUCT_PROFITABILITY_REGISTRY,
@@ -45,13 +48,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     spec = specs.get(document_id)
     if spec is None:
         raise SystemExit(f"SEC product-profitability document is not registered: {document_id}")
-    result = capture_sec_product_profitability_support(
-        spec,
-        observed_date=args.observed_date,
-        user_agent=user_agent,
-        output=Path(args.output),
-        timeout_seconds=args.timeout_seconds,
-    )
+    try:
+        result = capture_sec_product_profitability_support(
+            spec,
+            observed_date=args.observed_date,
+            user_agent=user_agent,
+            output=Path(args.output),
+            timeout_seconds=args.timeout_seconds,
+        )
+    except Exception as exc:
+        try:
+            diagnostic_path = preserve_sec_product_profitability_failure(
+                spec,
+                observed_date=args.observed_date,
+                user_agent=user_agent,
+                original_error=exc,
+                output=Path(args.output),
+                timeout_seconds=args.timeout_seconds,
+            )
+        except Exception as diagnostic_exc:
+            raise RuntimeError(
+                "SEC product-profitability capture failed and diagnostic preservation also failed: "
+                f"capture={exc}; diagnostic={diagnostic_exc}"
+            ) from exc
+        raise RuntimeError(
+            f"SEC product-profitability capture failed: {exc}; "
+            f"raw diagnostic preserved at {diagnostic_path}"
+        ) from exc
+
     pointer = Path(args.output) / "latest_sec_product_profitability_support.json"
     verified = load_sec_product_profitability_support_evidence(
         pointer,
