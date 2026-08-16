@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 from datetime import UTC, date, datetime
 
@@ -12,6 +13,8 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_structural_rank_pro
     capture_structural_rank_probe_report,
     load_structural_rank_probe_report,
 )
+
+_MODULE = "alpha_cycle.intelligence.sk_hynix_product_profitability_structural_rank_probe_report"
 
 
 def _result() -> StructuralRankProbeResult:
@@ -42,12 +45,19 @@ def _result() -> StructuralRankProbeResult:
     )
 
 
+def _patch_loader(monkeypatch) -> None:
+    module = importlib.import_module(_MODULE)
+    monkeypatch.setattr(
+        module,
+        "load_structural_rank_probe_from_pointers",
+        lambda **kwargs: _result(),
+    )
+
+
 def test_capture_and_offline_replay_preserve_fail_closed_zero_row_probe(
     monkeypatch, tmp_path
 ) -> None:
-    import alpha_cycle.intelligence.sk_hynix_product_profitability_structural_rank_probe_report as module
-
-    monkeypatch.setattr(module, "load_structural_rank_probe_from_pointers", lambda **kwargs: _result())
+    _patch_loader(monkeypatch)
     captured = capture_structural_rank_probe_report(
         evaluation_date=date(2026, 8, 16),
         method_path=tmp_path / "method.yaml",
@@ -69,9 +79,7 @@ def test_capture_and_offline_replay_preserve_fail_closed_zero_row_probe(
 
 
 def test_offline_replay_rejects_tampered_rank_report(monkeypatch, tmp_path) -> None:
-    import alpha_cycle.intelligence.sk_hynix_product_profitability_structural_rank_probe_report as module
-
-    monkeypatch.setattr(module, "load_structural_rank_probe_from_pointers", lambda **kwargs: _result())
+    _patch_loader(monkeypatch)
     captured = capture_structural_rank_probe_report(
         evaluation_date=date(2026, 8, 16),
         method_path=tmp_path / "method.yaml",
