@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alpha_cycle.intelligence.semiconductor_product_profitability_calibration import (
     ProfitabilityCalibrationEvidenceInventory,
 )
@@ -15,12 +17,18 @@ def _inventory(
     *,
     direct_anchor_periods: tuple[str, ...] = (),
     extra_company_periods: tuple[str, ...] = (),
+    extra_product_periods: tuple[str, ...] = (),
 ):
     return ProfitabilityCalibrationEvidenceInventory(
         direct_product_revenue_evidence_id="d" * 64,
         direct_product_revenue_ready=True,
         direct_product_profitability_periods=direct_anchor_periods,
-        historical_product_revenue_periods=("fy2023", "fy2024", "q1_2025"),
+        historical_product_revenue_periods=(
+            "fy2023",
+            "fy2024",
+            "q1_2025",
+            *extra_product_periods,
+        ),
         company_profitability_constraint_periods=(
             "fy2023",
             "fy2024",
@@ -78,6 +86,49 @@ def test_unmatched_company_profitability_periods_do_not_create_structural_equati
     assert result.calibration_product_revenue_periods == 3
     assert result.aligned_company_product_constraint_periods == 3
     assert result.independent_training_constraint_count == 3
+
+
+def test_new_matched_historical_quarters_increase_period_aligned_equations() -> None:
+    result = audit_skhynix_product_profitability_identifiability(
+        _inventory(
+            extra_company_periods=("2023Q1", "2023Q2", "2024Q1"),
+            extra_product_periods=("2023Q1", "2023Q2"),
+        ),
+        _holdout(),
+    )
+    assert result.calibration_company_profitability_constraints == 6
+    assert result.calibration_product_revenue_periods == 5
+    assert result.aligned_company_product_constraint_periods == 5
+    assert result.independent_training_constraint_count == 5
+
+
+def test_q1_aliases_are_canonicalized_and_never_double_counted() -> None:
+    result = audit_skhynix_product_profitability_identifiability(
+        _inventory(
+            extra_company_periods=("2025Q1",),
+            extra_product_periods=("2025Q1",),
+        ),
+        _holdout(),
+    )
+    assert result.calibration_company_profitability_constraints == 3
+    assert result.calibration_product_revenue_periods == 3
+    assert result.aligned_company_product_constraint_periods == 3
+
+
+def test_holdout_alias_in_product_fit_view_is_rejected() -> None:
+    with pytest.raises(ValueError, match="product-revenue fit view contains holdout"):
+        audit_skhynix_product_profitability_identifiability(
+            _inventory(extra_product_periods=("2026Q1",)),
+            _holdout(),
+        )
+
+
+def test_holdout_alias_in_company_fit_view_is_rejected() -> None:
+    with pytest.raises(ValueError, match="company fit view contains holdout"):
+        audit_skhynix_product_profitability_identifiability(
+            _inventory(extra_company_periods=("2026Q1",)),
+            _holdout(),
+        )
 
 
 def test_parameterization_and_driver_encoding_still_require_temporal_alignment() -> None:
