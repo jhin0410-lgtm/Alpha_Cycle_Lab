@@ -33,7 +33,8 @@ def test_launcher_reuses_completed_cycle_driver_and_company_profitability_steps(
 
 def test_launcher_recaptures_historical_product_panel_after_exact_byte_fix() -> None:
     text = _script()
-    assert "[5/7] Recapturing historical direct product-revenue periods with exact text bytes." in text
+    message = "[5/7] Recapturing historical direct product-revenue periods with exact text bytes."
+    assert message in text
     step5 = text.index("[5/7]")
     module = text.index("alpha_cycle.sk_hynix_opendart_historical_product_revenue_panel_cli")
     assert module > step5
