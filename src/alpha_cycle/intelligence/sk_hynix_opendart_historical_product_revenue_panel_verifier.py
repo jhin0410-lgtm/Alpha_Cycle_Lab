@@ -106,7 +106,8 @@ def load_historical_product_revenue_panel_evidence(
         raise ValueError("Historical product-revenue successful period set does not reproduce")
     if tuple(pointer.get("failed_periods", ())) != reconstructed.failed_periods:
         raise ValueError("Historical product-revenue failed period set does not reproduce")
-    if pointer.get("full_source_coverage_certified") is not reconstructed.full_source_coverage_certified:
+    coverage = pointer.get("full_source_coverage_certified")
+    if coverage is not reconstructed.full_source_coverage_certified:
         raise ValueError("Historical product-revenue full-coverage flag does not reproduce")
     for field, expected in (
         ("calibration_support_only", True),
