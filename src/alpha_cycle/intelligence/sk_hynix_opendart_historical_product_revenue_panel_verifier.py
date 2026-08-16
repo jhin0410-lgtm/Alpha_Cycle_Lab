@@ -29,6 +29,13 @@ def _object(path: Path, label: str) -> dict[str, object]:
     return {str(key): value for key, value in cast(dict[object, object], raw).items()}
 
 
+def _period_array(pointer: dict[str, object], field: str) -> tuple[str, ...]:
+    raw = pointer.get(field)
+    if not isinstance(raw, list):
+        raise ValueError(f"Historical product-revenue {field} must be an array")
+    return tuple(str(item) for item in raw)
+
+
 def _entry(raw: object) -> HistoricalProductRevenuePanelEntry:
     if not isinstance(raw, dict):
         raise ValueError("Historical product-revenue panel entry must be an object")
@@ -102,9 +109,9 @@ def load_historical_product_revenue_panel_evidence(
     )
     if reconstructed.evidence_id != str(pointer.get("evidence_id", "")):
         raise ValueError("Historical product-revenue panel evidence_id does not reproduce")
-    if tuple(pointer.get("successful_periods", ())) != reconstructed.successful_periods:
+    if _period_array(pointer, "successful_periods") != reconstructed.successful_periods:
         raise ValueError("Historical product-revenue successful period set does not reproduce")
-    if tuple(pointer.get("failed_periods", ())) != reconstructed.failed_periods:
+    if _period_array(pointer, "failed_periods") != reconstructed.failed_periods:
         raise ValueError("Historical product-revenue failed period set does not reproduce")
     coverage = pointer.get("full_source_coverage_certified")
     if coverage is not reconstructed.full_source_coverage_certified:
