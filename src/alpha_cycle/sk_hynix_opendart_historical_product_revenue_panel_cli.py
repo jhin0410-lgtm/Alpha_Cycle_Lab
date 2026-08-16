@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
-from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_failure_diagnostics import (
+from alpha_cycle.intelligence.sk_hynix_historical_product_failure_diagnostics import (
     inventory_historical_product_revenue_failure_diagnostics,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel import (
