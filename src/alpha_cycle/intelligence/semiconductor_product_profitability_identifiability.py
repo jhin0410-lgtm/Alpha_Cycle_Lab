@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 _ALLOWED_STATUS = {
     "direct_product_profitability_source_facts_complete",
     "direct_product_profitability_source_facts_missing",
