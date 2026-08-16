@@ -88,7 +88,9 @@ def test_verifier_replays_each_certified_period_chain(monkeypatch, tmp_path) -> 
     )
     pointer_path, expected = _write_panel_pointer(tmp_path, entries)
 
-    import alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel_verifier as panel_verifier
+    from alpha_cycle.intelligence import (
+        sk_hynix_opendart_historical_product_revenue_panel_verifier as panel_verifier,
+    )
 
     monkeypatch.setattr(
         panel_verifier,
