@@ -13,6 +13,7 @@ from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_parser_dispatch 
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     PeriodicProductRevenueSpec,
+    ProductRevenueMetrics,
 )
 
 
@@ -82,13 +83,12 @@ def _loose_q1_only_text() -> str:
     )
 
 
-def _amounts(metrics: object) -> tuple[float, float, float, float]:
-    item = metrics
+def _amounts(metrics: ProductRevenueMetrics) -> tuple[float, float, float, float]:
     return (
-        item.dram_total,  # type: ignore[attr-defined]
-        item.nand_and_solutions,  # type: ignore[attr-defined]
-        item.other_products_services,  # type: ignore[attr-defined]
-        item.reported_company_revenue,  # type: ignore[attr-defined]
+        metrics.dram_total,
+        metrics.nand_and_solutions,
+        metrics.other_products_services,
+        metrics.reported_company_revenue,
     )
 
 
