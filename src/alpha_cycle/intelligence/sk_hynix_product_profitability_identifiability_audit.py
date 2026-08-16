@@ -1,10 +1,10 @@
 """Structural identifiability audit for latent SK hynix DRAM/NAND profitability.
 
-This audit runs before any parameter estimation. Aggregate company gross-profit
-constraints and textual product-cycle-driver bands are useful calibration support, but
-they do not by themselves identify two separately varying product margins. A method may
-only proceed after an explicit low-dimensional parameterization and a numeric/interval
-encoding contract are registered and independently reviewed.
+This audit runs before parameter estimation. Aggregate company gross-profit constraints
+and textual product-cycle-driver bands are useful support, but they do not by themselves
+identify separately varying product margins. The gate requires an explicit low-dimensional
+parameterization, a driver-encoding contract, temporal alignment, sufficient independent
+training constraints, and a certified design rank before fitting is allowed.
 """
 
 from __future__ import annotations
@@ -28,8 +28,12 @@ class ProductProfitabilityIdentifiabilityAudit:
     textual_cycle_driver_periods: int
     numeric_cycle_driver_periods: int
     holdout_periods: int
+    registered_parameter_count: int
+    independent_training_constraint_count: int
     parameterization_registered: bool
     driver_encoding_method_registered: bool
+    temporal_alignment_method_registered: bool
+    design_rank_certified: bool
     structurally_identifiable: bool
     fit_attempt_allowed: bool
     holdout_evaluation_allowed: bool
@@ -50,18 +54,26 @@ class ProductProfitabilityIdentifiabilityAudit:
             self.textual_cycle_driver_periods,
             self.numeric_cycle_driver_periods,
             self.holdout_periods,
+            self.registered_parameter_count,
+            self.independent_training_constraint_count,
         )
         if any(value < 0 for value in counts):
             raise ValueError("SK hynix profitability audit counts cannot be negative")
         if self.numeric_cycle_driver_periods > self.textual_cycle_driver_periods:
             raise ValueError("Numeric cycle-driver coverage cannot exceed source-text coverage")
-        ready = (
+        if self.design_rank_certified and self.registered_parameter_count <= 0:
+            raise ValueError("Certified profitability design rank requires registered parameters")
+        prerequisites = (
             self.parameterization_registered
             and self.driver_encoding_method_registered
-            and self.direct_product_profitability_anchor_periods > 0
+            and self.temporal_alignment_method_registered
+            and self.numeric_cycle_driver_periods > 0
+            and self.registered_parameter_count > 0
+            and self.independent_training_constraint_count >= self.registered_parameter_count
+            and self.design_rank_certified
         )
-        if self.structurally_identifiable and not ready:
-            raise ValueError("Profitability audit cannot claim identification without anchors/methods")
+        if self.structurally_identifiable != prerequisites:
+            raise ValueError("Profitability audit structural-identification result is inconsistent")
         if self.fit_attempt_allowed != self.structurally_identifiable:
             raise ValueError("Profitability audit fit gate is inconsistent")
         if self.holdout_evaluation_allowed:
@@ -81,10 +93,13 @@ def audit_skhynix_product_profitability_identifiability(
     holdout: ProductProfitabilityRetrospectiveHoldoutPlan,
     *,
     parameterization_registered: bool = False,
+    registered_parameter_count: int = 0,
     driver_encoding_method_registered: bool = False,
     numeric_cycle_driver_periods: int = 0,
+    temporal_alignment_method_registered: bool = False,
+    design_rank_certified: bool = False,
 ) -> ProductProfitabilityIdentifiabilityAudit:
-    """Fail closed unless the missing identification contracts are explicitly supplied."""
+    """Fail closed until a reproducible aggregate structural design is identified."""
 
     if holdout.source_profitability_support_evidence_id not in inventory.verified_evidence_ids:
         raise ValueError("Profitability holdout is not bound to the calibration inventory")
@@ -97,19 +112,27 @@ def audit_skhynix_product_profitability_identifiability(
     company_constraints = len(inventory.company_profitability_constraint_periods)
     product_revenue_periods = len(inventory.historical_product_revenue_periods)
     textual_drivers = len(inventory.cycle_driver_history_periods)
+    independent_constraints = company_constraints + direct_anchors
 
     identifiable = bool(
-        direct_anchors > 0
-        and parameterization_registered
+        parameterization_registered
         and driver_encoding_method_registered
+        and temporal_alignment_method_registered
         and numeric_cycle_driver_periods > 0
+        and registered_parameter_count > 0
+        and independent_constraints >= registered_parameter_count
+        and design_rank_certified
     )
-    if direct_anchors == 0:
-        reason = "no_direct_product_profitability_anchors"
-    elif not parameterization_registered:
+    if not parameterization_registered or registered_parameter_count <= 0:
         reason = "structural_parameterization_not_registered"
     elif not driver_encoding_method_registered or numeric_cycle_driver_periods == 0:
         reason = "cycle_driver_numeric_encoding_not_registered"
+    elif not temporal_alignment_method_registered:
+        reason = "cycle_driver_profitability_temporal_alignment_not_registered"
+    elif independent_constraints < registered_parameter_count:
+        reason = "insufficient_independent_training_constraints"
+    elif not design_rank_certified:
+        reason = "structural_design_rank_not_certified"
     else:
         reason = "pre_fit_identification_contract_satisfied"
 
@@ -121,8 +144,12 @@ def audit_skhynix_product_profitability_identifiability(
         textual_cycle_driver_periods=textual_drivers,
         numeric_cycle_driver_periods=numeric_cycle_driver_periods,
         holdout_periods=len(inventory.holdout_periods),
+        registered_parameter_count=registered_parameter_count,
+        independent_training_constraint_count=independent_constraints,
         parameterization_registered=parameterization_registered,
         driver_encoding_method_registered=driver_encoding_method_registered,
+        temporal_alignment_method_registered=temporal_alignment_method_registered,
+        design_rank_certified=design_rank_certified,
         structurally_identifiable=identifiable,
         fit_attempt_allowed=identifiable,
         holdout_evaluation_allowed=False,
