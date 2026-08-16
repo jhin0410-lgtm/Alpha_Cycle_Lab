@@ -32,17 +32,17 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import
     parse_periodic_product_revenue_text,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_semantic_replay import (
+    _PRODUCT_KEYS,
+    _REVENUE_LABELS,
+    _TEXT_SUFFIXES,
     _accepted,
     _grid,
     _header_candidates,
     _header_product_order,
     _normalized,
-    _PRODUCT_KEYS,
-    _REVENUE_LABELS,
     _SourceTokenExtractor,
     _structured_unit,
     _TableExtractor,
-    _TEXT_SUFFIXES,
 )
 from alpha_cycle.providers.opendart_documents import (
     _decode_text,
