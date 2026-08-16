@@ -17,6 +17,9 @@ from alpha_cycle.intelligence.sec_product_profitability_support_verifier import 
 from alpha_cycle.intelligence.semiconductor_product_profitability_calibration import (
     ProfitabilityCalibrationEvidenceInventory,
 )
+from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel_verifier import (
+    load_historical_product_revenue_panel_evidence,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     DEFAULT_PERIODIC_PRODUCT_REVENUE_POINTER,
 )
@@ -56,6 +59,7 @@ def build_skhynix_product_profitability_calibration_inventory(
     profitability_support_pointer: str | Path,
     cycle_driver_support_pointer: str | Path | None = None,
     quarterly_company_profitability_pointer: str | Path | None = None,
+    historical_product_revenue_pointer: str | Path | None = None,
     reserve_q1_2026_holdout: bool = False,
 ) -> ProfitabilityCalibrationEvidenceInventory:
     """Replay verified evidence and optionally reserve Q1 2026 from the fit view."""
@@ -141,11 +145,33 @@ def build_skhynix_product_profitability_calibration_inventory(
         )
         evidence_ids.append(quarterly.evidence_id)
 
+    product_period_ids: tuple[str, ...] = calibration_period_ids
+    if historical_product_revenue_pointer is not None:
+        historical = load_historical_product_revenue_panel_evidence(
+            historical_product_revenue_pointer,
+            evaluation_date=evaluation_date,
+        )
+        if historical.ticker != "000660":
+            raise ValueError("SK hynix historical product revenue has another ticker")
+        if not historical.calibration_support_only or historical.product_profitability_source_fact:
+            raise ValueError("SK hynix historical product revenue trust boundary is invalid")
+        historical_periods = historical.successful_periods
+        if reserve_q1_2026_holdout:
+            historical_periods = tuple(
+                period for period in historical_periods if period != "2026Q1"
+            )
+            if "2026Q1" in historical_periods:
+                raise ValueError("SK hynix Q1 2026 historical product revenue leaked into fit view")
+        product_period_ids = tuple(
+            dict.fromkeys((*calibration_period_ids, *historical_periods))
+        )
+        evidence_ids.append(historical.evidence_id)
+
     return ProfitabilityCalibrationEvidenceInventory(
         direct_product_revenue_evidence_id=revenue.evidence_id,
         direct_product_revenue_ready=True,
         direct_product_profitability_periods=(),
-        historical_product_revenue_periods=calibration_period_ids,
+        historical_product_revenue_periods=product_period_ids,
         company_profitability_constraint_periods=company_period_ids,
         cycle_driver_history_periods=cycle_period_ids,
         holdout_periods=holdout_periods,
