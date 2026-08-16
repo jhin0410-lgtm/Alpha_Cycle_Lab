@@ -103,7 +103,9 @@ def build_skhynix_product_profitability_holdout_plan(
         raise ValueError("SK hynix profitability holdout received another ticker")
     independent = _independent_non_overlapping_periods(support)
     if len(independent) != support.independent_non_overlapping_period_count:
-        raise ValueError("SK hynix profitability support independent-period count does not reproduce")
+        raise ValueError(
+            "SK hynix profitability support independent-period count does not reproduce"
+        )
     if _HOLDOUT_PERIOD_ID not in independent:
         raise ValueError("SK hynix profitability holdout period is unavailable")
     calibration_periods = tuple(
