@@ -80,11 +80,15 @@ def test_verified_source_artifacts_build_four_period_inventory(monkeypatch, tmp_
     )
     import alpha_cycle.intelligence.sk_hynix_product_profitability_calibration_inventory as module
 
-    monkeypatch.setattr(module, "load_periodic_product_revenue_certification", lambda *a, **k: revenue)
+    monkeypatch.setattr(
+        module,
+        "load_periodic_product_revenue_certification",
+        lambda *args, **kwargs: revenue,
+    )
     monkeypatch.setattr(
         module,
         "load_sec_product_profitability_support_evidence",
-        lambda *a, **k: support,
+        lambda *args, **kwargs: support,
     )
     pointer = tmp_path / "unused.json"
     result = build_skhynix_product_profitability_calibration_inventory(
@@ -96,7 +100,10 @@ def test_verified_source_artifacts_build_four_period_inventory(monkeypatch, tmp_
     assert result.direct_product_revenue_evidence_id == "r" * 64
     assert result.direct_product_profitability_periods == ()
     assert len(result.historical_product_revenue_periods) == 4
-    assert result.historical_product_revenue_periods == result.company_profitability_constraint_periods
+    assert (
+        result.historical_product_revenue_periods
+        == result.company_profitability_constraint_periods
+    )
     assert result.cycle_driver_history_periods == ()
     assert result.holdout_periods == ()
     assert result.verified_evidence_ids == ("s" * 64,)
