@@ -76,6 +76,24 @@ def test_partial_panel_preserves_failed_periods_without_promoting_them() -> None
     assert evidence.decision_score_enabled is False
 
 
+def test_all_failed_panel_still_produces_a_complete_diagnostic_evidence_set() -> None:
+    specs = load_historical_product_revenue_specs()
+    entries = tuple(
+        _failed(historical_period_id(spec), spec.document_id)
+        for spec in specs
+    )
+    evidence = build_historical_product_revenue_panel_evidence(
+        evaluation_date=date(2026, 8, 16),
+        entries=entries,
+    )
+    assert evidence.successful_periods == ()
+    assert len(evidence.failed_periods) == 10
+    assert evidence.full_source_coverage_certified is False
+    assert evidence.calibration_support_only is True
+    assert evidence.product_profitability_source_fact is False
+    assert evidence.numeric_forecast_enabled is False
+
+
 def test_batch_capture_continues_after_one_period_failure(monkeypatch, tmp_path) -> None:
     specs = load_historical_product_revenue_specs()
     failing_period = "2024Q2"
