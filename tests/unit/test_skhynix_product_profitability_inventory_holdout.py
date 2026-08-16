@@ -8,13 +8,17 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_calibration_invento
 )
 
 
-def test_inventory_reserves_q1_2026_and_keeps_cycle_features_available(monkeypatch, tmp_path) -> None:
+def _period(period_id: str, start: date, end: date):
+    return SimpleNamespace(period_id=period_id, period_start=start, period_end=end)
+
+
+def test_inventory_reserves_q1_2026_and_keeps_cycle_features(monkeypatch, tmp_path) -> None:
     observations = (
-        SimpleNamespace(period_id="q1_2026", period_start=date(2026, 1, 1), period_end=date(2026, 3, 31)),
-        SimpleNamespace(period_id="q1_2025", period_start=date(2025, 1, 1), period_end=date(2025, 3, 31)),
-        SimpleNamespace(period_id="fy2025", period_start=date(2025, 1, 1), period_end=date(2025, 12, 31)),
-        SimpleNamespace(period_id="fy2024", period_start=date(2024, 1, 1), period_end=date(2024, 12, 31)),
-        SimpleNamespace(period_id="fy2023", period_start=date(2023, 1, 1), period_end=date(2023, 12, 31)),
+        _period("q1_2026", date(2026, 1, 1), date(2026, 3, 31)),
+        _period("q1_2025", date(2025, 1, 1), date(2025, 3, 31)),
+        _period("fy2025", date(2025, 1, 1), date(2025, 12, 31)),
+        _period("fy2024", date(2024, 1, 1), date(2024, 12, 31)),
+        _period("fy2023", date(2023, 1, 1), date(2023, 12, 31)),
     )
     revenue = SimpleNamespace(
         ticker="000660",
