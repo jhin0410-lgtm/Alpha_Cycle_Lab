@@ -248,10 +248,7 @@ def parse_sec_product_cycle_driver_html(
     if not rows:
         raise ValueError("SEC product cycle-driver filing has no table rows")
     periods = _find_period_sequence(rows)
-    values = {
-        label: _find_driver_values(rows, label)
-        for label in _DRIVER_ROW_LABELS
-    }
+    values = {label: _find_driver_values(rows, label) for label in _DRIVER_ROW_LABELS}
     return tuple(
         QuarterlyProductCycleDriverObservation(
             period_id=period,
@@ -277,7 +274,9 @@ def build_sec_product_cycle_driver_support_evidence(
         raise ValueError("SEC product cycle-driver source binding must be SK hynix")
     filing_sha256 = _sha_bytes(filing_bytes)
     if filing_sha256 != expected_filing_sha256:
-        raise ValueError("SEC product cycle-driver archived filing hash does not match source support")
+        raise ValueError(
+            "SEC product cycle-driver archived filing hash does not match source support"
+        )
     observations = parse_sec_product_cycle_driver_html(filing_bytes)
     payload = {
         "observed_date": observed_date.isoformat(),
