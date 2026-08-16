@@ -1,0 +1,109 @@
+schema_version: 1
+issuers:
+  "000660":
+    issuer_name: SK hynix
+    disclosures:
+      skhynix_000660_2023q1_product_revenue:
+        source_id: opendart
+        report_name_exact: "분기보고서 (2023.03)"
+        discovery_begin_date: 2023-05-01
+        discovery_end_date: 2023-05-31
+        period_start: 2023-01-01
+        period_end: 2023-03-31
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: &product_labels
+          dram_total: [DRAM]
+          nand_and_solutions: [NAND, NAND Flash]
+          other_products_services: [기타, 기타 제품 및 서비스]
+          reported_company_revenue: [합계, 매출액 합계, 부문 합계]
+      skhynix_000660_2023q2_product_revenue:
+        source_id: opendart
+        report_name_exact: "반기보고서 (2023.06)"
+        discovery_begin_date: 2023-08-01
+        discovery_end_date: 2023-08-31
+        period_start: 2023-04-01
+        period_end: 2023-06-30
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: *product_labels
+      skhynix_000660_2023q3_product_revenue:
+        source_id: opendart
+        report_name_exact: "분기보고서 (2023.09)"
+        discovery_begin_date: 2023-11-01
+        discovery_end_date: 2023-11-30
+        period_start: 2023-07-01
+        period_end: 2023-09-30
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: *product_labels
+      skhynix_000660_2024q1_product_revenue:
+        source_id: opendart
+        report_name_exact: "분기보고서 (2024.03)"
+        discovery_begin_date: 2024-05-01
+        discovery_end_date: 2024-05-31
+        period_start: 2024-01-01
+        period_end: 2024-03-31
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: *product_labels
+      skhynix_000660_2024q2_product_revenue:
+        source_id: opendart
+        report_name_exact: "반기보고서 (2024.06)"
+        discovery_begin_date: 2024-08-01
+        discovery_end_date: 2024-08-31
+        period_start: 2024-04-01
+        period_end: 2024-06-30
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: *product_labels
+      skhynix_000660_2024q3_product_revenue:
+        source_id: opendart
+        report_name_exact: "분기보고서 (2024.09)"
+        discovery_begin_date: 2024-11-01
+        discovery_end_date: 2024-11-30
+        period_start: 2024-07-01
+        period_end: 2024-09-30
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: *product_labels
+      skhynix_000660_2025q1_product_revenue:
+        source_id: opendart
+        report_name_exact: "분기보고서 (2025.03)"
+        discovery_begin_date: 2025-05-01
+        discovery_end_date: 2025-05-31
+        period_start: 2025-01-01
+        period_end: 2025-03-31
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: *product_labels
+      skhynix_000660_2025q2_product_revenue:
+        source_id: opendart
+        report_name_exact: "반기보고서 (2025.06)"
+        discovery_begin_date: 2025-08-01
+        discovery_end_date: 2025-08-31
+        period_start: 2025-04-01
+        period_end: 2025-06-30
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: *product_labels
+      skhynix_000660_2025q3_product_revenue:
+        source_id: opendart
+        report_name_exact: "분기보고서 (2025.09)"
+        discovery_begin_date: 2025-11-01
+        discovery_end_date: 2025-11-30
+        period_start: 2025-07-01
+        period_end: 2025-09-30
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: *product_labels
+      skhynix_000660_2026q1_product_revenue:
+        source_id: opendart
+        report_name_exact: "분기보고서 (2026.03)"
+        discovery_begin_date: 2026-05-01
+        discovery_end_date: 2026-05-31
+        period_start: 2026-01-01
+        period_end: 2026-03-31
+        parser_id: skhynix_opendart_periodic_product_revenue_v1
+        expected_identity_anchors: [DRAM, NAND, 3개월, 백만원]
+        product_labels: *product_labels
