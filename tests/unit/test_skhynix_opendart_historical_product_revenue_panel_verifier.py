@@ -8,8 +8,8 @@ from types import SimpleNamespace
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel import (
     HistoricalProductRevenuePanelEntry,
     build_historical_product_revenue_panel_evidence,
-    load_historical_product_revenue_specs,
     historical_period_id,
+    load_historical_product_revenue_specs,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel_verifier import (
     load_historical_product_revenue_panel_evidence,
@@ -88,10 +88,10 @@ def test_verifier_replays_each_certified_period_chain(monkeypatch, tmp_path) -> 
     )
     pointer_path, expected = _write_panel_pointer(tmp_path, entries)
 
-    import alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel_verifier as module
+    import alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel_verifier as panel_verifier
 
     monkeypatch.setattr(
-        module,
+        panel_verifier,
         "load_periodic_product_revenue_certification",
         lambda *args, **kwargs: SimpleNamespace(
             evidence_id="a" * 64,
