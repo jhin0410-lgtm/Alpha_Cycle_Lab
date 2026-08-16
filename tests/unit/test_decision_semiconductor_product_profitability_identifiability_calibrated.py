@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from alpha_cycle.intelligence.decision_semiconductor_product_profitability_identifiability_calibrated import (
+from alpha_cycle.intelligence.decision_semiconductor_product_profitability_calibrated import (
     _attach,
     _defaults,
 )
@@ -51,7 +51,10 @@ def test_ready_skhynix_revenue_exposes_missing_profitability_as_calibration_gap(
     )
     assert sk["semiconductor_product_profitability_direct_metrics_required"] == 2
     assert sk["semiconductor_product_profitability_direct_metrics_available"] == 0
-    assert bool(sk["semiconductor_product_profitability_revenue_share_source_fact_allowed"]) is False
+    assert (
+        bool(sk["semiconductor_product_profitability_revenue_share_source_fact_allowed"])
+        is False
+    )
     assert bool(sk["semiconductor_product_profitability_residual_source_fact_allowed"]) is False
     assert bool(sk["semiconductor_product_profitability_peer_margin_source_fact_allowed"]) is False
     assert bool(sk["semiconductor_product_profitability_certified"]) is False
