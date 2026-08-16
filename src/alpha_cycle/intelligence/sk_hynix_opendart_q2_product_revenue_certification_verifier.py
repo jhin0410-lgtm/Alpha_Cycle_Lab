@@ -155,7 +155,9 @@ def load_periodic_product_revenue_certification(
         raise ValueError("Periodic product revenue text parser output does not reproduce")
     structured_metrics = parse_periodic_product_revenue_archive(spec, archive_bytes)
     if structured_metrics != certification.metrics:
-        raise ValueError("Periodic product revenue certified source structure does not reproduce metrics")
+        raise ValueError(
+            "Periodic product revenue certified source structure does not reproduce metrics"
+        )
 
     discovery = DiscoveredPeriodicProductRevenue(
         spec=spec,
