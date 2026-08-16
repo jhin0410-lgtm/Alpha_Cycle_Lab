@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+from alpha_cycle.intelligence.sec_product_cycle_driver_support_verifier import (
+    load_sec_product_cycle_driver_support_evidence,
+)
 from alpha_cycle.intelligence.sec_product_profitability_support import (
     HistoricalProductProfitabilityConstraint,
 )
@@ -45,8 +48,9 @@ def build_skhynix_product_profitability_calibration_inventory(
     evaluation_date: date,
     product_revenue_pointer: str | Path = DEFAULT_PERIODIC_PRODUCT_REVENUE_POINTER,
     profitability_support_pointer: str | Path,
+    cycle_driver_support_pointer: str | Path | None = None,
 ) -> ProfitabilityCalibrationEvidenceInventory:
-    """Replay current direct revenue and historical SEC support into one fail-closed inventory."""
+    """Replay verified direct revenue, profitability constraints, and optional cycle drivers."""
 
     revenue = load_periodic_product_revenue_certification(
         product_revenue_pointer,
@@ -74,15 +78,33 @@ def build_skhynix_product_profitability_calibration_inventory(
             "Historical profitability support independent-period count does not reproduce"
         )
 
+    cycle_period_ids: tuple[str, ...] = ()
+    evidence_ids: tuple[str, ...] = (support.evidence_id,)
+    if cycle_driver_support_pointer is not None:
+        cycle = load_sec_product_cycle_driver_support_evidence(
+            cycle_driver_support_pointer,
+            evaluation_date=evaluation_date,
+        )
+        if cycle.ticker != "000660":
+            raise ValueError("SK hynix profitability cycle-driver evidence has another ticker")
+        if cycle.source_profitability_support_evidence_id != support.evidence_id:
+            raise ValueError(
+                "SK hynix profitability cycle-driver evidence is not bound to support evidence"
+            )
+        if not cycle.textual_band_source_facts or cycle.numeric_driver_values_available:
+            raise ValueError("SK hynix profitability cycle-driver trust boundary is invalid")
+        cycle_period_ids = tuple(item.period_id for item in cycle.observations)
+        evidence_ids = (support.evidence_id, cycle.evidence_id)
+
     return ProfitabilityCalibrationEvidenceInventory(
         direct_product_revenue_evidence_id=revenue.evidence_id,
         direct_product_revenue_ready=True,
         direct_product_profitability_periods=(),
         historical_product_revenue_periods=period_ids,
         company_profitability_constraint_periods=period_ids,
-        cycle_driver_history_periods=(),
+        cycle_driver_history_periods=cycle_period_ids,
         holdout_periods=(),
-        verified_evidence_ids=(support.evidence_id,),
+        verified_evidence_ids=evidence_ids,
         source_evidence_verified=True,
     )
 
