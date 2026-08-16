@@ -36,7 +36,7 @@ def test_verifier_replays_source_bound_filing_bytes(monkeypatch, tmp_path) -> No
     filing = _filing()
     source = SimpleNamespace(
         ticker="000660",
-        evidence_id="s" * 64,
+        evidence_id="a" * 64,
         accession_number="0001193125-26-299963",
         filing_sha256=__import__("hashlib").sha256(filing).hexdigest(),
     )
