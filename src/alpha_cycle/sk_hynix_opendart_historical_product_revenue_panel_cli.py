@@ -6,6 +6,9 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_failure_diagnostics import (
+    inventory_historical_product_revenue_failure_diagnostics,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel import (
     DEFAULT_HISTORICAL_PRODUCT_REVENUE_OUTPUT,
     DEFAULT_HISTORICAL_PRODUCT_REVENUE_REGISTRY,
@@ -50,6 +53,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         pointer,
         evaluation_date=args.evaluation_date,
     )
+    diagnostics = inventory_historical_product_revenue_failure_diagnostics(
+        verified.failed_periods,
+        output=output,
+    )
     summary = {
         "status": result["status"],
         "evidence_id": verified.evidence_id,
@@ -57,6 +64,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         "successful_periods": verified.successful_periods,
         "failed_period_count": len(verified.failed_periods),
         "failed_periods": verified.failed_periods,
+        "failed_diagnostic_bundle_count": len(diagnostics.diagnostics),
+        "failed_diagnostic_paths": diagnostics.diagnostic_paths,
+        "failed_diagnostic_missing_periods": diagnostics.missing_diagnostic_periods,
+        "failed_diagnostic_bundle_coverage_complete": (
+            diagnostics.diagnostic_bundle_coverage_complete
+        ),
         "full_source_coverage_certified": verified.full_source_coverage_certified,
         "product_profitability_source_fact": verified.product_profitability_source_fact,
         "numeric_forecast_enabled": verified.numeric_forecast_enabled,
