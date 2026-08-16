@@ -68,7 +68,7 @@ if (-not (Test-Path $IrAssignmentPointer)) {
 }
 
 Write-Host "Discovering the exact SK hynix 2026 half-year filing through official OpenDART."
-Write-Host "Semantic replay scans raw source tokens across the current consolidated revenue note."
+Write-Host "Structural replay certifies one current consolidated product header and unit from the archived raw source."
 Write-Host "The exact ZIP bytes will be archived; Q2 DRAM/NAND/Other amounts must be directly reported and reconcile."
 Write-Host "Direct product revenue does not certify product profitability, numeric forecast, fair value, or decision score."
 Write-Host "Python: $ProjectPython"
