@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_failure_diagnostics import (
+from alpha_cycle.intelligence.sk_hynix_historical_product_failure_diagnostics import (
     inventory_historical_product_revenue_failure_diagnostics,
     load_failure_diagnostic,
 )
