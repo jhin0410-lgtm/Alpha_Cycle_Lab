@@ -53,15 +53,32 @@ Write-Host "Evaluation date: $EvaluationDate"
 Write-Host "Python: $python"
 Write-Host "============================================================"
 
-if (-not (Test-Path $currentProductPointer)) {
-    Write-Host "[1/6] Current 2Q26 direct product revenue is missing; certifying it first."
-    & (Join-Path $PSScriptRoot "report_skhynix_opendart_q2_product_revenue_certification.ps1")
+$currentProductMatchesEvaluationDate = $false
+if (Test-Path $currentProductPointer) {
+    try {
+        $currentPointerJson = Get-Content -Raw -Path $currentProductPointer | ConvertFrom-Json
+        $currentProductMatchesEvaluationDate = (
+            [string]$currentPointerJson.evaluation_date -eq $EvaluationDate
+        )
+    }
+    catch {
+        $currentProductMatchesEvaluationDate = $false
+    }
+}
+
+if (-not $currentProductMatchesEvaluationDate) {
+    Write-Host (
+        "[1/6] Current 2Q26 direct product revenue is missing/stale for " +
+        "$EvaluationDate; certifying it first."
+    )
+    & (Join-Path $PSScriptRoot "report_skhynix_opendart_q2_product_revenue_certification.ps1") `
+        -EvaluationDate $EvaluationDate
     if ($LASTEXITCODE -ne 0) {
         throw "Current 2Q26 product-revenue certification failed."
     }
 }
 else {
-    Write-Host "[1/6] Current 2Q26 direct product-revenue pointer already exists."
+    Write-Host "[1/6] Current 2Q26 direct product-revenue pointer matches evaluation date."
 }
 
 if (-not (Test-Path $secSupportPointer)) {
