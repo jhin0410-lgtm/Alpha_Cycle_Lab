@@ -2,9 +2,8 @@
 
 This audit runs before parameter estimation. Aggregate company gross-profit constraints
 and textual product-cycle-driver bands are useful support, but they do not by themselves
-identify separately varying product margins. The gate requires an explicit low-dimensional
-parameterization, a driver-encoding contract, temporal alignment, sufficient independent
-training constraints, and a certified design rank before fitting is allowed.
+identify separately varying product margins. A company-profitability observation only
+contributes a structural equation when product revenue is observed for the same period.
 """
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ class ProductProfitabilityIdentifiabilityAudit:
     direct_product_profitability_anchor_periods: int
     calibration_company_profitability_constraints: int
     calibration_product_revenue_periods: int
+    aligned_company_product_constraint_periods: int
     textual_cycle_driver_periods: int
     numeric_cycle_driver_periods: int
     holdout_periods: int
@@ -51,6 +51,7 @@ class ProductProfitabilityIdentifiabilityAudit:
             self.direct_product_profitability_anchor_periods,
             self.calibration_company_profitability_constraints,
             self.calibration_product_revenue_periods,
+            self.aligned_company_product_constraint_periods,
             self.textual_cycle_driver_periods,
             self.numeric_cycle_driver_periods,
             self.holdout_periods,
@@ -59,6 +60,16 @@ class ProductProfitabilityIdentifiabilityAudit:
         )
         if any(value < 0 for value in counts):
             raise ValueError("SK hynix profitability audit counts cannot be negative")
+        if (
+            self.aligned_company_product_constraint_periods
+            > self.calibration_product_revenue_periods
+        ):
+            raise ValueError("Aligned profitability constraints exceed product-revenue periods")
+        if (
+            self.aligned_company_product_constraint_periods
+            > self.calibration_company_profitability_constraints
+        ):
+            raise ValueError("Aligned profitability constraints exceed company constraints")
         if self.numeric_cycle_driver_periods > self.textual_cycle_driver_periods:
             raise ValueError("Numeric cycle-driver coverage cannot exceed source-text coverage")
         if self.design_rank_certified and self.registered_parameter_count <= 0:
@@ -99,7 +110,7 @@ def audit_skhynix_product_profitability_identifiability(
     temporal_alignment_method_registered: bool = False,
     design_rank_certified: bool = False,
 ) -> ProductProfitabilityIdentifiabilityAudit:
-    """Fail closed until a reproducible aggregate structural design is identified."""
+    """Fail closed until a period-aligned aggregate structural design is identified."""
 
     if holdout.source_profitability_support_evidence_id not in inventory.verified_evidence_ids:
         raise ValueError("Profitability holdout is not bound to the calibration inventory")
@@ -109,10 +120,13 @@ def audit_skhynix_product_profitability_identifiability(
         raise ValueError("Profitability inventory fit periods do not match the holdout plan")
 
     direct_anchors = len(inventory.direct_product_profitability_periods)
-    company_constraints = len(inventory.company_profitability_constraint_periods)
-    product_revenue_periods = len(inventory.historical_product_revenue_periods)
+    company_periods = set(inventory.company_profitability_constraint_periods)
+    product_periods = set(inventory.historical_product_revenue_periods)
+    company_constraints = len(company_periods)
+    product_revenue_periods = len(product_periods)
+    aligned_constraints = len(company_periods & product_periods)
     textual_drivers = len(inventory.cycle_driver_history_periods)
-    independent_constraints = company_constraints + direct_anchors
+    independent_constraints = aligned_constraints + direct_anchors
 
     identifiable = bool(
         parameterization_registered
@@ -130,7 +144,7 @@ def audit_skhynix_product_profitability_identifiability(
     elif not temporal_alignment_method_registered:
         reason = "cycle_driver_profitability_temporal_alignment_not_registered"
     elif independent_constraints < registered_parameter_count:
-        reason = "insufficient_independent_training_constraints"
+        reason = "insufficient_period_aligned_training_constraints"
     elif not design_rank_certified:
         reason = "structural_design_rank_not_certified"
     else:
@@ -141,6 +155,7 @@ def audit_skhynix_product_profitability_identifiability(
         direct_product_profitability_anchor_periods=direct_anchors,
         calibration_company_profitability_constraints=company_constraints,
         calibration_product_revenue_periods=product_revenue_periods,
+        aligned_company_product_constraint_periods=aligned_constraints,
         textual_cycle_driver_periods=textual_drivers,
         numeric_cycle_driver_periods=numeric_cycle_driver_periods,
         holdout_periods=len(inventory.holdout_periods),
