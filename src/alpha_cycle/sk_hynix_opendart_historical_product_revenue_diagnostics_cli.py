@@ -12,6 +12,9 @@ from alpha_cycle.intelligence.sk_hynix_historical_product_failure_diagnostics im
 from alpha_cycle.intelligence.sk_hynix_historical_product_failure_layout import (
     build_failure_layout_signature,
 )
+from alpha_cycle.intelligence.sk_hynix_historical_product_failure_replay import (
+    replay_historical_product_revenue_failure,
+)
 from alpha_cycle.intelligence.sk_hynix_historical_product_table_diagnostics import (
     build_failure_raw_table_signatures,
 )
@@ -30,8 +33,8 @@ from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Replay preserved SK hynix historical product-revenue failures offline and "
-            "print parser errors plus bounded text/raw-table layout signatures."
+            "Replay preserved SK hynix historical product-revenue failures offline, "
+            "re-run current parsers, and print bounded text/raw-table signatures."
         )
     )
     parser.add_argument("--evaluation-date", required=True, type=date.fromisoformat)
@@ -78,6 +81,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         ]
         for item in inventory.diagnostics
     }
+    replays = [
+        replay_historical_product_revenue_failure(
+            item,
+            specs[item.period_id],
+        )
+        for item in inventory.diagnostics
+    ]
     payload = {
         "status": "skhynix_historical_product_revenue_failure_diagnostics",
         "evaluation_date": args.evaluation_date.isoformat(),
@@ -91,10 +101,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "diagnostic_bundle_coverage_complete": inventory.diagnostic_bundle_coverage_complete,
         "diagnostic_bundle_integrity_complete": inventory.diagnostic_bundle_integrity_complete,
+        "replay_recoverable_periods": tuple(
+            item.period_id for item in replays if item.replay_recoverable
+        ),
+        "replay_unresolved_periods": tuple(
+            item.period_id for item in replays if not item.replay_recoverable
+        ),
+        "parser_replays": [item.as_dict() for item in replays],
         "signatures": signatures,
         "raw_table_signatures": raw_table_signatures,
         "network_requested": False,
         "source_fact_promoted": False,
+        "certification_created": False,
         "numeric_forecast_enabled": False,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
