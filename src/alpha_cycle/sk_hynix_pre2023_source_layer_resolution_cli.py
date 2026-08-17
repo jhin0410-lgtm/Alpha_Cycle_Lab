@@ -7,11 +7,11 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from alpha_cycle.intelligence import (
+    sk_hynix_product_profitability_historical_expansion_company_probe as company_probe,
+)
 from alpha_cycle.intelligence.sk_hynix_pre2023_source_layer_resolution import (
     build_pre2023_source_layer_resolution,
-)
-from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_company_probe import (
-    DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_probe import (
     DEFAULT_PRODUCT_REVENUE_PROBE_OUTPUT,
@@ -35,7 +35,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--company-probe-output",
-        default=str(DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT),
+        default=str(company_probe.DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT),
     )
     parser.add_argument("--output", default=str(DEFAULT_SOURCE_LAYER_RESOLUTION_OUTPUT))
     return parser
