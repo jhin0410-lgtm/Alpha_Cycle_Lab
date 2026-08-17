@@ -106,7 +106,8 @@ def _legacy_non_q1_fixture(
     html = f"""<html><body><p>{heading}</p><p>(단위: 백만원)</p>
 <table>
 <tr>{unit_row}</tr>
-<tr><th>구 분</th><th>{current_marker}</th><th>{current_marker}</th><th>{prior_marker}</th><th>{prior_marker}</th></tr>
+<tr><th>구 분</th><th>{current_marker}</th><th>{current_marker}</th>
+<th>{prior_marker}</th><th>{prior_marker}</th></tr>
 <tr><th>구 분</th><th>3개월</th><th>누 적</th><th>3개월</th><th>누 적</th></tr>
 {rows}
 </table></body></html>"""
