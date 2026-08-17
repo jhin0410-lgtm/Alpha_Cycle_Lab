@@ -1,0 +1,61 @@
+schema_version: 1
+policy:
+  policy_id: skhynix_product_profitability_promotion_readiness
+  policy_version: 0.1-draft
+  ticker: "000660"
+  holdout_period: 2026Q1
+  minimum_rows_per_parameter: 2.0
+  minimum_residual_degrees_of_freedom: 8
+  require_full_column_rank: true
+  require_company_product_revenue_reconciliation: true
+  require_closed_interval_sensitivity_coverage: true
+  require_estimation_driver_input_ready: true
+  require_method_version_frozen: true
+  interval_semantics:
+    units: absolute_percent_points
+    source_fact: false
+    method_assumption: true
+    estimation_input_ready: false
+    slight:
+      lower: 0.0
+      upper: 5.0
+    low-single:
+      lower: 1.0
+      upper: 4.0
+    mid-single:
+      lower: 4.0
+      upper: 7.0
+    high-single:
+      lower: 7.0
+      upper: 10.0
+    low-teen:
+      lower: 10.0
+      upper: 14.0
+    mid-teen:
+      lower: 13.0
+      upper: 17.0
+    mid-high-teen:
+      lower: 15.0
+      upper: 19.0
+    high-teen:
+      lower: 17.0
+      upper: 20.0
+    low-20:
+      lower: 20.0
+      upper: 24.0
+    mid-20:
+      lower: 23.0
+      upper: 27.0
+    mid-30:
+      lower: 33.0
+      upper: 37.0
+    around_tolerance_percent_points: 2.0
+    over_upper_bound: null
+  trust_boundary:
+    interval_values_are_issuer_numeric_source_facts: false
+    interval_sensitivity_is_formal_partial_identification: false
+    interval_sensitivity_can_enable_fit: false
+    numeric_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
