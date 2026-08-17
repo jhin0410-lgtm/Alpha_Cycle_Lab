@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -7,8 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-import alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel as panel
-
+panel = importlib.import_module(
+    "alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel"
+)
 
 _EVALUATION_DATE = date(2026, 8, 16)
 _CAPTURED_AT = datetime(2026, 8, 17, 1, 0, tzinfo=UTC)
