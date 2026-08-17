@@ -6,8 +6,8 @@ from io import BytesIO
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_layout_profile import (
-    profile_historical_expansion_failures,
+from alpha_cycle.intelligence import (
+    sk_hynix_product_profitability_historical_expansion_layout_profile as layout_profile,
 )
 
 _PERIODS = ("2021Q1", "2021Q2", "2021Q3", "2022Q1", "2022Q2", "2022Q3")
@@ -72,7 +72,7 @@ def test_layout_profiler_fingerprints_preserved_failure_bundles(tmp_path: Path) 
     for index, period_id in enumerate(_PERIODS):
         _write_failure(tmp_path, period_id, index)
 
-    profiles = profile_historical_expansion_failures(output=tmp_path)
+    profiles = layout_profile.profile_historical_expansion_failures(output=tmp_path)
 
     assert tuple(item.period_id for item in profiles) == _PERIODS
     assert all(item.context_count == 1 for item in profiles)
@@ -83,7 +83,8 @@ def test_layout_profiler_fingerprints_preserved_failure_bundles(tmp_path: Path) 
     assert all(item.contexts[0].unit_markers == ("백만원",) for item in profiles)
     assert all(item.contexts[0].amount_token_count == 4 for item in profiles)
     assert all(item.archive_member_count == 2 for item in profiles)
-    assert all(dict(item.archive_member_suffix_counts) == {".txt": 1, ".xml": 1} for item in profiles)
+    suffix_counts = [dict(item.archive_member_suffix_counts) for item in profiles]
+    assert all(item == {".txt": 1, ".xml": 1} for item in suffix_counts)
     assert all(not item.parser_family_inferred for item in profiles)
     assert all(not item.product_revenue_extracted for item in profiles)
     assert all(not item.source_certification_promoted for item in profiles)
