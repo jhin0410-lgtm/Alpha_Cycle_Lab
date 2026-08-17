@@ -1,0 +1,105 @@
+schema_version: 1
+frontier:
+  frontier_id: skhynix_product_profitability_second_wave
+  frontier_version: 0.1-draft
+  ticker: "000660"
+  purpose: exact_six_row_training_sample_expansion
+  target_additional_training_rows: 6
+  holdout_period: 2026Q1
+  q4_direct_quarter_derivation_allowed: false
+  candidates:
+    - period_id: 2019Q1
+      period_start: 2019-01-01
+      period_end: 2019-03-31
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-first-quarter-2019-results-2/
+      issuer_release_published_date: 2019-04-25
+      opendart_report_name_exact: "분기보고서 (2019.03)"
+      opendart_discovery_begin_date: 2019-05-01
+      opendart_discovery_end_date: 2019-05-31
+      company_profitability_report_code: "11013"
+      drivers_qoq_percent:
+        dram_bit_volume: -8
+        dram_asp: -27
+        nand_bit_volume: -6
+        nand_asp: -32
+    - period_id: 2019Q2
+      period_start: 2019-04-01
+      period_end: 2019-06-30
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-second-quarter-2019-results/
+      issuer_release_published_date: 2019-07-25
+      opendart_report_name_exact: "반기보고서 (2019.06)"
+      opendart_discovery_begin_date: 2019-08-01
+      opendart_discovery_end_date: 2019-08-31
+      company_profitability_report_code: "11012"
+      drivers_qoq_percent:
+        dram_bit_volume: 13
+        dram_asp: -24
+        nand_bit_volume: 40
+        nand_asp: -25
+    - period_id: 2019Q3
+      period_start: 2019-07-01
+      period_end: 2019-09-30
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-third-quarter-2019-results/
+      issuer_release_published_date: 2019-10-24
+      opendart_report_name_exact: "분기보고서 (2019.09)"
+      opendart_discovery_begin_date: 2019-11-01
+      opendart_discovery_end_date: 2019-11-30
+      company_profitability_report_code: "11014"
+      drivers_qoq_percent:
+        dram_bit_volume: 23
+        dram_asp: -16
+        nand_bit_volume: -1
+        nand_asp: 4
+    - period_id: 2020Q1
+      period_start: 2020-01-01
+      period_end: 2020-03-31
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-first-quarter-2020-results/
+      issuer_release_published_date: 2020-04-23
+      opendart_report_name_exact: "분기보고서 (2020.03)"
+      opendart_discovery_begin_date: 2020-05-01
+      opendart_discovery_end_date: 2020-05-31
+      company_profitability_report_code: "11013"
+      drivers_qoq_percent:
+        dram_bit_volume: -4
+        dram_asp: 3
+        nand_bit_volume: 12
+        nand_asp: 7
+    - period_id: 2020Q2
+      period_start: 2020-04-01
+      period_end: 2020-06-30
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-second-quarter-2020-results/
+      issuer_release_published_date: 2020-07-23
+      opendart_report_name_exact: "반기보고서 (2020.06)"
+      opendart_discovery_begin_date: 2020-08-01
+      opendart_discovery_end_date: 2020-08-31
+      company_profitability_report_code: "11012"
+      drivers_qoq_percent:
+        dram_bit_volume: 2
+        dram_asp: 15
+        nand_bit_volume: 5
+        nand_asp: 8
+    - period_id: 2020Q3
+      period_start: 2020-07-01
+      period_end: 2020-09-30
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-third-quarter-2020-results/
+      issuer_release_published_date: 2020-11-04
+      opendart_report_name_exact: "분기보고서 (2020.09)"
+      opendart_discovery_begin_date: 2020-11-01
+      opendart_discovery_end_date: 2020-11-30
+      company_profitability_report_code: "11014"
+      drivers_qoq_percent:
+        dram_bit_volume: 4
+        dram_asp: -7
+        nand_bit_volume: 9
+        nand_asp: -10
+  trust_boundary:
+    issuer_driver_values_are_exact_numeric_source_facts: true
+    product_revenue_certified: false
+    company_profitability_certified: false
+    training_row_promoted: false
+    candidate_registration_enables_fit: false
+    candidate_registration_enables_holdout: false
+    numeric_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
