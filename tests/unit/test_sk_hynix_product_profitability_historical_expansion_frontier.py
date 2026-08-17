@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_frontier import (
-    audit_historical_expansion_frontier,
-    load_historical_expansion_frontier,
+from alpha_cycle.intelligence import (
+    sk_hynix_product_profitability_historical_expansion_frontier as frontier_module,
 )
 
 
 def test_historical_expansion_frontier_is_exactly_six_fail_closed_candidates() -> None:
-    frontier = load_historical_expansion_frontier()
-    audit = audit_historical_expansion_frontier(frontier)
+    frontier = frontier_module.load_historical_expansion_frontier()
+    audit = frontier_module.audit_historical_expansion_frontier(frontier)
 
     assert tuple(item.period_id for item in frontier.candidates) == (
         "2021Q1",
@@ -34,7 +33,7 @@ def test_historical_expansion_frontier_is_exactly_six_fail_closed_candidates() -
 
 
 def test_historical_expansion_frontier_does_not_promote_newsroom_presence() -> None:
-    frontier = load_historical_expansion_frontier()
+    frontier = frontier_module.load_historical_expansion_frontier()
 
     assert frontier.issuer_release_presence_is_training_row_evidence is False
     assert frontier.newsroom_release_is_product_revenue_certification is False
@@ -48,7 +47,7 @@ def test_historical_expansion_frontier_does_not_promote_newsroom_presence() -> N
 
 
 def test_historical_expansion_open_dart_coordinates_are_quarter_specific() -> None:
-    frontier = load_historical_expansion_frontier()
+    frontier = frontier_module.load_historical_expansion_frontier()
     expected = {
         "2021Q1": ("분기보고서 (2021.03)", "11013"),
         "2021Q2": ("반기보고서 (2021.06)", "11012"),
