@@ -1,10 +1,8 @@
-"""Registry and audit for pre-2023 SK hynix profitability training-row candidates.
+"""Fail-closed registry for pre-2023 SK hynix training-row candidates.
 
-Candidate registration is not evidence promotion.  This module only records official
-issuer-release provenance and the exact OpenDART acquisition coordinates that should be
-attempted next.  A candidate remains unusable for training until product revenue, company
-profitability, and four-field cycle-driver evidence are independently certified and then
-reconciled by the structural pipeline.
+Candidate registration is not evidence promotion. A row remains unusable until product
+revenue, company profitability, and four-field cycle-driver evidence are independently
+certified and reconciled by the structural pipeline.
 """
 
 from __future__ import annotations
@@ -30,21 +28,20 @@ _EXPECTED_PERIODS = (
     "2022Q2",
     "2022Q3",
 )
-_ALLOWED_CAPTURE_STATUS = frozenset({"not_attempted", "captured", "certified", "failed"})
-_ALLOWED_DRIVER_STATUS = frozenset({"not_certified", "certified", "failed"})
-_ALLOWED_ROW_STATUS = frozenset({"not_certified", "certified", "failed"})
+_CAPTURE_STATUS = frozenset({"not_attempted", "captured", "certified", "failed"})
+_DRIVER_STATUS = frozenset({"not_certified", "certified", "failed"})
+_ROW_STATUS = frozenset({"not_certified", "certified", "failed"})
 
 
-def _sha_payload(payload: object) -> str:
-    return hashlib.sha256(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
+def _sha(payload: object) -> str:
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _mapping(value: object, label: str) -> dict[object, object]:
@@ -60,7 +57,7 @@ def _date(value: object, label: str) -> date:
         raise ValueError(f"Historical expansion {label} must be ISO date") from exc
 
 
-def _strict_bool(value: object, label: str) -> bool:
+def _bool(value: object, label: str) -> bool:
     if not isinstance(value, bool):
         raise ValueError(f"Historical expansion {label} must be boolean")
     return value
@@ -89,57 +86,54 @@ class HistoricalExpansionCandidate:
             raise ValueError("Historical expansion candidate period is unsupported")
         year = int(self.period_id[:4])
         quarter = int(self.period_id[-1])
-        expected_start_month = 1 + (quarter - 1) * 3
-        expected_end_month = quarter * 3
-        expected_end_day = 31 if expected_end_month in {3, 12} else 30
-        if self.period_start != date(year, expected_start_month, 1):
+        start_month = 1 + (quarter - 1) * 3
+        end_month = quarter * 3
+        end_day = 31 if end_month == 3 else 30
+        if self.period_start != date(year, start_month, 1):
             raise ValueError("Historical expansion candidate start date is inconsistent")
-        if self.period_end != date(year, expected_end_month, expected_end_day):
+        if self.period_end != date(year, end_month, end_day):
             raise ValueError("Historical expansion candidate end date is inconsistent")
+
         parsed = urlparse(self.issuer_release_url)
         if parsed.scheme != "https" or parsed.netloc != "news.skhynix.com":
-            raise ValueError("Historical expansion issuer release must use official SK hynix Newsroom")
+            raise ValueError("Issuer release must use official SK hynix Newsroom")
         if not self.issuer_release_verified_present:
-            raise ValueError("Historical expansion candidate requires verified issuer-release presence")
+            raise ValueError("Candidate requires verified issuer-release presence")
         if self.issuer_release_published_date <= self.period_end:
-            raise ValueError("Historical expansion release date cannot precede quarter end")
-        expected_report = {
+            raise ValueError("Issuer release date cannot precede quarter end")
+
+        report_name = {
             1: f"분기보고서 ({year}.03)",
             2: f"반기보고서 ({year}.06)",
             3: f"분기보고서 ({year}.09)",
         }[quarter]
-        if self.opendart_report_name_exact != expected_report:
-            raise ValueError("Historical expansion OpenDART report name is inconsistent")
+        if self.opendart_report_name_exact != report_name:
+            raise ValueError("OpenDART report name is inconsistent")
         if self.opendart_discovery_begin_date > self.opendart_discovery_end_date:
-            raise ValueError("Historical expansion discovery window is invalid")
-        expected_code = {1: "11013", 2: "11012", 3: "11014"}[quarter]
-        if self.company_profitability_report_code != expected_code:
-            raise ValueError("Historical expansion company report code is inconsistent")
+            raise ValueError("OpenDART discovery window is invalid")
+        report_code = {1: "11013", 2: "11012", 3: "11014"}[quarter]
+        if self.company_profitability_report_code != report_code:
+            raise ValueError("Company profitability report code is inconsistent")
         if self.product_parser_compatibility_status != "untested_historical_layout":
-            raise ValueError("Historical expansion parser compatibility cannot be pre-certified")
-        if self.opendart_product_revenue_capture_status not in _ALLOWED_CAPTURE_STATUS:
-            raise ValueError("Historical expansion product-revenue status is invalid")
-        if self.opendart_company_profitability_capture_status not in _ALLOWED_CAPTURE_STATUS:
-            raise ValueError("Historical expansion company-profitability status is invalid")
-        if self.cycle_driver_four_field_source_status not in _ALLOWED_DRIVER_STATUS:
-            raise ValueError("Historical expansion cycle-driver status is invalid")
-        if self.training_row_status not in _ALLOWED_ROW_STATUS:
-            raise ValueError("Historical expansion training-row status is invalid")
-        source_layers_certified = (
-            self.opendart_product_revenue_capture_status == "certified"
-            and self.opendart_company_profitability_capture_status == "certified"
-            and self.cycle_driver_four_field_source_status == "certified"
-        )
-        if self.training_row_status == "certified" and not source_layers_certified:
-            raise ValueError("Historical expansion row cannot be certified before all source layers")
+            raise ValueError("Historical parser compatibility cannot be pre-certified")
+
+        if self.opendart_product_revenue_capture_status not in _CAPTURE_STATUS:
+            raise ValueError("Product-revenue capture status is invalid")
+        if self.opendart_company_profitability_capture_status not in _CAPTURE_STATUS:
+            raise ValueError("Company-profitability capture status is invalid")
+        if self.cycle_driver_four_field_source_status not in _DRIVER_STATUS:
+            raise ValueError("Cycle-driver certification status is invalid")
+        if self.training_row_status not in _ROW_STATUS:
+            raise ValueError("Training-row status is invalid")
+        if self.training_row_status == "certified" and not self.source_layers_certified:
+            raise ValueError("Training row cannot precede all source-layer certifications")
 
     @property
     def source_layers_certified(self) -> bool:
-        return (
-            self.opendart_product_revenue_capture_status == "certified"
-            and self.opendart_company_profitability_capture_status == "certified"
-            and self.cycle_driver_four_field_source_status == "certified"
-        )
+        product_ok = self.opendart_product_revenue_capture_status == "certified"
+        company_ok = self.opendart_company_profitability_capture_status == "certified"
+        driver_ok = self.cycle_driver_four_field_source_status == "certified"
+        return product_ok and company_ok and driver_ok
 
 
 @dataclass(frozen=True)
@@ -170,12 +164,15 @@ class HistoricalExpansionFrontier:
             raise ValueError("Historical expansion frontier identity drifted")
         if self.purpose != "training_sample_expansion_only":
             raise ValueError("Historical expansion frontier purpose is invalid")
-        if self.target_additional_training_rows != len(_EXPECTED_PERIODS):
+        if self.target_additional_training_rows != 6:
             raise ValueError("Historical expansion target must remain six rows")
-        if self.holdout_period != "2026Q1" or self.q4_direct_quarter_derivation_allowed:
-            raise ValueError("Historical expansion holdout/Q4 boundary drifted")
-        if tuple(item.period_id for item in self.candidates) != _EXPECTED_PERIODS:
-            raise ValueError("Historical expansion candidates must bind exact six periods")
+        if self.holdout_period != "2026Q1":
+            raise ValueError("Historical expansion holdout drifted")
+        if self.q4_direct_quarter_derivation_allowed:
+            raise ValueError("Q4 derived-quarter promotion is forbidden")
+        periods = tuple(item.period_id for item in self.candidates)
+        if periods != _EXPECTED_PERIODS:
+            raise ValueError("Historical expansion candidates are incomplete")
         forbidden = (
             self.issuer_release_presence_is_training_row_evidence,
             self.newsroom_release_is_product_revenue_certification,
@@ -188,9 +185,9 @@ class HistoricalExpansionFrontier:
             self.decision_score_enabled,
         )
         if any(forbidden):
-            raise ValueError("Historical expansion frontier exceeded its trust boundary")
+            raise ValueError("Historical expansion frontier exceeded trust boundary")
         if len(self.evidence_id) != 64:
-            raise ValueError("Historical expansion frontier evidence id must be SHA-256")
+            raise ValueError("Historical expansion evidence id must be SHA-256")
 
 
 @dataclass(frozen=True)
@@ -210,7 +207,7 @@ class HistoricalExpansionAudit:
 
     def __post_init__(self) -> None:
         if self.candidate_count != self.target_additional_training_rows:
-            raise ValueError("Historical expansion candidate target/count mismatch")
+            raise ValueError("Historical expansion target/count mismatch")
         counts = (
             self.issuer_release_verified_count,
             self.product_revenue_certified_count,
@@ -221,10 +218,53 @@ class HistoricalExpansionAudit:
         )
         if any(value < 0 or value > self.candidate_count for value in counts):
             raise ValueError("Historical expansion audit count is invalid")
-        if self.remaining_candidate_rows != self.candidate_count - self.training_row_certified_count:
+        expected_remaining = self.candidate_count - self.training_row_certified_count
+        if self.remaining_candidate_rows != expected_remaining:
             raise ValueError("Historical expansion remaining-row count is inconsistent")
         if self.fit_enabled or self.holdout_evaluation_enabled:
-            raise ValueError("Historical expansion audit cannot open fit/holdout")
+            raise ValueError("Historical expansion audit cannot open fit or holdout")
+
+
+def _candidate(item: dict[object, object]) -> HistoricalExpansionCandidate:
+    return HistoricalExpansionCandidate(
+        period_id=str(item.get("period_id", "")),
+        period_start=_date(item.get("period_start"), "period_start"),
+        period_end=_date(item.get("period_end"), "period_end"),
+        issuer_release_url=str(item.get("issuer_release_url", "")),
+        issuer_release_published_date=_date(
+            item.get("issuer_release_published_date"),
+            "issuer_release_published_date",
+        ),
+        issuer_release_verified_present=_bool(
+            item.get("issuer_release_verified_present"),
+            "issuer_release_verified_present",
+        ),
+        opendart_report_name_exact=str(item.get("opendart_report_name_exact", "")),
+        opendart_discovery_begin_date=_date(
+            item.get("opendart_discovery_begin_date"),
+            "opendart_discovery_begin_date",
+        ),
+        opendart_discovery_end_date=_date(
+            item.get("opendart_discovery_end_date"),
+            "opendart_discovery_end_date",
+        ),
+        company_profitability_report_code=str(
+            item.get("company_profitability_report_code", "")
+        ),
+        product_parser_compatibility_status=str(
+            item.get("product_parser_compatibility_status", "")
+        ),
+        opendart_product_revenue_capture_status=str(
+            item.get("opendart_product_revenue_capture_status", "")
+        ),
+        opendart_company_profitability_capture_status=str(
+            item.get("opendart_company_profitability_capture_status", "")
+        ),
+        cycle_driver_four_field_source_status=str(
+            item.get("cycle_driver_four_field_source_status", "")
+        ),
+        training_row_status=str(item.get("training_row_status", "")),
+    )
 
 
 def load_historical_expansion_frontier(
@@ -239,105 +279,72 @@ def load_historical_expansion_frontier(
     raw_candidates = frontier.get("candidates")
     if not isinstance(raw_candidates, list):
         raise ValueError("Historical expansion candidates must be an array")
-    candidates: list[HistoricalExpansionCandidate] = []
-    for raw_candidate in raw_candidates:
-        item = _mapping(raw_candidate, "candidate")
-        candidates.append(
-            HistoricalExpansionCandidate(
-                period_id=str(item.get("period_id", "")),
-                period_start=_date(item.get("period_start"), "period_start"),
-                period_end=_date(item.get("period_end"), "period_end"),
-                issuer_release_url=str(item.get("issuer_release_url", "")),
-                issuer_release_published_date=_date(
-                    item.get("issuer_release_published_date"), "issuer_release_published_date"
-                ),
-                issuer_release_verified_present=_strict_bool(
-                    item.get("issuer_release_verified_present"),
-                    "issuer_release_verified_present",
-                ),
-                opendart_report_name_exact=str(item.get("opendart_report_name_exact", "")),
-                opendart_discovery_begin_date=_date(
-                    item.get("opendart_discovery_begin_date"), "opendart_discovery_begin_date"
-                ),
-                opendart_discovery_end_date=_date(
-                    item.get("opendart_discovery_end_date"), "opendart_discovery_end_date"
-                ),
-                company_profitability_report_code=str(
-                    item.get("company_profitability_report_code", "")
-                ),
-                product_parser_compatibility_status=str(
-                    item.get("product_parser_compatibility_status", "")
-                ),
-                opendart_product_revenue_capture_status=str(
-                    item.get("opendart_product_revenue_capture_status", "")
-                ),
-                opendart_company_profitability_capture_status=str(
-                    item.get("opendart_company_profitability_capture_status", "")
-                ),
-                cycle_driver_four_field_source_status=str(
-                    item.get("cycle_driver_four_field_source_status", "")
-                ),
-                training_row_status=str(item.get("training_row_status", "")),
-            )
-        )
+    candidates = tuple(
+        _candidate(_mapping(item, "candidate"))
+        for item in raw_candidates
+    )
     trust = _mapping(frontier.get("trust_boundary"), "trust_boundary")
     stable = {
         "frontier_id": frontier.get("frontier_id"),
         "frontier_version": frontier.get("frontier_version"),
         "ticker": frontier.get("ticker"),
         "purpose": frontier.get("purpose"),
-        "target_additional_training_rows": frontier.get("target_additional_training_rows"),
-        "holdout_period": frontier.get("holdout_period"),
-        "q4_direct_quarter_derivation_allowed": frontier.get(
-            "q4_direct_quarter_derivation_allowed"
-        ),
+        "target": frontier.get("target_additional_training_rows"),
+        "holdout": frontier.get("holdout_period"),
+        "q4": frontier.get("q4_direct_quarter_derivation_allowed"),
         "candidates": [asdict(item) for item in candidates],
         "trust_boundary": trust,
     }
     return HistoricalExpansionFrontier(
-        evidence_id=_sha_payload(stable),
+        evidence_id=_sha(stable),
         frontier_id=str(frontier.get("frontier_id", "")),
         frontier_version=str(frontier.get("frontier_version", "")),
         ticker=str(frontier.get("ticker", "")).zfill(6),
         purpose=str(frontier.get("purpose", "")),
-        target_additional_training_rows=int(str(frontier.get("target_additional_training_rows", 0))),
+        target_additional_training_rows=int(
+            str(frontier.get("target_additional_training_rows", 0))
+        ),
         holdout_period=str(frontier.get("holdout_period", "")),
-        q4_direct_quarter_derivation_allowed=_strict_bool(
+        q4_direct_quarter_derivation_allowed=_bool(
             frontier.get("q4_direct_quarter_derivation_allowed"),
             "q4_direct_quarter_derivation_allowed",
         ),
-        candidates=tuple(candidates),
-        issuer_release_presence_is_training_row_evidence=_strict_bool(
+        candidates=candidates,
+        issuer_release_presence_is_training_row_evidence=_bool(
             trust.get("issuer_release_presence_is_training_row_evidence"),
             "issuer_release_presence_is_training_row_evidence",
         ),
-        newsroom_release_is_product_revenue_certification=_strict_bool(
+        newsroom_release_is_product_revenue_certification=_bool(
             trust.get("newsroom_release_is_product_revenue_certification"),
             "newsroom_release_is_product_revenue_certification",
         ),
-        qualitative_commentary_is_four_field_cycle_driver_certification=_strict_bool(
+        qualitative_commentary_is_four_field_cycle_driver_certification=_bool(
             trust.get("qualitative_commentary_is_four_field_cycle_driver_certification"),
             "qualitative_commentary_is_four_field_cycle_driver_certification",
         ),
-        candidate_registration_enables_fit=_strict_bool(
+        candidate_registration_enables_fit=_bool(
             trust.get("candidate_registration_enables_fit"),
             "candidate_registration_enables_fit",
         ),
-        candidate_registration_enables_holdout=_strict_bool(
+        candidate_registration_enables_holdout=_bool(
             trust.get("candidate_registration_enables_holdout"),
             "candidate_registration_enables_holdout",
         ),
-        numeric_forecast_enabled=_strict_bool(
-            trust.get("numeric_forecast_enabled"), "numeric_forecast_enabled"
+        numeric_forecast_enabled=_bool(
+            trust.get("numeric_forecast_enabled"),
+            "numeric_forecast_enabled",
         ),
-        fair_value_estimate_enabled=_strict_bool(
-            trust.get("fair_value_estimate_enabled"), "fair_value_estimate_enabled"
+        fair_value_estimate_enabled=_bool(
+            trust.get("fair_value_estimate_enabled"),
+            "fair_value_estimate_enabled",
         ),
-        target_price_enabled=_strict_bool(
-            trust.get("target_price_enabled"), "target_price_enabled"
+        target_price_enabled=_bool(
+            trust.get("target_price_enabled"),
+            "target_price_enabled",
         ),
-        decision_score_enabled=_strict_bool(
-            trust.get("decision_score_enabled"), "decision_score_enabled"
+        decision_score_enabled=_bool(
+            trust.get("decision_score_enabled"),
+            "decision_score_enabled",
         ),
     )
 
@@ -345,27 +352,34 @@ def load_historical_expansion_frontier(
 def audit_historical_expansion_frontier(
     frontier: HistoricalExpansionFrontier,
 ) -> HistoricalExpansionAudit:
-    candidates = frontier.candidates
+    items = frontier.candidates
     return HistoricalExpansionAudit(
         frontier_evidence_id=frontier.evidence_id,
-        candidate_count=len(candidates),
+        candidate_count=len(items),
         target_additional_training_rows=frontier.target_additional_training_rows,
-        issuer_release_verified_count=sum(item.issuer_release_verified_present for item in candidates),
+        issuer_release_verified_count=sum(
+            item.issuer_release_verified_present for item in items
+        ),
         product_revenue_certified_count=sum(
-            item.opendart_product_revenue_capture_status == "certified" for item in candidates
+            item.opendart_product_revenue_capture_status == "certified"
+            for item in items
         ),
         company_profitability_certified_count=sum(
-            item.opendart_company_profitability_capture_status == "certified" for item in candidates
+            item.opendart_company_profitability_capture_status == "certified"
+            for item in items
         ),
         cycle_driver_certified_count=sum(
-            item.cycle_driver_four_field_source_status == "certified" for item in candidates
+            item.cycle_driver_four_field_source_status == "certified"
+            for item in items
         ),
-        source_layer_complete_count=sum(item.source_layers_certified for item in candidates),
+        source_layer_complete_count=sum(
+            item.source_layers_certified for item in items
+        ),
         training_row_certified_count=sum(
-            item.training_row_status == "certified" for item in candidates
+            item.training_row_status == "certified" for item in items
         ),
         remaining_candidate_rows=sum(
-            item.training_row_status != "certified" for item in candidates
+            item.training_row_status != "certified" for item in items
         ),
     )
 
