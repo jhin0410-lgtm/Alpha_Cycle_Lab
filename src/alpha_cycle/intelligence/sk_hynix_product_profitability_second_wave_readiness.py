@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import date
 
 import numpy as np
@@ -106,7 +106,11 @@ def build_second_wave_readiness(
         raise ValueError("Second-wave readiness baseline is from the future")
     if base_rank_probe.method_manifest_sha256 != method.manifest_sha256:
         raise ValueError("Second-wave readiness baseline/method binding diverged")
-    if method.holdout_period != frontier.holdout_period or method.holdout_period != policy.holdout_period:
+    holdout_diverged = (
+        method.holdout_period != frontier.holdout_period
+        or method.holdout_period != policy.holdout_period
+    )
+    if holdout_diverged:
         raise ValueError("Second-wave readiness holdout binding diverged")
 
     candidate_by_period = {item.period_id: item for item in frontier.candidates}
@@ -116,7 +120,9 @@ def build_second_wave_readiness(
         company = period.company_observation
         recovery = period.product_recovery
         if company is None or recovery is None or recovery.observation is None:
-            raise ValueError(f"Second-wave readiness lacks recovered source row: {period.period_id}")
+            raise ValueError(
+                f"Second-wave readiness lacks recovered source row: {period.period_id}"
+            )
         product = recovery.observation
         candidate = candidate_by_period[period.period_id]
         if product.rcept_no != company.rcept_no:
