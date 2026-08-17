@@ -387,7 +387,11 @@ def parse_historical_product_revenue_archive_v3(
                     )
                 except ValueError:
                     continue
-    family = "2023_whitespace_row_archive" if spec.period_end.year == 2023 else "q1_three_table_archive"
+    family = (
+        "2023_whitespace_row_archive"
+        if spec.period_end.year == 2023
+        else "q1_three_table_archive"
+    )
     return _resolve_unique(candidates, family=family)
 
 
