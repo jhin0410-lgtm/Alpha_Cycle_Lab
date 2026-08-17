@@ -7,12 +7,14 @@ from datetime import date
 from pathlib import Path
 
 from alpha_cycle.intelligence.sk_hynix_historical_product_failure_diagnostics import (
+    HistoricalProductRevenueFailureDiagnosticInventory,
     inventory_historical_product_revenue_failure_diagnostics,
 )
 from alpha_cycle.intelligence.sk_hynix_historical_product_failure_layout import (
     build_failure_layout_signature,
 )
 from alpha_cycle.intelligence.sk_hynix_historical_product_failure_replay import (
+    HistoricalProductRevenueFailureReplay,
     replay_historical_product_revenue_failure,
 )
 from alpha_cycle.intelligence.sk_hynix_historical_product_table_diagnostics import (
@@ -50,7 +52,61 @@ def _parser() -> argparse.ArgumentParser:
         "--output",
         default=str(DEFAULT_HISTORICAL_PRODUCT_REVENUE_OUTPUT),
     )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help=(
+            "Print only parser replay/integrity results and skip expensive layout signatures. "
+            "This remains fully offline and diagnostic-only."
+        ),
+    )
     return parser
+
+
+def _summary_payload(
+    *,
+    evaluation_date: date,
+    failed_periods: tuple[str, ...],
+    inventory: HistoricalProductRevenueFailureDiagnosticInventory,
+    replays: list[HistoricalProductRevenueFailureReplay],
+) -> dict[str, object]:
+    complete_provenance = tuple(
+        item.period_id
+        for item in inventory.diagnostics
+        if item.retrieval_provenance_complete
+    )
+    incomplete_provenance = tuple(
+        item.period_id
+        for item in inventory.diagnostics
+        if not item.retrieval_provenance_complete
+    )
+    return {
+        "status": "skhynix_historical_product_revenue_failure_replay_summary",
+        "evaluation_date": evaluation_date.isoformat(),
+        "failed_periods": failed_periods,
+        "verified_diagnostic_periods": tuple(
+            item.period_id for item in inventory.diagnostics
+        ),
+        "missing_diagnostic_periods": inventory.missing_diagnostic_periods,
+        "invalid_diagnostic_periods": tuple(
+            item.period_id for item in inventory.invalid_diagnostics
+        ),
+        "diagnostic_bundle_coverage_complete": inventory.diagnostic_bundle_coverage_complete,
+        "diagnostic_bundle_integrity_complete": inventory.diagnostic_bundle_integrity_complete,
+        "retrieval_provenance_complete_periods": complete_provenance,
+        "retrieval_provenance_incomplete_periods": incomplete_provenance,
+        "replay_recoverable_periods": tuple(
+            item.period_id for item in replays if item.replay_recoverable
+        ),
+        "replay_unresolved_periods": tuple(
+            item.period_id for item in replays if not item.replay_recoverable
+        ),
+        "parser_replays": [item.as_dict() for item in replays],
+        "network_requested": False,
+        "source_fact_promoted": False,
+        "certification_created": False,
+        "numeric_forecast_enabled": False,
+    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -67,6 +123,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         historical_period_id(spec): spec
         for spec in load_historical_product_revenue_specs(Path(args.registry))
     }
+    replays = [
+        replay_historical_product_revenue_failure(
+            item,
+            specs[item.period_id],
+        )
+        for item in inventory.diagnostics
+    ]
+    summary = _summary_payload(
+        evaluation_date=args.evaluation_date,
+        failed_periods=panel.failed_periods,
+        inventory=inventory,
+        replays=replays,
+    )
+    if args.summary_only:
+        print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
     signatures = [
         build_failure_layout_signature(item, specs[item.period_id]).as_dict()
         for item in inventory.diagnostics
@@ -81,39 +154,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         ]
         for item in inventory.diagnostics
     }
-    replays = [
-        replay_historical_product_revenue_failure(
-            item,
-            specs[item.period_id],
-        )
-        for item in inventory.diagnostics
-    ]
     payload = {
+        **summary,
         "status": "skhynix_historical_product_revenue_failure_diagnostics",
-        "evaluation_date": args.evaluation_date.isoformat(),
-        "failed_periods": panel.failed_periods,
-        "verified_diagnostic_periods": tuple(
-            item.period_id for item in inventory.diagnostics
-        ),
-        "missing_diagnostic_periods": inventory.missing_diagnostic_periods,
-        "invalid_diagnostic_periods": tuple(
-            item.period_id for item in inventory.invalid_diagnostics
-        ),
-        "diagnostic_bundle_coverage_complete": inventory.diagnostic_bundle_coverage_complete,
-        "diagnostic_bundle_integrity_complete": inventory.diagnostic_bundle_integrity_complete,
-        "replay_recoverable_periods": tuple(
-            item.period_id for item in replays if item.replay_recoverable
-        ),
-        "replay_unresolved_periods": tuple(
-            item.period_id for item in replays if not item.replay_recoverable
-        ),
-        "parser_replays": [item.as_dict() for item in replays],
         "signatures": signatures,
         "raw_table_signatures": raw_table_signatures,
-        "network_requested": False,
-        "source_fact_promoted": False,
-        "certification_created": False,
-        "numeric_forecast_enabled": False,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
