@@ -73,6 +73,10 @@ def _object(path: Path, label: str) -> dict[str, object]:
     return {str(key): value for key, value in cast(dict[object, object], raw).items()}
 
 
+def _number(payload: dict[str, object], key: str) -> float:
+    return float(str(payload.get(key, "0")))
+
+
 @dataclass(frozen=True)
 class RegimeHoldoutResult:
     evidence_id: str
@@ -153,19 +157,15 @@ def _result_from_payload(payload: dict[str, object]) -> RegimeHoldoutResult:
             payload.get("company_profitability_evidence_id", "")
         ),
         cycle_driver_evidence_id=str(payload.get("cycle_driver_evidence_id", "")),
-        company_revenue_krw_million=float(payload.get("company_revenue_krw_million", 0.0)),
-        actual_gross_profit_krw_million=float(
-            payload.get("actual_gross_profit_krw_million", 0.0)
+        company_revenue_krw_million=_number(payload, "company_revenue_krw_million"),
+        actual_gross_profit_krw_million=_number(payload, "actual_gross_profit_krw_million"),
+        model_prediction_krw_million=_number(payload, "model_prediction_krw_million"),
+        model_absolute_error_krw_million=_number(payload, "model_absolute_error_krw_million"),
+        benchmark_prediction_krw_million=_number(
+            payload, "benchmark_prediction_krw_million"
         ),
-        model_prediction_krw_million=float(payload.get("model_prediction_krw_million", 0.0)),
-        model_absolute_error_krw_million=float(
-            payload.get("model_absolute_error_krw_million", 0.0)
-        ),
-        benchmark_prediction_krw_million=float(
-            payload.get("benchmark_prediction_krw_million", 0.0)
-        ),
-        benchmark_absolute_error_krw_million=float(
-            payload.get("benchmark_absolute_error_krw_million", 0.0)
+        benchmark_absolute_error_krw_million=_number(
+            payload, "benchmark_absolute_error_krw_million"
         ),
         model_beats_benchmark=payload.get("model_beats_benchmark") is True,
         company_product_revenue_reconciled=(
@@ -223,7 +223,7 @@ def spend_regime_holdout_once(
     if protocol.method_evidence_id != method.evidence_id:
         raise ValueError("Regime holdout protocol/method binding diverged")
     if not training_fit.one_time_holdout_evaluation_ready:
-        raise ValueError("Regime holdout cannot be loaded before the training gate passes")
+        raise ValueError("Regime holdout cannot be scored before the training gate passes")
     if training_fit.method_evidence_id != method.evidence_id:
         raise ValueError("Regime holdout training/method binding diverged")
     root = Path(output)
@@ -231,7 +231,6 @@ def spend_regime_holdout_once(
     if pointer.is_file():
         return _reuse_existing(pointer, method, training_fit), True
 
-    # The holdout source layer is touched only after every gate above has passed.
     historical = load_historical_product_revenue_panel_evidence(
         historical_product_revenue_pointer,
         evaluation_date=source_evaluation_date,
