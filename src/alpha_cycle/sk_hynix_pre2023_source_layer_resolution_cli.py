@@ -29,8 +29,14 @@ def _parser() -> argparse.ArgumentParser:
             "cycle-driver source layers without promoting training rows."
         )
     )
-    parser.add_argument("--product-probe-output", default=str(DEFAULT_PRODUCT_REVENUE_PROBE_OUTPUT))
-    parser.add_argument("--company-probe-output", default=str(DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT))
+    parser.add_argument(
+        "--product-probe-output",
+        default=str(DEFAULT_PRODUCT_REVENUE_PROBE_OUTPUT),
+    )
+    parser.add_argument(
+        "--company-probe-output",
+        default=str(DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT),
+    )
     parser.add_argument("--output", default=str(DEFAULT_SOURCE_LAYER_RESOLUTION_OUTPUT))
     return parser
 
