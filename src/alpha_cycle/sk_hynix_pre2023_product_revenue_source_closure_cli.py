@@ -39,6 +39,8 @@ def _summary(item: ProductRevenueSourceClosurePeriod) -> dict[str, object]:
         "rcept_no": item.rcept_no,
         "member_count": item.member_count,
         "table_count": item.table_count,
+        "layout_fallback_count": item.layout_fallback_count,
+        "layout_fallback_errors": item.layout_fallback_errors,
         "aggregate_bucket_witness_count": item.aggregate_bucket_witness_count,
         "direct_separable_candidate_count": item.direct_separable_candidate_count,
         "aggregate_only_observed": item.aggregate_only_observed,
@@ -46,6 +48,7 @@ def _summary(item: ProductRevenueSourceClosurePeriod) -> dict[str, object]:
             {
                 "member_name": witness.member_name,
                 "table_index": witness.table_index,
+                "layout_mode": witness.layout_mode,
                 "combined_bucket_cells": witness.combined_bucket_cells,
                 "unit_markers": witness.unit_markers,
                 "prefix_tail": witness.prefix_tail,
@@ -57,6 +60,7 @@ def _summary(item: ProductRevenueSourceClosurePeriod) -> dict[str, object]:
             {
                 "member_name": witness.member_name,
                 "table_index": witness.table_index,
+                "layout_mode": witness.layout_mode,
                 "dram_label_rows": witness.dram_label_rows,
                 "nand_label_rows": witness.nand_label_rows,
                 "direct_labeled_amount_row_count": witness.direct_labeled_amount_row_count,
@@ -82,6 +86,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "captured_at": captured_at.isoformat(),
         "periods": [asdict(item) for item in results],
         "exhaustive_preserved_archive_scan_complete": True,
+        "layout_fallback_count": sum(item.layout_fallback_count for item in results),
         "direct_product_revenue_certified": False,
         "synthetic_product_allocation_allowed": False,
         "training_row_promoted": False,
@@ -99,6 +104,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary = {
         "status": report["status"],
         "period_count": len(results),
+        "layout_fallback_count": report["layout_fallback_count"],
         "aggregate_only_periods": [
             item.period_id for item in results if item.aggregate_only_observed
         ],
