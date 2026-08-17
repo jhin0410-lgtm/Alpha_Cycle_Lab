@@ -72,11 +72,18 @@ method:
     training_fit_metrics_seen_before_freeze: false
     holdout_outcome_seen_before_freeze: false
     method_version_frozen: true
+  holdout_protocol:
+    conditional_one_time_evaluation_pre_authorized: true
+    holdout_may_be_loaded_before_training_gate: false
+    require_training_gate_passed: true
+    require_immutable_result_reuse: true
+    benchmark_id: training_mean_gross_margin_scaled_revenue
+    require_model_absolute_error_better_than_benchmark: true
+    refit_after_holdout_allowed: false
   trust_boundary:
     product_profitability_is_direct_source_fact: false
     coefficient_estimates_are_model_outputs: true
     training_fit_can_enable_one_time_holdout_readiness: true
-    holdout_evaluation_enabled_by_manifest: false
     numeric_forecast_enabled: false
     fair_value_estimate_enabled: false
     target_price_enabled: false
