@@ -185,9 +185,7 @@ def _profile_contexts(lines: tuple[str, ...]) -> tuple[HistoricalExpansionLayout
     for start, end in windows[:12]:
         block = lines[start:end]
         folded = "\n".join(block).casefold()
-        triggers = tuple(
-            term for term in trigger_report_terms if term.casefold() in folded
-        )
+        triggers = tuple(term for term in trigger_report_terms if term.casefold() in folded)
         units = tuple(unit for unit in ("백만원", "억원") if unit in folded)
         contexts.append(
             HistoricalExpansionLayoutContext(
@@ -204,7 +202,9 @@ def _profile_contexts(lines: tuple[str, ...]) -> tuple[HistoricalExpansionLayout
     return tuple(contexts)
 
 
-def _archive_inventory(archive_bytes: bytes) -> tuple[int, tuple[tuple[str, int], ...], tuple[str, ...]]:
+def _archive_inventory(
+    archive_bytes: bytes,
+) -> tuple[int, tuple[tuple[str, int], ...], tuple[str, ...]]:
     with zipfile.ZipFile(BytesIO(archive_bytes)) as archive:
         names = tuple(item.filename for item in archive.infolist() if not item.is_dir())
     suffix_counts: dict[str, int] = {}
