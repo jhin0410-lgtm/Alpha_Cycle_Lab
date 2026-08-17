@@ -14,6 +14,9 @@ from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_layou
     parse_historical_product_revenue_archive_v3,
     parse_historical_product_revenue_text_v3,
 )
+from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_layout_v4 import (
+    parse_historical_product_revenue_archive_v4,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_text_policy import (
     parse_historical_product_revenue_text_prioritized,
 )
@@ -76,11 +79,15 @@ def parse_periodic_product_revenue_archive(
                 try:
                     return parse_historical_product_revenue_archive_v3(spec, archive_bytes)
                 except ValueError as v3_error:
-                    raise ValueError(
-                        "OpenDART product revenue archive failed current and historical parsers: "
-                        f"current={current_error}; historical={historical_error}; "
-                        f"v2={v2_error}; v3={v3_error}"
-                    ) from v3_error
+                    try:
+                        return parse_historical_product_revenue_archive_v4(spec, archive_bytes)
+                    except ValueError as v4_error:
+                        raise ValueError(
+                            "OpenDART product revenue archive failed current and historical "
+                            "parsers: "
+                            f"current={current_error}; historical={historical_error}; "
+                            f"v2={v2_error}; v3={v3_error}; v4={v4_error}"
+                        ) from v4_error
 
 
 __all__ = [
