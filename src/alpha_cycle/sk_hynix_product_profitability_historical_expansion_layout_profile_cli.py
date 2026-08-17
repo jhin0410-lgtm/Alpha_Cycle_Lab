@@ -34,7 +34,22 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _interesting_lines(context: HistoricalExpansionLayoutContext) -> tuple[str, ...]:
-    terms = ("dram", "nand", "3개월", "누적", "백만원", "억원", "매출액", "제품", "상품")
+    terms = (
+        "dram",
+        "nand",
+        "d램",
+        "디램",
+        "낸드",
+        "메모리",
+        "memory",
+        "3개월",
+        "누적",
+        "백만원",
+        "억원",
+        "매출액",
+        "제품",
+        "상품",
+    )
     selected: list[str] = []
     for line in context.lines:
         folded = line.casefold()
