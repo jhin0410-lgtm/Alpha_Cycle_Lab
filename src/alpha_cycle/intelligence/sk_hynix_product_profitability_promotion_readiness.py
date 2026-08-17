@@ -1,15 +1,10 @@
-"""Fail-closed promotion readiness for the SK hynix latent profitability method.
+"""Fail-closed promotion readiness for SK hynix latent product profitability.
 
-This layer sits above the direction-only structural rank probe.  It does not estimate
-DRAM/NAND margins.  It classifies issuer magnitude language into explicitly methodological
-interval assumptions for sensitivity diagnostics, audits sample depth, protects the frozen
-holdout, and determines whether a future *estimation-candidate promotion* may even be
-considered.
-
-The interval mapping is not an issuer numeric source fact and cannot itself enable fitting.
-Open-ended phrases (for example ``Over 70% Increase``) remain open ended.  The optional
-closed-interval design sensitivity is deliberately labelled diagnostic rather than formal
-partial identification.
+This module is deliberately above, not inside, the existing direction-only rank probe.
+Issuer magnitude language may be mapped to explicit *method assumptions* for sensitivity
+only.  Those intervals are never promoted to numeric source facts or estimation inputs.
+Open-ended language remains open ended.  No fit, holdout evaluation, forecast, valuation,
+or decision output is enabled here.
 """
 
 from __future__ import annotations
@@ -61,6 +56,20 @@ def _valid_sha(value: str) -> bool:
     return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
+def _mapping(value: object, label: str) -> dict[object, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"Promotion-readiness {label} must be an object")
+    return cast(dict[object, object], value)
+
+
+def _float(value: object) -> float:
+    return float(str(value))
+
+
+def _int(value: object) -> int:
+    return int(str(value))
+
+
 @dataclass(frozen=True)
 class MagnitudeBand:
     lower: float
@@ -109,28 +118,28 @@ class PromotionReadinessPolicy:
             raise ValueError("Promotion-readiness row/parameter policy is invalid")
         if self.minimum_residual_degrees_of_freedom < 1:
             raise ValueError("Promotion-readiness residual-DOF policy is invalid")
-        required_true = (
+        required = (
             self.require_full_column_rank,
             self.require_company_product_revenue_reconciliation,
             self.require_closed_interval_sensitivity_coverage,
             self.require_estimation_driver_input_ready,
             self.require_method_version_frozen,
         )
-        if not all(required_true):
+        if not all(required):
             raise ValueError("Promotion-readiness v0.1 must remain fail-closed")
-        if (
-            self.interval_source_fact
-            or not self.interval_method_assumption
-            or self.interval_estimation_input_ready
-            or self.interval_sensitivity_is_formal_partial_identification
-            or self.interval_sensitivity_can_enable_fit
-            or self.numeric_forecast_enabled
-            or self.fair_value_estimate_enabled
-            or self.target_price_enabled
-            or self.decision_score_enabled
-        ):
+        forbidden = (
+            self.interval_source_fact,
+            self.interval_estimation_input_ready,
+            self.interval_sensitivity_is_formal_partial_identification,
+            self.interval_sensitivity_can_enable_fit,
+            self.numeric_forecast_enabled,
+            self.fair_value_estimate_enabled,
+            self.target_price_enabled,
+            self.decision_score_enabled,
+        )
+        if any(forbidden) or not self.interval_method_assumption:
             raise ValueError("Promotion-readiness policy exceeded its trust boundary")
-        if self.around_tolerance_percent_points <= 0:
+        if self.around_tolerance_percent_points <= 0.0:
             raise ValueError("Around tolerance must be positive")
         if self.over_upper_bound is not None:
             raise ValueError("Over-N language must remain open ended in v0.1")
@@ -138,17 +147,10 @@ class PromotionReadinessPolicy:
             raise ValueError("Promotion-readiness manifest hash must be SHA-256")
 
 
-def _mapping(value: object, label: str) -> dict[object, object]:
-    if not isinstance(value, dict):
-        raise ValueError(f"Promotion-readiness {label} must be an object")
-    return cast(dict[object, object], value)
-
-
 def load_promotion_readiness_policy(
     path: str | Path = DEFAULT_PROMOTION_READINESS_POLICY,
 ) -> PromotionReadinessPolicy:
-    policy_path = Path(path)
-    with policy_path.open(encoding="utf-8") as handle:
+    with Path(path).open(encoding="utf-8") as handle:
         raw: object = yaml.safe_load(handle)
     root = _mapping(raw, "manifest")
     if root.get("schema_version") != 1:
@@ -172,16 +174,15 @@ def load_promotion_readiness_policy(
     bands: dict[str, MagnitudeBand] = {}
     for name in band_names:
         item = _mapping(semantics.get(name), f"interval_semantics.{name}")
-        bands[name] = MagnitudeBand(float(item["lower"]), float(item["upper"]))
-    manifest_sha256 = _sha_payload(root)
+        bands[name] = MagnitudeBand(_float(item.get("lower")), _float(item.get("upper")))
     over_raw = semantics.get("over_upper_bound")
     return PromotionReadinessPolicy(
         policy_id=str(policy.get("policy_id", "")),
         policy_version=str(policy.get("policy_version", "")),
         ticker=str(policy.get("ticker", "")).zfill(6),
         holdout_period=str(policy.get("holdout_period", "")),
-        minimum_rows_per_parameter=float(policy.get("minimum_rows_per_parameter", 0.0)),
-        minimum_residual_degrees_of_freedom=int(
+        minimum_rows_per_parameter=_float(policy.get("minimum_rows_per_parameter", 0.0)),
+        minimum_residual_degrees_of_freedom=_int(
             policy.get("minimum_residual_degrees_of_freedom", 0)
         ),
         require_full_column_rank=policy.get("require_full_column_rank") is True,
@@ -196,10 +197,10 @@ def load_promotion_readiness_policy(
         ),
         require_method_version_frozen=policy.get("require_method_version_frozen") is True,
         bands=bands,
-        around_tolerance_percent_points=float(
+        around_tolerance_percent_points=_float(
             semantics.get("around_tolerance_percent_points", 0.0)
         ),
-        over_upper_bound=(None if over_raw is None else float(over_raw)),
+        over_upper_bound=None if over_raw is None else _float(over_raw),
         interval_source_fact=semantics.get("source_fact") is True,
         interval_method_assumption=semantics.get("method_assumption") is True,
         interval_estimation_input_ready=semantics.get("estimation_input_ready") is True,
@@ -213,7 +214,7 @@ def load_promotion_readiness_policy(
         fair_value_estimate_enabled=trust.get("fair_value_estimate_enabled") is True,
         target_price_enabled=trust.get("target_price_enabled") is True,
         decision_score_enabled=trust.get("decision_score_enabled") is True,
-        manifest_sha256=manifest_sha256,
+        manifest_sha256=_sha_payload(root),
     )
 
 
@@ -232,7 +233,7 @@ class DriverIntervalAssumption:
     def __post_init__(self) -> None:
         if self.direction not in {"increase", "flat", "decrease"}:
             raise ValueError("Driver interval direction is invalid")
-        if self.lower_abs_percent < 0:
+        if self.lower_abs_percent < 0.0:
             raise ValueError("Driver interval lower bound is invalid")
         if self.closed_interval != (self.upper_abs_percent is not None):
             raise ValueError("Driver interval closure flag is inconsistent")
@@ -275,11 +276,16 @@ def classify_driver_interval(
     if band_name is not None:
         band = policy.bands[band_name]
         return DriverIntervalAssumption(
-            text, direction, band_name, band.lower, band.upper, True
+            text,
+            direction,
+            band_name,
+            band.lower,
+            band.upper,
+            True,
         )
 
     around = re.fullmatch(r"Around (\d+(?:\.\d+)?)%", magnitude)
-    if around:
+    if around is not None:
         center = float(around.group(1))
         tolerance = policy.around_tolerance_percent_points
         return DriverIntervalAssumption(
@@ -292,51 +298,53 @@ def classify_driver_interval(
         )
 
     over = re.fullmatch(r"Over (\d+(?:\.\d+)?)%", magnitude)
-    if over:
-        lower = float(over.group(1))
+    if over is not None:
         return DriverIntervalAssumption(
             text,
             direction,
             "open_over",
-            lower,
+            float(over.group(1)),
             policy.over_upper_bound,
             False,
         )
     raise ValueError(f"Unsupported issuer magnitude language: {source_text}")
 
 
-def _signed_fraction(interval: DriverIntervalAssumption, point: str) -> float:
-    if not interval.closed_interval or interval.upper_abs_percent is None:
-        raise ValueError("Open interval cannot enter closed sensitivity design")
-    magnitude = {
-        "lower": interval.lower_abs_percent,
-        "midpoint": (interval.lower_abs_percent + interval.upper_abs_percent) / 2.0,
-        "upper": interval.upper_abs_percent,
-    }[point]
-    sign = {"increase": 1.0, "flat": 0.0, "decrease": -1.0}[interval.direction]
-    return sign * magnitude / 100.0
-
-
 def _row_intervals(
     row: StructuralRankProbeRow,
     policy: PromotionReadinessPolicy,
 ) -> tuple[DriverIntervalAssumption, ...]:
-    return tuple(
-        classify_driver_interval(item.source_text, policy)
-        for item in (row.dram_asp, row.dram_bit_volume, row.nand_asp, row.nand_bit_volume)
-    )
+    drivers = (row.dram_asp, row.dram_bit_volume, row.nand_asp, row.nand_bit_volume)
+    return tuple(classify_driver_interval(item.source_text, policy) for item in drivers)
+
+
+def _signed_fraction(interval: DriverIntervalAssumption, point: str) -> float:
+    upper = interval.upper_abs_percent
+    if not interval.closed_interval or upper is None:
+        raise ValueError("Open interval cannot enter closed sensitivity design")
+    if point == "lower":
+        magnitude = interval.lower_abs_percent
+    elif point == "midpoint":
+        magnitude = (interval.lower_abs_percent + upper) / 2.0
+    elif point == "upper":
+        magnitude = upper
+    else:
+        raise ValueError("Sensitivity design point is invalid")
+    sign = {"increase": 1.0, "flat": 0.0, "decrease": -1.0}[interval.direction]
+    return sign * magnitude / 100.0
 
 
 def _sensitivity_rank(
     rows: tuple[StructuralRankProbeRow, ...],
-    intervals: tuple[tuple[DriverIntervalAssumption, ...], ...],
+    interval_rows: tuple[tuple[DriverIntervalAssumption, ...], ...],
     point: str,
 ) -> int:
     design: list[tuple[float, ...]] = []
-    for row, driver_intervals in zip(rows, intervals, strict=True):
-        dram_asp, dram_bit, nand_asp, nand_bit = (
-            _signed_fraction(item, point) for item in driver_intervals
-        )
+    for row, intervals in zip(rows, interval_rows, strict=True):
+        dram_asp = _signed_fraction(intervals[0], point)
+        dram_bit = _signed_fraction(intervals[1], point)
+        nand_asp = _signed_fraction(intervals[2], point)
+        nand_bit = _signed_fraction(intervals[3], point)
         design.append(
             (
                 row.dram_revenue_krw_million,
@@ -395,47 +403,38 @@ class PromotionReadinessResult:
     decision_score_enabled: bool = False
 
     def __post_init__(self) -> None:
-        if any(
-            not _valid_sha(value)
-            for value in (
-                self.evidence_id,
-                self.policy_manifest_sha256,
-                self.structural_method_manifest_sha256,
-                self.rank_probe_evidence_id,
-            )
-        ):
+        hashes = (
+            self.evidence_id,
+            self.policy_manifest_sha256,
+            self.structural_method_manifest_sha256,
+            self.rank_probe_evidence_id,
+        )
+        if any(not _valid_sha(value) for value in hashes):
             raise ValueError("Promotion-readiness evidence hashes must be SHA-256")
         if self.required_training_rows < self.parameter_count:
             raise ValueError("Promotion-readiness required row count is invalid")
-        if self.additional_training_rows_required != max(
-            0, self.required_training_rows - self.row_count
-        ):
+        expected_shortfall = max(0, self.required_training_rows - self.row_count)
+        if self.additional_training_rows_required != expected_shortfall:
             raise ValueError("Promotion-readiness row shortfall is inconsistent")
         if self.interval_driver_count != self.row_count * 4:
             raise ValueError("Promotion-readiness driver count is inconsistent")
-        if self.closed_interval_driver_count > self.interval_driver_count:
-            raise ValueError("Promotion-readiness closed interval count is invalid")
-        if self.closed_interval_sensitivity_coverage_complete != (
-            self.closed_interval_driver_count == self.interval_driver_count
-        ):
+        expected_coverage = self.closed_interval_driver_count == self.interval_driver_count
+        if self.closed_interval_sensitivity_coverage_complete != expected_coverage:
             raise ValueError("Promotion-readiness interval coverage is inconsistent")
-        if self.interval_values_are_numeric_source_facts:
-            raise ValueError("Method interval assumptions cannot become source facts")
-        if self.interval_sensitivity_is_formal_partial_identification:
-            raise ValueError("Sensitivity diagnostic cannot claim formal partial identification")
-        if self.interval_sensitivity_can_enable_fit or self.estimation_driver_input_ready:
-            raise ValueError("Interval sensitivity cannot enable estimation in v0.1")
-        if self.fit_attempt_allowed or self.holdout_evaluation_allowed:
-            raise ValueError("Readiness audit cannot execute fit or holdout")
-        if any(
-            (
-                self.numeric_forecast_enabled,
-                self.fair_value_estimate_enabled,
-                self.target_price_enabled,
-                self.decision_score_enabled,
-            )
-        ):
-            raise ValueError("Promotion-readiness audit exceeded downstream trust boundary")
+        forbidden = (
+            self.interval_values_are_numeric_source_facts,
+            self.interval_sensitivity_is_formal_partial_identification,
+            self.interval_sensitivity_can_enable_fit,
+            self.estimation_driver_input_ready,
+            self.fit_attempt_allowed,
+            self.holdout_evaluation_allowed,
+            self.numeric_forecast_enabled,
+            self.fair_value_estimate_enabled,
+            self.target_price_enabled,
+            self.decision_score_enabled,
+        )
+        if any(forbidden):
+            raise ValueError("Promotion-readiness audit exceeded its trust boundary")
 
 
 def build_promotion_readiness(
@@ -465,12 +464,13 @@ def build_promotion_readiness(
     )
 
     interval_rows = tuple(_row_intervals(row, policy) for row in rank_probe.rows)
-    flat_intervals = tuple(item for row in interval_rows for item in row)
-    closed_count = sum(item.closed_interval for item in flat_intervals)
-    coverage_complete = closed_count == len(flat_intervals)
+    intervals = tuple(item for row in interval_rows for item in row)
+    closed_count = sum(1 for item in intervals if item.closed_interval)
+    coverage_complete = closed_count == len(intervals)
     open_texts = tuple(
-        dict.fromkeys(item.source_text for item in flat_intervals if not item.closed_interval)
+        dict.fromkeys(item.source_text for item in intervals if not item.closed_interval)
     )
+
     lower_rank: int | None = None
     midpoint_rank: int | None = None
     upper_rank: int | None = None
@@ -489,17 +489,19 @@ def build_promotion_readiness(
         and not rank_probe.holdout_evaluation_allowed
     )
     estimation_driver_input_ready = False
-    gate_values = (
-        rank_probe.rank_probe_ready,
-        rank_probe.company_product_revenue_reconciliation_certified,
-        sample_passed,
-        coverage_complete,
-        sensitivity_full_rank,
-        estimation_driver_input_ready,
-        method.method_version_frozen,
-        holdout_sealed,
+    promotion_allowed = all(
+        (
+            rank_probe.rank_probe_ready,
+            rank_probe.company_product_revenue_reconciliation_certified,
+            sample_passed,
+            coverage_complete,
+            sensitivity_full_rank,
+            estimation_driver_input_ready,
+            method.method_version_frozen,
+            holdout_sealed,
+        )
     )
-    promotion_allowed = all(gate_values)
+
     reasons: list[str] = []
     if not rank_probe.rank_probe_ready:
         reasons.append("structural_rank_probe_not_ready")
@@ -527,18 +529,13 @@ def build_promotion_readiness(
         "parameter_count": rank_probe.parameter_count,
         "required_training_rows": required_rows,
         "residual_degrees_of_freedom": residual_dof,
-        "sample_depth_gate_passed": sample_passed,
         "closed_interval_driver_count": closed_count,
-        "interval_driver_count": len(flat_intervals),
+        "interval_driver_count": len(intervals),
         "open_interval_source_texts": open_texts,
         "lower_design_rank": lower_rank,
         "midpoint_design_rank": midpoint_rank,
         "upper_design_rank": upper_rank,
-        "interval_sensitivity_design_full_rank": sensitivity_full_rank,
-        "estimation_driver_input_ready": False,
-        "method_version_frozen": method.method_version_frozen,
-        "holdout_sealed": holdout_sealed,
-        "promotion_to_frozen_estimation_candidate_allowed": promotion_allowed,
+        "promotion_allowed": promotion_allowed,
         "block_reasons": tuple(reasons),
     }
     return PromotionReadinessResult(
@@ -559,7 +556,7 @@ def build_promotion_readiness(
         company_product_revenue_reconciliation_certified=(
             rank_probe.company_product_revenue_reconciliation_certified
         ),
-        interval_driver_count=len(flat_intervals),
+        interval_driver_count=len(intervals),
         closed_interval_driver_count=closed_count,
         open_interval_source_texts=open_texts,
         interval_semantics_classified=True,
@@ -604,12 +601,12 @@ def load_promotion_readiness_from_rank_probe(
 
 
 def promotion_readiness_payload(result: PromotionReadinessResult) -> dict[str, object]:
-    payload = asdict(result)
-    payload["evaluation_date"] = result.evaluation_date.isoformat()
-    return cast(
-        dict[str, object],
-        json.loads(json.dumps(payload, ensure_ascii=False, sort_keys=True)),
+    raw: object = json.loads(
+        json.dumps(asdict(result), ensure_ascii=False, sort_keys=True, default=str)
     )
+    payload = _mapping(raw, "payload")
+    payload["evaluation_date"] = result.evaluation_date.isoformat()
+    return {str(key): value for key, value in payload.items()}
 
 
 __all__ = [
