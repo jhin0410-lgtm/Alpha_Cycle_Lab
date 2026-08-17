@@ -5,8 +5,9 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-import alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel as panel
 import pytest
+
+import alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel as panel
 
 
 _EVALUATION_DATE = date(2026, 8, 16)
