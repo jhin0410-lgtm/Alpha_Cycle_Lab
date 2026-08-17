@@ -52,3 +52,20 @@ def test_expansion_company_profitability_extracts_direct_identity() -> None:
     assert observation.historical_vintage_certified is False
     assert observation.point_in_time_backtest_eligible is False
     assert observation.product_profitability_source_fact is False
+
+
+def test_failed_company_probe_result_can_preserve_raw_payload_path() -> None:
+    result = company_probe.HistoricalExpansionCompanyProbePeriodResult(
+        period_id="2021Q1",
+        success=False,
+        observation=None,
+        raw_payload_path="C:/research/2021Q1/raw_payload.json",
+        error_type="ValueError",
+        error="account did not resolve",
+    )
+
+    assert result.success is False
+    assert result.raw_payload_path is not None
+    assert result.frontier_promoted is False
+    assert result.training_row_promoted is False
+    assert result.fit_enabled is False
