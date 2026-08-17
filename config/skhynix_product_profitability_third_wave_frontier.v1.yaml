@@ -1,0 +1,106 @@
+schema_version: 1
+frontier:
+  frontier_id: skhynix_product_profitability_third_wave
+  frontier_version: 0.1-draft
+  ticker: "000660"
+  purpose: exact_six_row_identification_expansion_after_v1_holdout
+  target_additional_training_rows: 6
+  spent_v1_holdout_period: 2026Q1
+  q4_direct_quarter_derivation_allowed: false
+  candidates:
+    - period_id: 2017Q1
+      period_start: 2017-01-01
+      period_end: 2017-03-31
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-first-quarter-2017-results/
+      issuer_release_published_date: 2017-04-25
+      opendart_report_name_exact: "분기보고서 (2017.03)"
+      opendart_discovery_begin_date: 2017-05-01
+      opendart_discovery_end_date: 2017-05-31
+      company_profitability_report_code: "11013"
+      drivers_qoq_percent:
+        dram_bit_volume: -5
+        dram_asp: 24
+        nand_bit_volume: -3
+        nand_asp: 15
+    - period_id: 2017Q2
+      period_start: 2017-04-01
+      period_end: 2017-06-30
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-second-quarter-2017-results/
+      issuer_release_published_date: 2017-07-25
+      opendart_report_name_exact: "반기보고서 (2017.06)"
+      opendart_discovery_begin_date: 2017-08-01
+      opendart_discovery_end_date: 2017-08-31
+      company_profitability_report_code: "11012"
+      drivers_qoq_percent:
+        dram_bit_volume: 3
+        dram_asp: 11
+        nand_bit_volume: -6
+        nand_asp: 8
+    - period_id: 2017Q3
+      period_start: 2017-07-01
+      period_end: 2017-09-30
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-third-quarter-2017-results/
+      issuer_release_published_date: 2017-10-26
+      opendart_report_name_exact: "분기보고서 (2017.09)"
+      opendart_discovery_begin_date: 2017-11-01
+      opendart_discovery_end_date: 2017-11-30
+      company_profitability_report_code: "11014"
+      drivers_qoq_percent:
+        dram_bit_volume: 17
+        dram_asp: 6
+        nand_bit_volume: 16
+        nand_asp: -3
+    - period_id: 2018Q1
+      period_start: 2018-01-01
+      period_end: 2018-03-31
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-first-quarter-2018-results/
+      issuer_release_published_date: 2018-04-24
+      opendart_report_name_exact: "분기보고서 (2018.03)"
+      opendart_discovery_begin_date: 2018-05-01
+      opendart_discovery_end_date: 2018-05-31
+      company_profitability_report_code: "11013"
+      drivers_qoq_percent:
+        dram_bit_volume: -5
+        dram_asp: 9
+        nand_bit_volume: -10
+        nand_asp: -1
+    - period_id: 2018Q2
+      period_start: 2018-04-01
+      period_end: 2018-06-30
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-second-quarter-2018-results/
+      issuer_release_published_date: 2018-07-26
+      opendart_report_name_exact: "반기보고서 (2018.06)"
+      opendart_discovery_begin_date: 2018-08-01
+      opendart_discovery_end_date: 2018-08-31
+      company_profitability_report_code: "11012"
+      drivers_qoq_percent:
+        dram_bit_volume: 16
+        dram_asp: 4
+        nand_bit_volume: 19
+        nand_asp: -9
+    - period_id: 2018Q3
+      period_start: 2018-07-01
+      period_end: 2018-09-30
+      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-third-quarter-2018-results/
+      issuer_release_published_date: 2018-10-25
+      opendart_report_name_exact: "분기보고서 (2018.09)"
+      opendart_discovery_begin_date: 2018-11-01
+      opendart_discovery_end_date: 2018-11-30
+      company_profitability_report_code: "11014"
+      drivers_qoq_percent:
+        dram_bit_volume: 5
+        dram_asp: 1
+        nand_bit_volume: 19
+        nand_asp: -10
+  trust_boundary:
+    issuer_driver_values_are_exact_numeric_source_facts: true
+    product_revenue_certified: false
+    company_profitability_certified: false
+    training_row_promoted: false
+    v1_refit_enabled: false
+    v2_fit_enabled: false
+    reuse_2026q1_as_unseen_holdout_for_v2_allowed: false
+    numeric_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false

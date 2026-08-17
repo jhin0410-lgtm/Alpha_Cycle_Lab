@@ -1,0 +1,31 @@
+schema_version: 1
+audit:
+  audit_id: skhynix_product_profitability_regime_v1_structural_plausibility
+  audit_version: 1.0
+  status: post_holdout_diagnostic_not_predictive_revalidation
+  method_id: skhynix_product_profitability_regime_ols
+  method_version: 1.0-frozen-pre-holdout
+  interpretation_contract:
+    coefficient_family: revenue_weighted_gross_margin_contribution_ratio
+    direction_codes:
+      - -1.0
+      - 0.0
+      - 1.0
+    evaluate_full_direction_regime_grid: true
+    nonnegative_cogs_identity_upper_bound: 1.0
+    negative_margin_is_automatic_failure: false
+    require_no_upper_bound_violation_for_structural_margin_interpretation: true
+  diagnostics:
+    max_leverage: report_only_no_posthoc_threshold
+    max_cooks_distance: report_only_no_posthoc_threshold
+    coefficient_jackknife_stability: report_only_no_posthoc_threshold
+    other_margin_absolute_magnitude: report_only_no_posthoc_threshold
+  decision_boundary:
+    predictive_validation_can_remain_passed_if_structural_interpretation_fails: true
+    structural_margin_interpretation_required_before_forward_forecast_contract: true
+    forward_forecast_enabled_on_structural_failure: false
+    fair_value_enabled_on_structural_failure: false
+    target_price_enabled_on_structural_failure: false
+    decision_score_enabled_on_structural_failure: false
+    refit_v1_after_holdout_allowed: false
+    reuse_2026q1_as_unseen_holdout_for_v2_allowed: false
