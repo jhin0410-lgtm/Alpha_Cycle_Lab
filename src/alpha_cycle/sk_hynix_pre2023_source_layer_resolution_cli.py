@@ -25,8 +25,8 @@ DEFAULT_SOURCE_LAYER_RESOLUTION_OUTPUT = Path(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Resolve 2021-2022 SK hynix company profitability, product revenue, and "
-            "cycle-driver source layers without promoting training rows."
+            "Resolve 2021-2022 SK hynix company profitability, certified product revenue, "
+            "and cycle-driver source layers without promoting training rows."
         )
     )
     parser.add_argument(
@@ -52,6 +52,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": "skhynix_pre2023_source_layer_resolution_completed",
         "captured_at": captured_at.isoformat(),
         "resolution": asdict(resolution),
+        "direct_product_revenue_certified_count": (
+            resolution.direct_product_revenue_certified_count
+        ),
         "company_constraints": {
             period_id: asdict(item) for period_id, item in sorted(company.items())
         },
@@ -74,6 +77,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "status": report["status"],
         "evidence_id": resolution.evidence_id,
         "company_constraint_verified_count": resolution.company_constraint_verified_count,
+        "direct_product_revenue_certified_count": (
+            resolution.direct_product_revenue_certified_count
+        ),
         "aggregate_only_product_revenue_count": (
             resolution.aggregate_only_product_revenue_count
         ),
@@ -90,10 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "numeric_driver_point_imputation_allowed": False,
         "alternative_model_fit_allowed": False,
         "holdout_evaluation_allowed": False,
-        "next_action": (
-            "freeze_source_availability_then_decide_between_narrow_direct_parser_review_"
-            "and_separate_company_level_auxiliary_method"
-        ),
+        "next_action": "run_2019_2020_second_wave_six_row_acquisition_frontier",
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
