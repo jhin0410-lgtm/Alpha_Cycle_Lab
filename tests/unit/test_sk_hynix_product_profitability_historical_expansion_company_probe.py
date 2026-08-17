@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_company_probe import (
-    extract_expansion_company_profitability_observation,
+from alpha_cycle.intelligence import (
+    sk_hynix_product_profitability_historical_expansion_company_probe as company_probe,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_frontier import (
     load_historical_expansion_frontier,
@@ -31,7 +31,7 @@ def test_expansion_company_profitability_extracts_direct_identity() -> None:
         }
     }
 
-    observation = extract_expansion_company_profitability_observation(
+    observation = company_probe.extract_expansion_company_profitability_observation(
         candidate,
         raw_payload,
         revenue_account_ids=(
