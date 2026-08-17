@@ -75,7 +75,7 @@ method:
     method_version_frozen: true
   holdout_protocol:
     conditional_one_time_evaluation_pre_authorized: true
-    holdout_may_be_loaded_before_training_gate: false
+    holdout_may_be_scored_before_training_gate: false
     require_training_gate_passed: true
     require_immutable_result_reuse: true
     benchmark_id: training_mean_gross_margin_scaled_revenue
