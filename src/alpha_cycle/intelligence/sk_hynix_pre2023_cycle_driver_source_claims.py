@@ -1,9 +1,9 @@
-"""Extract issuer-reported pre-2023 SK hynix ASP and shipment language from DART filings.
+"""Extract current-period SK hynix ASP and shipment claims from preserved DART text.
 
-This layer preserves what the filing actually says.  It may normalize qualitative language
-into the same vocabulary used by interval sensitivity, but that normalization is explicitly
-a method assumption rather than a numeric source fact.  Nothing here creates a point
-estimate, certifies a four-field estimation row, or enables fitting.
+The source layer is intentionally narrow. It accepts only current-quarter operational
+language that ties product, metric, direction, and (when present) magnitude together.
+Historical market-size narrative, company revenue growth, and operating-profit changes are
+not product-driver claims. Qualitative magnitudes remain interval-method assumptions only.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ _EXPECTED_PERIODS = (
     "2022Q2",
     "2022Q3",
 )
-_MAGNITUDE_RE = re.compile(
-    r"(?P<phrase>"
+_MAGNITUDE_PATTERN = (
+    r"(?:"
     r"한\s*자릿수\s*(?:초반|중반|후반)|"
     r"(?:10|20|30)%\s*(?:초반|중반|후반)|"
     r"약\s*\d+(?:\.\d+)?%\s*(?:수준)?|"
@@ -39,6 +39,30 @@ _MAGNITUDE_RE = re.compile(
     r"\d+(?:\.\d+)?%\s*내외|"
     r"\d+(?:\.\d+)?%"
     r")"
+)
+_METRIC_FIRST_RE = re.compile(
+    rf"(?P<metric>ASP|출하량)(?:은|는|이|가)?"
+    rf"(?P<middle>[^.,;。]{{0,90}}?)"
+    rf"(?P<phrase>{_MAGNITUDE_PATTERN})"
+    rf"\s*(?:수준)?\s*(?:으로)?\s*"
+    rf"(?P<direction>증가|상승|감소|하락)",
+    flags=re.IGNORECASE,
+)
+_MAGNITUDE_FIRST_RE = re.compile(
+    rf"(?P<phrase>{_MAGNITUDE_PATTERN})"
+    rf"\s*(?:수준)?\s*(?:으로)?\s*(?:의\s*)?"
+    rf"(?P<metric>ASP|출하량)(?:은|는|이|가)?\s*"
+    rf"(?P<direction>증가|상승|감소|하락)",
+    flags=re.IGNORECASE,
+)
+_PRODUCT_RE = re.compile(r"DRAM|NAND|낸드", flags=re.IGNORECASE)
+_CURRENT_COMPARISON_RE = re.compile(r"(?:전\s*분기|전분기|직전\s*분기)\s*대비")
+_DIRECTION_RE = re.compile(
+    r"(?P<metric>ASP|출하량)(?:은|는|이|가)?\s*(?P<direction>증가|상승|감소|하락)"
+)
+_BOTH_PRODUCTS_RE = re.compile(
+    r"DRAM\s*(?:과|및|/)\s*(?:NAND|낸드)\s*모두",
+    flags=re.IGNORECASE,
 )
 
 
@@ -81,58 +105,45 @@ def _source_lines(diagnostic: HistoricalProductRevenueFailureDiagnostic) -> tupl
         if (line := _normalize_space(raw))
         and ("ASP" in line or "출하량" in line)
         and ("DRAM" in line or "NAND" in line or "낸드" in line)
+        and _CURRENT_COMPARISON_RE.search(line) is not None
     )
 
 
-def _nearest_product(text: str, position: int) -> str | None:
+def _product_before(text: str, position: int) -> tuple[str, int] | None:
     candidates: list[tuple[int, str]] = []
-    for marker, product in (("DRAM", "dram"), ("NAND", "nand"), ("낸드", "nand")):
-        for match in re.finditer(marker, text, flags=re.IGNORECASE):
-            if match.start() <= position:
-                candidates.append((match.start(), product))
-    return max(candidates)[1] if candidates else None
-
-
-def _nearest_metric(text: str, start: int, end: int) -> str | None:
-    candidates: list[tuple[int, str]] = []
-    for marker, metric in (("ASP", "asp"), ("출하량", "bit_volume")):
-        for match in re.finditer(marker, text, flags=re.IGNORECASE):
-            distance = min(abs(match.start() - start), abs(match.start() - end))
-            if distance <= 130:
-                candidates.append((distance, metric))
-    return min(candidates)[1] if candidates else None
-
-
-def _direction(window: str) -> str | None:
-    folded = window.casefold()
-    increase = min(
-        (folded.find(token) for token in ("증가", "상승") if token in folded),
-        default=-1,
-    )
-    decrease = min(
-        (folded.find(token) for token in ("감소", "하락") if token in folded),
-        default=-1,
-    )
-    if increase < 0 and decrease < 0:
+    for match in _PRODUCT_RE.finditer(text):
+        if match.start() > position:
+            break
+        token = match.group(0).casefold()
+        product = "dram" if token == "dram" else "nand"
+        candidates.append((match.start(), product))
+    if not candidates:
         return None
-    if increase < 0:
-        return "decrease"
-    if decrease < 0:
-        return "increase"
-    return "increase" if increase < decrease else "decrease"
+    start, product = max(candidates)
+    return product, start
 
 
-def _basis(window: str, product: str) -> str:
-    folded = window.casefold()
-    solidigm = "solidigm" in folded or "솔리다임" in folded
-    hq = "본사 기준" in window
+def _sentence_excerpt(text: str, start: int, end: int) -> str:
+    left = max(text.rfind(".", 0, start), text.rfind("。", 0, start))
+    left = 0 if left < 0 else left + 1
+    dot = text.find(".", end)
+    ideographic = text.find("。", end)
+    right_candidates = [value for value in (dot, ideographic) if value >= 0]
+    right = min(right_candidates) + 1 if right_candidates else len(text)
+    return _normalize_space(text[left:right])
+
+
+def _basis(excerpt: str, product: str) -> str:
+    folded = excerpt.casefold()
+    solidigm = "solidigm" in folded or "솔리다임" in excerpt
+    hq = "본사 기준" in excerpt
     if solidigm and hq:
         return "solidigm_integrated_and_hq"
     if solidigm:
         return "solidigm_integrated"
     if hq:
         return "hq"
-    return "issuer_unspecified" if product == "nand" else "issuer_reported"
+    return "issuer_reported" if product == "dram" else "issuer_unspecified"
 
 
 def _normalized_interval_text(phrase: str, direction: str) -> str | None:
@@ -164,6 +175,10 @@ def _normalized_interval_text(phrase: str, direction: str) -> str | None:
     if exact is not None:
         return f"Around {exact.group(1)}% {suffix}"
     return None
+
+
+def _direction(value: str) -> str:
+    return "increase" if value in {"증가", "상승"} else "decrease"
 
 
 @dataclass(frozen=True)
@@ -246,55 +261,79 @@ class Pre2023CycleDriverPeriodProfile:
             raise ValueError("Pre-2023 cycle-driver profile exceeded trust boundary")
 
 
-def _claims_for_line(
+def _claim(
+    *,
+    period_id: str,
+    product: str,
+    metric: str,
+    basis: str,
+    direction: str,
+    source_magnitude: str,
+    normalized: str | None,
+    excerpt: str,
+    text_sha256: str,
+) -> Pre2023CycleDriverClaim:
+    stable = {
+        "period_id": period_id,
+        "product": product,
+        "metric": metric,
+        "basis": basis,
+        "direction": direction,
+        "source_magnitude_text": source_magnitude,
+        "normalized_interval_text": normalized,
+        "source_excerpt": excerpt,
+        "normalized_text_sha256": text_sha256,
+        "numeric_point_source_fact": False,
+        "estimation_input_ready": False,
+    }
+    return Pre2023CycleDriverClaim(
+        evidence_id=_sha(stable),
+        period_id=period_id,
+        product=product,
+        metric=metric,
+        basis=basis,
+        direction=direction,
+        source_magnitude_text=source_magnitude,
+        normalized_interval_text=normalized,
+        source_excerpt=excerpt,
+        normalized_text_sha256=text_sha256,
+    )
+
+
+def _magnitude_claims_for_line(
     period_id: str,
     line: str,
     *,
     text_sha256: str,
 ) -> tuple[Pre2023CycleDriverClaim, ...]:
     results: list[Pre2023CycleDriverClaim] = []
-    for match in _MAGNITUDE_RE.finditer(line):
-        product = _nearest_product(line, match.start())
-        metric = _nearest_metric(line, match.start(), match.end())
-        if product is None or metric is None:
-            continue
-        window_start = max(0, match.start() - 100)
-        window_end = min(len(line), match.end() + 120)
-        window = line[window_start:window_end]
-        direction = _direction(line[match.start() : min(len(line), match.end() + 80)])
-        if direction is None:
-            direction = _direction(window)
-        if direction is None:
-            continue
-        source_magnitude = _normalize_space(match.group("phrase"))
-        normalized = _normalized_interval_text(source_magnitude, direction)
-        stable = {
-            "period_id": period_id,
-            "product": product,
-            "metric": metric,
-            "basis": _basis(window, product),
-            "direction": direction,
-            "source_magnitude_text": source_magnitude,
-            "normalized_interval_text": normalized,
-            "source_excerpt": line,
-            "normalized_text_sha256": text_sha256,
-            "numeric_point_source_fact": False,
-            "estimation_input_ready": False,
-        }
-        results.append(
-            Pre2023CycleDriverClaim(
-                evidence_id=_sha(stable),
-                period_id=period_id,
-                product=product,
-                metric=metric,
-                basis=str(stable["basis"]),
-                direction=direction,
-                source_magnitude_text=source_magnitude,
-                normalized_interval_text=normalized,
-                source_excerpt=line,
-                normalized_text_sha256=text_sha256,
+    for pattern in (_METRIC_FIRST_RE, _MAGNITUDE_FIRST_RE):
+        for match in pattern.finditer(line):
+            middle = match.groupdict().get("middle")
+            if middle is not None and ("매출" in middle or "영업이익" in middle):
+                continue
+            metric_token = match.group("metric").casefold()
+            metric = "asp" if metric_token == "asp" else "bit_volume"
+            product_match = _product_before(line, match.start("metric"))
+            if product_match is None:
+                continue
+            product, _product_start = product_match
+            direction = _direction(match.group("direction"))
+            source_magnitude = _normalize_space(match.group("phrase"))
+            excerpt = _sentence_excerpt(line, match.start(), match.end())
+            results.append(
+                _claim(
+                    period_id=period_id,
+                    product=product,
+                    metric=metric,
+                    basis=_basis(excerpt, product),
+                    direction=direction,
+                    source_magnitude=source_magnitude,
+                    normalized=_normalized_interval_text(source_magnitude, direction),
+                    excerpt=excerpt,
+                    text_sha256=text_sha256,
+                )
             )
-        )
     unique: dict[tuple[str, str, str, str, str], Pre2023CycleDriverClaim] = {}
     for item in results:
         key = (
@@ -306,6 +345,63 @@ def _claims_for_line(
         )
         unique[key] = item
     return tuple(unique.values())
+
+
+def _direction_only_group_claims(
+    period_id: str,
+    line: str,
+    *,
+    text_sha256: str,
+    existing: tuple[Pre2023CycleDriverClaim, ...],
+) -> tuple[Pre2023CycleDriverClaim, ...]:
+    covered = {(item.product, item.metric) for item in existing}
+    results: list[Pre2023CycleDriverClaim] = []
+    for group in _BOTH_PRODUCTS_RE.finditer(line):
+        excerpt = _sentence_excerpt(line, group.start(), group.end())
+        if _CURRENT_COMPARISON_RE.search(excerpt) is None:
+            continue
+        metric_directions = {
+            (
+                "asp" if match.group("metric").casefold() == "asp" else "bit_volume",
+                _direction(match.group("direction")),
+            )
+            for match in _DIRECTION_RE.finditer(excerpt)
+        }
+        for product in ("dram", "nand"):
+            for metric, direction in metric_directions:
+                if (product, metric) in covered:
+                    continue
+                results.append(
+                    _claim(
+                        period_id=period_id,
+                        product=product,
+                        metric=metric,
+                        basis="issuer_reported_direction_only",
+                        direction=direction,
+                        source_magnitude="direction_only",
+                        normalized=None,
+                        excerpt=excerpt,
+                        text_sha256=text_sha256,
+                    )
+                )
+                covered.add((product, metric))
+    return tuple(results)
+
+
+def _claims_for_line(
+    period_id: str,
+    line: str,
+    *,
+    text_sha256: str,
+) -> tuple[Pre2023CycleDriverClaim, ...]:
+    magnitude = _magnitude_claims_for_line(period_id, line, text_sha256=text_sha256)
+    direction_only = _direction_only_group_claims(
+        period_id,
+        line,
+        text_sha256=text_sha256,
+        existing=magnitude,
+    )
+    return (*magnitude, *direction_only)
 
 
 def build_pre2023_cycle_driver_profile(
@@ -321,6 +417,17 @@ def build_pre2023_cycle_driver_profile(
             text_sha256=diagnostic.text_sha256,
         )
     )
+    unique: dict[tuple[str, str, str, str, str], Pre2023CycleDriverClaim] = {}
+    for item in claims:
+        key = (
+            item.product,
+            item.metric,
+            item.basis,
+            item.source_magnitude_text,
+            item.direction,
+        )
+        unique[key] = item
+    claims = tuple(unique.values())
     counts = {
         (product, metric): sum(
             item.product == product and item.metric == metric for item in claims

@@ -1,13 +1,10 @@
 """Exhaustively profile preserved pre-2023 SK hynix filings for separable product revenue.
 
-The earlier expansion probe established that production parsers cannot resolve 2021Q1-Q3
-or 2022Q1-Q3. This module answers a narrower source question before another parser family
-is written: does the preserved official filing contain any table that directly separates
-DRAM and NAND revenue, or does the business-report product section expose only an aggregate
-bucket such as ``DRAM, NAND Flash, CIS 등``?
-
-The audit is diagnostic only. A candidate is not a certification, absence of a candidate
-is not a synthetic allocation license, and aggregate revenue is never split by assumption.
+The production table-grid parser is intentionally strict because it supports certification.
+Historical DART HTML can contain malformed rowspan/colspan combinations. This diagnostic
+source-closure layer therefore falls back to the raw cell sequence when strict grid
+reconstruction fails, records that fallback, and continues scanning every preserved table.
+A fallback witness is never a certification and never licenses synthetic product allocation.
 """
 
 from __future__ import annotations
@@ -55,6 +52,7 @@ _COMBINED_BUCKET = re.compile(
     r"dram.*(?:nand|낸드)|(?:nand|낸드).*dram",
     flags=re.IGNORECASE,
 )
+_LAYOUT_MODES = frozenset({"structured_grid", "flat_cell_sequence_fallback"})
 
 
 def _norm(value: str) -> str:
@@ -86,6 +84,26 @@ def _latest_diagnostic_path(period_root: Path) -> Path:
     if path is None:
         raise ValueError(f"Pre-2023 product-revenue diagnostic is missing: {period_root}")
     return path
+
+
+def _flat_grid(table: _RawTable) -> tuple[tuple[str, ...], ...]:
+    return tuple(
+        tuple(cell.text for cell in row if cell.text.strip())
+        for row in table.rows
+        if any(cell.text.strip() for cell in row)
+    )
+
+
+def _diagnostic_grid(
+    table: _RawTable,
+) -> tuple[tuple[tuple[str, ...], ...], str, str | None]:
+    try:
+        return _grid(table), "structured_grid", None
+    except ValueError as exc:
+        grid = _flat_grid(table)
+        if not grid:
+            raise ValueError("OpenDART fallback table has no textual cells") from exc
+        return grid, "flat_cell_sequence_fallback", str(exc)
 
 
 def _table_text(table: _RawTable, grid: tuple[tuple[str, ...], ...]) -> str:
@@ -141,6 +159,7 @@ class ProductRevenueTableWitness:
     member_name: str
     table_index: int
     witness_kind: str
+    layout_mode: str
     prefix_tail: tuple[str, ...]
     rows: tuple[tuple[str, ...], ...]
     combined_bucket_cells: tuple[str, ...]
@@ -152,6 +171,8 @@ class ProductRevenueTableWitness:
     def __post_init__(self) -> None:
         if self.witness_kind not in {"aggregate_bucket", "direct_separable_candidate"}:
             raise ValueError("Pre-2023 product-revenue witness kind is invalid")
+        if self.layout_mode not in _LAYOUT_MODES:
+            raise ValueError("Pre-2023 product-revenue layout mode is invalid")
         if self.table_index < 0 or not self.member_name or not self.rows:
             raise ValueError("Pre-2023 product-revenue witness is incomplete")
         if self.direct_labeled_amount_row_count < 0:
@@ -174,6 +195,8 @@ class ProductRevenueSourceClosurePeriod:
     archive_sha256: str
     member_count: int
     table_count: int
+    layout_fallback_count: int
+    layout_fallback_errors: tuple[str, ...]
     aggregate_bucket_witnesses: tuple[ProductRevenueTableWitness, ...]
     direct_separable_candidates: tuple[ProductRevenueTableWitness, ...]
     aggregate_bucket_witness_count: int
@@ -191,6 +214,10 @@ class ProductRevenueSourceClosurePeriod:
             raise ValueError("Pre-2023 source-closure hashes must be SHA-256")
         if self.member_count < 1 or self.table_count < 1:
             raise ValueError("Pre-2023 source-closure archive/table counts are invalid")
+        if self.layout_fallback_count != len(self.layout_fallback_errors):
+            raise ValueError("Pre-2023 source-closure fallback count is inconsistent")
+        if self.layout_fallback_count < 0 or self.layout_fallback_count > self.table_count:
+            raise ValueError("Pre-2023 source-closure fallback count is invalid")
         if self.aggregate_bucket_witness_count != len(self.aggregate_bucket_witnesses):
             raise ValueError("Aggregate product-revenue witness count is inconsistent")
         if self.direct_separable_candidate_count != len(self.direct_separable_candidates):
@@ -218,6 +245,7 @@ def _witness(
     member_name: str,
     table_index: int,
     kind: str,
+    layout_mode: str,
     table: _RawTable,
     grid: tuple[tuple[str, ...], ...],
     combined: tuple[str, ...],
@@ -230,6 +258,7 @@ def _witness(
         member_name=member_name,
         table_index=table_index,
         witness_kind=kind,
+        layout_mode=layout_mode,
         prefix_tail=tuple(table.prefix_text[-16:]),
         rows=grid,
         combined_bucket_cells=combined,
@@ -253,6 +282,7 @@ def build_product_revenue_source_closure(
 
     aggregate: list[ProductRevenueTableWitness] = []
     direct: list[ProductRevenueTableWitness] = []
+    fallback_errors: list[str] = []
     member_count = 0
     table_count = 0
     with archive:
@@ -269,7 +299,9 @@ def build_product_revenue_source_closure(
             parser.close()
             table_count += len(parser.tables)
             for table_index, table in enumerate(parser.tables):
-                grid = _grid(table)
+                grid, layout_mode, fallback_error = _diagnostic_grid(table)
+                if fallback_error is not None:
+                    fallback_errors.append(f"{safe_name}#{table_index}: {fallback_error}")
                 if not grid:
                     continue
                 context = _table_text(table, grid)
@@ -285,6 +317,7 @@ def build_product_revenue_source_closure(
                             member_name=safe_name,
                             table_index=table_index,
                             kind="aggregate_bucket",
+                            layout_mode=layout_mode,
                             table=table,
                             grid=grid,
                             combined=combined,
@@ -301,6 +334,7 @@ def build_product_revenue_source_closure(
                                 member_name=safe_name,
                                 table_index=table_index,
                                 kind="direct_separable_candidate",
+                                layout_mode=layout_mode,
                                 table=table,
                                 grid=grid,
                                 combined=combined,
@@ -315,6 +349,7 @@ def build_product_revenue_source_closure(
         "archive_sha256": diagnostic.archive_sha256,
         "member_count": member_count,
         "table_count": table_count,
+        "layout_fallback_errors": fallback_errors,
         "aggregate": [asdict(item) for item in aggregate],
         "direct": [asdict(item) for item in direct],
         "direct_product_revenue_certified": False,
@@ -327,6 +362,8 @@ def build_product_revenue_source_closure(
         archive_sha256=diagnostic.archive_sha256,
         member_count=member_count,
         table_count=table_count,
+        layout_fallback_count=len(fallback_errors),
+        layout_fallback_errors=tuple(fallback_errors),
         aggregate_bucket_witnesses=tuple(aggregate),
         direct_separable_candidates=tuple(direct),
         aggregate_bucket_witness_count=len(aggregate),

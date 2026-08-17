@@ -53,13 +53,51 @@ def test_cycle_driver_claims_preserve_2022q2_issuer_language(tmp_path: Path) -> 
     assert "High-single% Increase" in normalized
     assert "Low-teen% Increase" in normalized
     assert "Low-single% Increase" in normalized
-    assert profile.dram_asp_claim_count >= 1
-    assert profile.dram_bit_volume_claim_count >= 1
-    assert profile.nand_asp_claim_count >= 1
-    assert profile.nand_bit_volume_claim_count >= 1
+    assert profile.dram_asp_claim_count == 1
+    assert profile.dram_bit_volume_claim_count == 1
+    assert profile.nand_asp_claim_count == 1
+    assert profile.nand_bit_volume_claim_count == 2
     assert profile.source_language_four_field_coverage is True
     assert all(claim.issuer_driver_language_source_fact for claim in profile.claims)
     assert all(not claim.numeric_point_source_fact for claim in profile.claims)
     assert all(not claim.estimation_input_ready for claim in profile.claims)
     assert profile.four_field_driver_certified is False
     assert profile.fit_enabled is False
+
+
+def test_cycle_driver_claims_reject_market_history_and_company_growth(tmp_path: Path) -> None:
+    text = (
+        "[DRAM] 시장 조사기관인 Gartner에 따르면 2014년 $461억(+32%), "
+        "2015년 $446억(-3.3%)의 매출을 기록하였습니다. 2016년 ASP 하락 후 "
+        "2017년 매출은 +74.1% 성장했습니다.\n"
+        "DRAM의 ASP 하락 영향을 출하량 증가로 상쇄한 결과, 2분기 매출은 "
+        "전 분기 대비 14% 성장하였고 영업이익은 20% 증가하였습니다."
+    )
+    profile = build_pre2023_cycle_driver_profile(_diagnostic(tmp_path, text))
+
+    assert profile.claim_count == 0
+    assert profile.source_language_four_field_coverage is False
+
+
+def test_cycle_driver_direction_only_group_statement_covers_shipments(tmp_path: Path) -> None:
+    text = (
+        "DRAM은 전 분기 대비 약 20% 수준으로 ASP가 하락하였습니다. "
+        "NAND는 ASP가 전 분기 대비 20% 이상 하락하였습니다.\n"
+        "DRAM과 NAND 모두 전 분기 대비 출하량 감소 및 ASP 하락으로 인해 "
+        "3분기 매출은 전 분기 대비 20% 감소하였습니다."
+    )
+    profile = build_pre2023_cycle_driver_profile(_diagnostic(tmp_path, text))
+
+    direction_only = {
+        (claim.product, claim.metric)
+        for claim in profile.claims
+        if claim.source_magnitude_text == "direction_only"
+    }
+    assert ("dram", "bit_volume") in direction_only
+    assert ("nand", "bit_volume") in direction_only
+    assert profile.source_language_four_field_coverage is True
+    assert all(
+        claim.normalized_interval_text is None
+        for claim in profile.claims
+        if claim.source_magnitude_text == "direction_only"
+    )

@@ -61,7 +61,9 @@ def test_source_closure_identifies_aggregate_bucket_without_allocation(tmp_path:
 
     assert result.aggregate_bucket_witness_count == 1
     assert result.direct_separable_candidate_count == 0
+    assert result.layout_fallback_count == 0
     assert result.aggregate_only_observed is True
+    assert result.aggregate_bucket_witnesses[0].layout_mode == "structured_grid"
     assert result.direct_product_revenue_certified is False
     assert result.synthetic_product_allocation_allowed is False
     assert result.training_row_promoted is False
@@ -84,5 +86,28 @@ def test_source_closure_surfaces_direct_candidate_but_does_not_certify(tmp_path:
     assert result.direct_separable_candidate_count == 1
     assert result.aggregate_only_observed is False
     assert result.direct_separable_candidates[0].direct_labeled_amount_row_count == 2
+    assert result.direct_separable_candidates[0].layout_mode == "structured_grid"
+    assert result.direct_product_revenue_certified is False
+    assert result.synthetic_product_allocation_allowed is False
+
+
+def test_source_closure_falls_back_on_rowspan_colspan_overlap(tmp_path: Path) -> None:
+    html = """
+    <html><body>
+    <p>주요 제품 매출액 현황</p><p>(단위 : 백만원)</p>
+    <table>
+      <tr><td>제품</td><td rowspan="2">매출액</td><td>구분</td></tr>
+      <tr><td colspan="2">DRAM, NAND Flash, CIS 등</td><td>25,966,654</td></tr>
+    </table>
+    </body></html>
+    """
+    result = build_product_revenue_source_closure(_diagnostic(tmp_path, _archive(html)))
+
+    assert result.layout_fallback_count == 1
+    assert len(result.layout_fallback_errors) == 1
+    assert "overlaps an active rowspan" in result.layout_fallback_errors[0]
+    assert result.aggregate_bucket_witness_count == 1
+    assert result.aggregate_bucket_witnesses[0].layout_mode == "flat_cell_sequence_fallback"
+    assert result.exhaustive_preserved_archive_scan_complete is True
     assert result.direct_product_revenue_certified is False
     assert result.synthetic_product_allocation_allowed is False
