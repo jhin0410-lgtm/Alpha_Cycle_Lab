@@ -10,10 +10,12 @@ def test_second_wave_source_completion_does_not_promote_training_or_fit() -> Non
         period_id="2019Q1",
         driver_four_field_numeric_source_certified=True,
         product_revenue_probe_success=True,
+        product_revenue_certified=True,
+        product_recovery=None,
         company_profitability_verified=True,
         product_artifact_pointer="artifact.json",
         company_observation=None,
-        product_error=None,
+        product_probe_error=None,
         company_error=None,
     )
 
