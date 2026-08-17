@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
 from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_source_closure import (
