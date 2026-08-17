@@ -58,7 +58,10 @@ def replay_periodic_product_revenue_certification_against_spec(
         raise ValueError("Periodic product revenue reuse candidate issuer mismatch")
     if certification.report_name != spec.report_name_exact:
         raise ValueError("Periodic product revenue reuse candidate report mismatch")
-    if certification.period_start != spec.period_start or certification.period_end != spec.period_end:
+    if (
+        certification.period_start != spec.period_start
+        or certification.period_end != spec.period_end
+    ):
         raise ValueError("Periodic product revenue reuse candidate period mismatch")
 
     archive_path = Path(str(pointer.get("archive_path", "")))
@@ -88,7 +91,9 @@ def replay_periodic_product_revenue_certification_against_spec(
     try:
         persisted_text = normalized_path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
-        raise ValueError("Periodic product revenue reuse candidate normalized text is missing") from exc
+        raise ValueError(
+            "Periodic product revenue reuse candidate normalized text is missing"
+        ) from exc
     if persisted_text != document.text:
         raise ValueError("Periodic product revenue reuse candidate normalized text diverged")
     if hashlib.sha256(persisted_text.encode("utf-8")).hexdigest() != certification.text_sha256:
