@@ -2,7 +2,7 @@
 
 The matrix joins three independently verified questions for 2021Q1-Q3 and 2022Q1-Q3:
 company-level profitability, direct product-revenue availability, and issuer ASP/shipment
-language.  It is deliberately a source-resolution artifact, not a training-panel builder.
+language. It is deliberately a source-resolution artifact, not a training-panel builder.
 """
 
 from __future__ import annotations
@@ -36,6 +36,9 @@ _EXPECTED_PERIODS = (
     "2022Q2",
     "2022Q3",
 )
+_COMPANY_PROBE_STATUS = (
+    "skhynix_historical_expansion_company_profitability_probe_completed"
+)
 
 
 def _sha_payload(payload: object) -> str:
@@ -65,7 +68,7 @@ def _latest_company_probe(path: Path) -> dict[str, object]:
     except json.JSONDecodeError as exc:
         raise ValueError("Pre-2023 company probe pointer is invalid JSON") from exc
     payload = _mapping(raw, "company probe")
-    if payload.get("status") != "skhynix_historical_expansion_company_profitability_probe_completed":
+    if payload.get("status") != _COMPANY_PROBE_STATUS:
         raise ValueError("Pre-2023 company probe status is invalid")
     return payload
 
