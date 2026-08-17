@@ -16,7 +16,7 @@ _PERIODS = ("2021Q1", "2021Q2", "2021Q3", "2022Q1", "2022Q2", "2022Q3")
 def _archive_bytes() -> bytes:
     buffer = BytesIO()
     with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
-        archive.writestr("REPORT.xml", "<table><tr><td>DRAM</td><td>1,000</td></tr></table>")
+        archive.writestr("REPORT.xml", "<table><tr><td>D램</td><td>1,000</td></tr></table>")
         archive.writestr("META.txt", "synthetic fixture")
     return buffer.getvalue()
 
@@ -35,9 +35,9 @@ def _write_failure(root: Path, period_id: str, index: int) -> None:
             "단위 : 백만원",
             "3개월",
             "누적",
-            "DRAM",
+            "D램",
             "1,000",
-            "NAND Flash",
+            "낸드플래시",
             "500",
             "기타 제품",
             "100",
@@ -76,8 +76,8 @@ def test_layout_profiler_fingerprints_preserved_failure_bundles(tmp_path: Path) 
 
     assert tuple(item.period_id for item in profiles) == _PERIODS
     assert all(item.context_count == 1 for item in profiles)
-    assert all(dict(item.signal_counts)["DRAM"] == 1 for item in profiles)
-    assert all(dict(item.signal_counts)["NAND Flash"] == 1 for item in profiles)
+    assert all(dict(item.signal_counts)["D램"] == 1 for item in profiles)
+    assert all(dict(item.signal_counts)["낸드플래시"] == 1 for item in profiles)
     assert all(item.contexts[0].has_three_month_marker for item in profiles)
     assert all(item.contexts[0].has_cumulative_marker for item in profiles)
     assert all(item.contexts[0].unit_markers == ("백만원",) for item in profiles)
