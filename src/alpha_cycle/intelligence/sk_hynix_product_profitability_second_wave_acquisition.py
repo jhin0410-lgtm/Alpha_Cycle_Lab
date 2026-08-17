@@ -1,9 +1,10 @@
-"""Acquire the six-row 2019Q1-2020Q3 SK hynix source frontier in one pass.
+"""Acquire and certify the six-row 2019Q1-2020Q3 SK hynix source frontier in one pass.
 
-Issuer cycle drivers are already exact numeric source facts from official Newsroom releases.
-This module probes the two remaining source layers independently: OpenDART product revenue
-and consolidated company profitability. Outputs stay isolated and never promote training
-rows, fit a model, or evaluate the sealed holdout.
+Issuer cycle drivers are exact numeric source facts from official Newsroom releases. This
+module probes OpenDART product revenue and consolidated company profitability independently.
+If the legacy product parser fails, preserved raw filing bytes are immediately replayed by a
+narrow structured-table recovery path and tied exactly to verified consolidated revenue.
+Nothing here promotes a training row, fits a model, or evaluates the sealed holdout.
 """
 
 from __future__ import annotations
@@ -31,6 +32,10 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansio
 from alpha_cycle.intelligence.sk_hynix_product_profitability_second_wave_frontier import (
     SecondWaveCandidate,
     SecondWaveFrontier,
+)
+from alpha_cycle.intelligence.sk_hynix_second_wave_product_revenue_recovery import (
+    SecondWaveProductRecoveryResult,
+    recover_failed_second_wave_product_revenue,
 )
 from alpha_cycle.providers.opendart import OpenDartReadOnlyClient
 
@@ -116,7 +121,9 @@ def _select_account(
         if len(receipt) != 14 or not receipt.isdigit():
             raise ValueError(f"Second-wave company {label} receipt is invalid")
         available_date = date(int(receipt[:4]), int(receipt[4:6]), int(receipt[6:8]))
-        matches.append((_integral_krw(row.get("thstrm_amount"), label), receipt, available_date))
+        matches.append(
+            (_integral_krw(row.get("thstrm_amount"), label), receipt, available_date)
+        )
     unique = tuple(dict.fromkeys(matches))
     if len(unique) != 1:
         raise ValueError(
@@ -180,10 +187,12 @@ class SecondWaveAcquisitionResult:
     period_id: str
     driver_four_field_numeric_source_certified: bool
     product_revenue_probe_success: bool
+    product_revenue_certified: bool
+    product_recovery: SecondWaveProductRecoveryResult | None
     company_profitability_verified: bool
     product_artifact_pointer: str | None
     company_observation: SecondWaveCompanyObservation | None
-    product_error: str | None
+    product_probe_error: str | None
     company_error: str | None
     training_row_promoted: bool = False
     fit_enabled: bool = False
@@ -193,11 +202,17 @@ class SecondWaveAcquisitionResult:
     def source_layer_complete(self) -> bool:
         return (
             self.driver_four_field_numeric_source_certified
-            and self.product_revenue_probe_success
+            and self.product_revenue_certified
             and self.company_profitability_verified
         )
 
     def __post_init__(self) -> None:
+        if self.product_revenue_probe_success and not self.product_revenue_certified:
+            raise ValueError("Successful certified product probe cannot be downgraded")
+        if self.product_recovery is not None and (
+            self.product_recovery.certified != self.product_revenue_certified
+        ):
+            raise ValueError("Second-wave product recovery/certification state is inconsistent")
         if self.training_row_promoted or self.fit_enabled or self.holdout_evaluation_allowed:
             raise ValueError("Second-wave acquisition exceeded isolated trust boundary")
 
@@ -232,7 +247,13 @@ def _run_company_probe(
                 captured_at.strftime("%Y%m%dT%H%M%S%fZ") + "__raw_payload.json"
             )
             raw_path.write_text(
-                json.dumps(raw_payload, ensure_ascii=False, indent=2, sort_keys=True, default=str),
+                json.dumps(
+                    raw_payload,
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                    default=str,
+                ),
                 encoding="utf-8",
             )
             rows = _financial_rows(raw_payload)
@@ -310,6 +331,28 @@ def _run_company_probe(
     return tuple(results)
 
 
+def _recover_product_if_needed(
+    candidate: SecondWaveCandidate,
+    product: ProductRevenueProbePeriodResult,
+    company: SecondWaveCompanyResult,
+    product_root: Path,
+) -> tuple[bool, SecondWaveProductRecoveryResult | None]:
+    if product.success:
+        return True, None
+    if not company.success or company.observation is None:
+        return False, None
+    try:
+        recovery = recover_failed_second_wave_product_revenue(
+            candidate.period_id,
+            product_root / candidate.period_id,
+            company_revenue_krw=company.observation.revenue_krw,
+            company_rcept_no=company.observation.rcept_no,
+        )
+    except ValueError:
+        return False, None
+    return recovery.certified, recovery
+
+
 def run_second_wave_acquisition(
     client: OpenDartReadOnlyClient,
     frontier: SecondWaveFrontier,
@@ -321,11 +364,12 @@ def run_second_wave_acquisition(
 ) -> tuple[SecondWaveAcquisitionResult, ...]:
     if evaluation_date < max(item.opendart_discovery_end_date for item in frontier.candidates):
         raise ValueError("Second-wave evaluation date predates source filing windows")
+    product_root = Path(product_output)
     product = run_product_revenue_expansion_probe(
         client,
         cast(HistoricalExpansionFrontier, frontier),
         evaluation_date=evaluation_date,
-        output=product_output,
+        output=product_root,
         template_registry=product_template_registry,
     )
     company = _run_company_probe(
@@ -338,19 +382,28 @@ def run_second_wave_acquisition(
         item.period_id: item for item in product
     }
     company_by_period = {item.period_id: item for item in company}
-    return tuple(
-        SecondWaveAcquisitionResult(
-            period_id=candidate.period_id,
-            driver_four_field_numeric_source_certified=True,
-            product_revenue_probe_success=product_by_period[candidate.period_id].success,
-            company_profitability_verified=company_by_period[candidate.period_id].success,
-            product_artifact_pointer=product_by_period[candidate.period_id].artifact_pointer,
-            company_observation=company_by_period[candidate.period_id].observation,
-            product_error=product_by_period[candidate.period_id].error,
-            company_error=company_by_period[candidate.period_id].error,
+    results: list[SecondWaveAcquisitionResult] = []
+    for candidate in frontier.candidates:
+        product_result = product_by_period[candidate.period_id]
+        company_result = company_by_period[candidate.period_id]
+        product_certified, recovery = _recover_product_if_needed(
+            candidate, product_result, company_result, product_root
         )
-        for candidate in frontier.candidates
-    )
+        results.append(
+            SecondWaveAcquisitionResult(
+                period_id=candidate.period_id,
+                driver_four_field_numeric_source_certified=True,
+                product_revenue_probe_success=product_result.success,
+                product_revenue_certified=product_certified,
+                product_recovery=recovery,
+                company_profitability_verified=company_result.success,
+                product_artifact_pointer=product_result.artifact_pointer,
+                company_observation=company_result.observation,
+                product_probe_error=product_result.error,
+                company_error=company_result.error,
+            )
+        )
+    return tuple(results)
 
 
 __all__ = [

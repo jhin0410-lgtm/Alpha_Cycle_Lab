@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
@@ -24,9 +25,9 @@ from .providers.opendart import OpenDartReadOnlyClient
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Acquire the six 2019Q1-2020Q3 SK hynix historical source rows in one pass. "
-            "The four cycle drivers are pre-registered exact issuer source facts; OpenDART "
-            "product revenue and company profitability remain isolated probes."
+            "Acquire and certify the six 2019Q1-2020Q3 SK hynix historical source rows in "
+            "one pass. Failed legacy product parsers are replayed from preserved raw filing "
+            "bytes and certified only by exact consolidated-revenue tie-out."
         )
     )
     parser.add_argument("--evaluation-date", required=True, type=date.fromisoformat)
@@ -67,6 +68,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "product_probe_success_count": sum(
             item.product_revenue_probe_success for item in results
         ),
+        "product_revenue_certified_count": sum(
+            item.product_revenue_certified for item in results
+        ),
+        "product_recovery_certified_count": sum(
+            item.product_recovery is not None and item.product_recovery.certified
+            for item in results
+        ),
         "company_profitability_verified_count": sum(
             item.company_profitability_verified for item in results
         ),
@@ -84,6 +92,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     item.driver_four_field_numeric_source_certified
                 ),
                 "product_revenue_probe_success": item.product_revenue_probe_success,
+                "product_revenue_certified": item.product_revenue_certified,
+                "product_recovery": (
+                    None if item.product_recovery is None else asdict(item.product_recovery)
+                ),
                 "company_profitability_verified": item.company_profitability_verified,
                 "source_layer_complete": item.source_layer_complete,
                 "product_artifact_pointer": item.product_artifact_pointer,
@@ -99,15 +111,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "raw_payload_sha256": item.company_observation.raw_payload_sha256,
                     }
                 ),
-                "product_error": item.product_error,
+                "product_probe_error": item.product_probe_error,
                 "company_error": item.company_error,
             }
             for item in results
         ],
         "next_action": (
-            "certify_and_promote_all_six_source_rows_without_touching_holdout"
+            "promote_all_six_source_rows_then_build_frozen_15_row_training_candidate"
             if len(source_complete) == 6
-            else "inspect_only_failed_product_or_company_source_layers_then_replay"
+            else "only_unresolved_source_layers_require_follow_up"
         ),
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
