@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from alpha_cycle.intelligence.sk_hynix_product_profitability_regime_post_validation_audit import (
     RegimeV1PostValidationAuditResult,
     _envelope,
@@ -57,10 +59,10 @@ def test_margin_envelope_flags_upper_bound_but_not_negative_margin() -> None:
         policy=policy,
     )
 
-    assert envelope.maximum_implied_margin_ratio == 1.20
+    assert envelope.maximum_implied_margin_ratio == pytest.approx(1.20)
     assert envelope.upper_bound_violation_count > 0
     assert envelope.observed_upper_bound_violation_periods == ("2025Q1",)
-    assert negative.minimum_implied_margin_ratio == -0.70
+    assert negative.minimum_implied_margin_ratio == pytest.approx(-0.70)
     assert negative.upper_bound_violation_count == 0
 
 
