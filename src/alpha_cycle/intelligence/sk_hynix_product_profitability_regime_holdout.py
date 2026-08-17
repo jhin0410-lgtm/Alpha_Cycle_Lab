@@ -1,9 +1,4 @@
-"""Conditionally spend and immutably preserve the frozen SK hynix 2026Q1 holdout.
-
-The holdout sources are not loaded unless the frozen 15-row training gate passes. The first
-authorized evaluation is persisted and every later invocation must reproduce/reuse that
-same result. The frozen v1 method cannot be refit after holdout exposure.
-"""
+"""Conditionally spend and immutably preserve the frozen SK hynix 2026Q1 holdout."""
 
 from __future__ import annotations
 
@@ -119,7 +114,10 @@ class RegimeHoldoutResult:
             raise ValueError("Regime holdout evidence ids must be SHA-256")
         if self.holdout_period != "2026Q1":
             raise ValueError("Regime holdout period drifted")
-        expected_better = self.model_absolute_error_krw_million < self.benchmark_absolute_error_krw_million
+        expected_better = (
+            self.model_absolute_error_krw_million
+            < self.benchmark_absolute_error_krw_million
+        )
         if self.model_beats_benchmark != expected_better:
             raise ValueError("Regime holdout benchmark comparison is inconsistent")
         expected_pass = self.model_beats_benchmark and self.company_product_revenue_reconciled
@@ -138,7 +136,7 @@ class RegimeHoldoutResult:
 
 
 def _payload(result: RegimeHoldoutResult) -> dict[str, object]:
-    payload = asdict(result)
+    payload: dict[str, object] = asdict(result)
     payload["source_evaluation_date"] = result.source_evaluation_date.isoformat()
     return payload
 
@@ -199,13 +197,12 @@ def _reuse_existing(
         raise ValueError("Regime holdout already spent under another frozen method")
     if str(wrapper.get("training_fit_evidence_id", "")) != training_fit.evidence_id:
         raise ValueError("Regime holdout already spent under another training fit")
-    raw_result = wrapper.get("result")
-    if not isinstance(raw_result, dict):
+    raw = wrapper.get("result")
+    if not isinstance(raw, dict):
         raise ValueError("Regime holdout pointer result is invalid")
-    payload = {str(key): value for key, value in cast(dict[object, object], raw_result).items()}
-    if _sha({key: value for key, value in payload.items() if key != "evidence_id"}) != str(
-        payload.get("evidence_id", "")
-    ):
+    payload = {str(key): value for key, value in cast(dict[object, object], raw).items()}
+    unhashed = {key: value for key, value in payload.items() if key != "evidence_id"}
+    if _sha(unhashed) != str(payload.get("evidence_id", "")):
         raise ValueError("Regime holdout persisted result hash mismatch")
     return _result_from_payload(payload)
 
@@ -221,7 +218,7 @@ def spend_regime_holdout_once(
     cycle_driver_pointer: str | Path = DEFAULT_SEC_PRODUCT_CYCLE_DRIVER_POINTER,
     output: str | Path = DEFAULT_REGIME_VALIDATION_OUTPUT,
 ) -> tuple[RegimeHoldoutResult, bool]:
-    """Evaluate the sealed holdout once; return ``(result, reused_existing)``."""
+    """Evaluate the sealed holdout once and return ``(result, reused_existing)``."""
 
     if protocol.method_evidence_id != method.evidence_id:
         raise ValueError("Regime holdout protocol/method binding diverged")
@@ -234,7 +231,7 @@ def spend_regime_holdout_once(
     if pointer.is_file():
         return _reuse_existing(pointer, method, training_fit), True
 
-    # HOLDOUT SOURCE ACCESS STARTS ONLY AFTER THE GATE ABOVE.
+    # The holdout source layer is touched only after every gate above has passed.
     historical = load_historical_product_revenue_panel_evidence(
         historical_product_revenue_pointer,
         evaluation_date=source_evaluation_date,
@@ -253,10 +250,8 @@ def spend_regime_holdout_once(
     )
     period = method.holdout_period
     product = products.get(period)
-    company_by_period = {item.period_id: item for item in company.observations}
-    cycle_by_period = {item.period_id: item for item in cycle.observations}
-    company_row = company_by_period.get(period)
-    cycle_row = cycle_by_period.get(period)
+    company_row = {item.period_id: item for item in company.observations}.get(period)
+    cycle_row = {item.period_id: item for item in cycle.observations}.get(period)
     if product is None or company_row is None or cycle_row is None:
         raise ValueError("Regime holdout source layers are incomplete")
 
@@ -284,14 +279,14 @@ def spend_regime_holdout_once(
         ),
         dtype=float,
     )
-    coefficients = np.asarray(training_fit.coefficients, dtype=float)
-    model_prediction = float(design @ coefficients)
+    model_prediction = float(design @ np.asarray(training_fit.coefficients, dtype=float))
     actual = company_row.gross_profit_krw / 1_000_000.0
     company_revenue = company_row.revenue_krw / 1_000_000.0
     benchmark_prediction = training_fit.mean_training_gross_margin * company_revenue
     model_error = abs(actual - model_prediction)
     benchmark_error = abs(actual - benchmark_prediction)
-    stable = {
+    better = model_error < benchmark_error
+    stable: dict[str, object] = {
         "method_evidence_id": method.evidence_id,
         "training_fit_evidence_id": training_fit.evidence_id,
         "holdout_period": period,
@@ -305,9 +300,9 @@ def spend_regime_holdout_once(
         "model_absolute_error_krw_million": model_error,
         "benchmark_prediction_krw_million": benchmark_prediction,
         "benchmark_absolute_error_krw_million": benchmark_error,
-        "model_beats_benchmark": model_error < benchmark_error,
+        "model_beats_benchmark": better,
         "company_product_revenue_reconciled": reconciled,
-        "holdout_validation_passed": model_error < benchmark_error and reconciled,
+        "holdout_validation_passed": better and reconciled,
         "holdout_spent": True,
         "immutable_result": True,
         "refit_after_holdout_allowed": False,
@@ -317,7 +312,25 @@ def spend_regime_holdout_once(
         "target_price_enabled": False,
         "decision_score_enabled": False,
     }
-    result = RegimeHoldoutResult(evidence_id=_sha(stable), **stable)
+    result = RegimeHoldoutResult(
+        evidence_id=_sha(stable),
+        method_evidence_id=method.evidence_id,
+        training_fit_evidence_id=training_fit.evidence_id,
+        holdout_period=period,
+        source_evaluation_date=source_evaluation_date,
+        product_revenue_evidence_id=product.evidence_id,
+        company_profitability_evidence_id=company.evidence_id,
+        cycle_driver_evidence_id=cycle.evidence_id,
+        company_revenue_krw_million=company_revenue,
+        actual_gross_profit_krw_million=actual,
+        model_prediction_krw_million=model_prediction,
+        model_absolute_error_krw_million=model_error,
+        benchmark_prediction_krw_million=benchmark_prediction,
+        benchmark_absolute_error_krw_million=benchmark_error,
+        model_beats_benchmark=better,
+        company_product_revenue_reconciled=reconciled,
+        holdout_validation_passed=better and reconciled,
+    )
     root.mkdir(parents=True, exist_ok=True)
     captured_at = datetime.now(UTC)
     directory = root / (
