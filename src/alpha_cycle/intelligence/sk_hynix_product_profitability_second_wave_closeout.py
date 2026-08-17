@@ -86,7 +86,8 @@ class SecondWaveCloseout:
             item.driver_numeric_source_certified for item in self.periods
         ):
             raise ValueError("Second-wave closeout driver count is inconsistent")
-        if self.source_layer_complete_count != sum(item.source_layer_complete for item in self.periods):
+        complete_count = sum(item.source_layer_complete for item in self.periods)
+        if self.source_layer_complete_count != complete_count:
             raise ValueError("Second-wave closeout complete count is inconsistent")
         if self.all_six_source_layers_complete != (self.source_layer_complete_count == 6):
             raise ValueError("Second-wave closeout all-six flag is inconsistent")
