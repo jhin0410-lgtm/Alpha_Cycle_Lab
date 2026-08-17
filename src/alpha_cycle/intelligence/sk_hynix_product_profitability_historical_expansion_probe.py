@@ -1,8 +1,8 @@
-"""Isolated live probe for pre-2023 SK hynix direct product-revenue candidates.
+"""Isolated live probe for historical SK hynix direct product-revenue candidates.
 
 The probe writes only to a dedicated research output. It never modifies the canonical
-2023+ historical panel or marks a frontier candidate as certified. Existing parser labels
-and semantics are borrowed as a test hypothesis and must succeed on archived source bytes
+historical panel or marks a frontier candidate as certified. Existing parser labels and
+semantics are borrowed as a test hypothesis and must succeed on archived source bytes
 before any later registry promotion is considered.
 """
 
@@ -110,7 +110,12 @@ def run_product_revenue_expansion_probe(
     output: str | Path = DEFAULT_PRODUCT_REVENUE_PROBE_OUTPUT,
     template_registry: str | Path = DEFAULT_PRODUCT_REVENUE_TEMPLATE_REGISTRY,
 ) -> tuple[ProductRevenueProbePeriodResult, ...]:
-    if evaluation_date < date(2022, 12, 1):
+    if not frontier.candidates:
+        raise ValueError("Expansion probe frontier is empty")
+    latest_discovery_date = max(
+        candidate.opendart_discovery_end_date for candidate in frontier.candidates
+    )
+    if evaluation_date < latest_discovery_date:
         raise ValueError("Expansion probe evaluation date predates candidate filing windows")
     template = load_product_revenue_probe_template(template_registry)
     root = Path(output)

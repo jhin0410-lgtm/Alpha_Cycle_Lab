@@ -1,0 +1,104 @@
+schema_version: 1
+registry:
+  registry_id: skhynix_pre2023_certified_product_revenue
+  registry_version: 1.0
+  ticker: "000660"
+  unit: million_krw
+  source_boundary:
+    current_retrieval_historical_source_fact: true
+    historical_vintage_certified: false
+    point_in_time_backtest_eligible: false
+    training_row_promoted: false
+    fit_enabled: false
+    holdout_evaluation_allowed: false
+  periods:
+    - period_id: 2021Q1
+      rcept_no: "20210517000667"
+      source_archive_sha256: 9757d9a6a676d9dcea2f5a3f02a4c4735b132336bd6d781d66a1a3a57522c68a
+      member_name: 20210517000667.xml
+      table_index: 146
+      direct_quarter_semantics: direct_quarter_current_period
+      direct_quarter_column_index: 1
+      dram_revenue_million_krw: 6062469
+      nand_revenue_million_krw: 2007523
+      other_revenue_million_krw: 424196
+      total_revenue_million_krw: 8494188
+      company_revenue_krw: 8494188000000
+      product_sum_reconciled: true
+      company_revenue_reconciled: true
+      direct_product_revenue_certified: true
+    - period_id: 2021Q2
+      rcept_no: "20210817001301"
+      source_archive_sha256: a39009b1351a5404e18a4791d2d010efcf857223112c39fcfda39c789e93aa06
+      member_name: 20210817001301.xml
+      table_index: 146
+      direct_quarter_semantics: direct_quarter_3_month
+      direct_quarter_column_index: 1
+      dram_revenue_million_krw: 7505783
+      nand_revenue_million_krw: 2305681
+      other_revenue_million_krw: 510207
+      total_revenue_million_krw: 10321671
+      company_revenue_krw: 10321671000000
+      product_sum_reconciled: true
+      company_revenue_reconciled: true
+      direct_product_revenue_certified: true
+    - period_id: 2021Q3
+      rcept_no: "20211115001474"
+      source_archive_sha256: 76094a7f9cec20a0d7667137cde80367b78d515f0051c1980fa80aee14dca7df
+      member_name: 20211115001474.xml
+      table_index: 146
+      direct_quarter_semantics: direct_quarter_3_month
+      direct_quarter_column_index: 1
+      dram_revenue_million_krw: 8312960
+      nand_revenue_million_krw: 3044004
+      other_revenue_million_krw: 448360
+      total_revenue_million_krw: 11805324
+      company_revenue_krw: 11805324000000
+      product_sum_reconciled: true
+      company_revenue_reconciled: true
+      direct_product_revenue_certified: true
+    - period_id: 2022Q1
+      rcept_no: "20220516001502"
+      source_archive_sha256: 3dc7432900755ccdc1b11cd3d1a324e2bb581353177ba90b1aaa191b8fc69550
+      member_name: 20220516001502.xml
+      table_index: 108
+      direct_quarter_semantics: direct_quarter_current_period
+      direct_quarter_column_index: 1
+      dram_revenue_million_krw: 7857576
+      nand_revenue_million_krw: 3913395
+      other_revenue_million_krw: 384682
+      total_revenue_million_krw: 12155653
+      company_revenue_krw: 12155653000000
+      product_sum_reconciled: true
+      company_revenue_reconciled: true
+      direct_product_revenue_certified: true
+    - period_id: 2022Q2
+      rcept_no: "20220816001536"
+      source_archive_sha256: 1e5d64c68de47662feab3f1ac3df696a98a2d7bef874440b89b5bd8de9520b58
+      member_name: 20220816001536.xml
+      table_index: 143
+      direct_quarter_semantics: direct_quarter_3_month
+      direct_quarter_column_index: 1
+      dram_revenue_million_krw: 8781735
+      nand_revenue_million_krw: 4517859
+      other_revenue_million_krw: 511407
+      total_revenue_million_krw: 13811001
+      company_revenue_krw: 13811001000000
+      product_sum_reconciled: true
+      company_revenue_reconciled: true
+      direct_product_revenue_certified: true
+    - period_id: 2022Q3
+      rcept_no: "20221114001566"
+      source_archive_sha256: a4ec8cbc4bf92948d2f1e5edb6b1259baedd0217fde9b21a34b62b71c7f77125
+      member_name: 20221114001566.xml
+      table_index: 109
+      direct_quarter_semantics: direct_quarter_3_month
+      direct_quarter_column_index: 1
+      dram_revenue_million_krw: 6954326
+      nand_revenue_million_krw: 3388185
+      other_revenue_million_krw: 640372
+      total_revenue_million_krw: 10982883
+      company_revenue_krw: 10982883000000
+      product_sum_reconciled: true
+      company_revenue_reconciled: true
+      direct_product_revenue_certified: true
