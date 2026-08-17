@@ -1,10 +1,15 @@
 """Batch-capture historical SK hynix direct product revenue from official OpenDART.
 
 Each Q1/Q2/Q3 filing is processed through the same strict source-structure parser,
-parser-contract binding, and offline verifier used for the live 2Q26 certification.
+parser-contract binding, and offline verifier used for the live certification path.
 Historical filing layouts may differ. A parser failure is therefore preserved as a
 transparent failed period rather than converted into an inferred product allocation.
 Only independently replayable successful periods may enter calibration inventory.
+
+When selective resume is requested, an existing period artifact is reused only after its
+immutable ZIP/text evidence is replayed non-destructively against the current registered
+spec.  Contract rebinding happens only after that replay succeeds.  Invalid or stale
+candidates fall through to a normal live OpenDART recapture for that period only.
 """
 
 from __future__ import annotations
@@ -17,6 +22,9 @@ from pathlib import Path
 from typing import cast
 from zoneinfo import ZoneInfo
 
+from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_candidate_replay import (
+    replay_periodic_product_revenue_certification_against_spec,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_capture import (
     capture_periodic_product_revenue_certification,
 )
@@ -248,6 +256,13 @@ def _certified_entry(
     pointer_path: Path,
     evaluation_date: date,
 ) -> HistoricalProductRevenuePanelEntry:
+    # Critical ordering: prove the immutable artifact under the current spec before
+    # mutating its parser-contract binding.
+    replay_periodic_product_revenue_certification_against_spec(
+        pointer_path,
+        spec,
+        evaluation_date=evaluation_date,
+    )
     pointer = bind_periodic_product_revenue_parser_contract(pointer_path, spec)
     certification = load_periodic_product_revenue_certification(
         pointer_path,
@@ -274,8 +289,9 @@ def capture_historical_product_revenue_panel(
     registry_path: str | Path = DEFAULT_HISTORICAL_PRODUCT_REVENUE_REGISTRY,
     output: str | Path = DEFAULT_HISTORICAL_PRODUCT_REVENUE_OUTPUT,
     captured_at: datetime | None = None,
+    resume_valid_existing: bool = False,
 ) -> dict[str, object]:
-    """Capture all ten periods, continuing after transparent per-period failures."""
+    """Capture ten periods, optionally reusing only current-spec replayable artifacts."""
 
     captured = captured_at or datetime.now(UTC)
     if captured.tzinfo is None or captured.utcoffset() is None:
@@ -284,10 +300,35 @@ def capture_historical_product_revenue_panel(
         raise ValueError("captured_at cannot precede evaluation_date in Asia/Seoul")
     root = Path(output)
     root.mkdir(parents=True, exist_ok=True)
+
     entries: list[HistoricalProductRevenuePanelEntry] = []
+    reused_periods: list[str] = []
+    capture_attempted_periods: list[str] = []
+    reuse_rejected_periods: list[str] = []
+    reuse_rejected_error_types: dict[str, str] = {}
+
     for spec in load_historical_product_revenue_specs(registry_path):
         period_id = historical_period_id(spec)
         period_output = root / period_id
+        pointer_path = period_output / "latest_certification.json"
+
+        if resume_valid_existing and pointer_path.is_file():
+            try:
+                entries.append(
+                    _certified_entry(
+                        period_id=period_id,
+                        spec=spec,
+                        pointer_path=pointer_path,
+                        evaluation_date=evaluation_date,
+                    )
+                )
+                reused_periods.append(period_id)
+                continue
+            except Exception as exc:
+                reuse_rejected_periods.append(period_id)
+                reuse_rejected_error_types[period_id] = type(exc).__name__
+
+        capture_attempted_periods.append(period_id)
         try:
             capture_periodic_product_revenue_certification(
                 client,
@@ -300,7 +341,7 @@ def capture_historical_product_revenue_panel(
                 _certified_entry(
                     period_id=period_id,
                     spec=spec,
-                    pointer_path=period_output / "latest_certification.json",
+                    pointer_path=pointer_path,
                     evaluation_date=evaluation_date,
                 )
             )
@@ -338,6 +379,11 @@ def capture_historical_product_revenue_panel(
         "status": "skhynix_opendart_historical_product_revenue_panel_captured",
         "panel_path": str(panel_path.resolve()),
         "registry_path": str(Path(registry_path).resolve()),
+        "resume_valid_existing": resume_valid_existing,
+        "reused_periods": reused_periods,
+        "capture_attempted_periods": capture_attempted_periods,
+        "reuse_rejected_periods": reuse_rejected_periods,
+        "reuse_rejected_error_types": reuse_rejected_error_types,
     }
     pointer_path = root / "latest_historical_product_revenue_panel.json"
     temporary = root / ".latest_historical_product_revenue_panel.json.tmp"

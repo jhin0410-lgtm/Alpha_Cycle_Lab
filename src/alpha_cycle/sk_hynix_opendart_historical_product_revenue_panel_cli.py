@@ -36,6 +36,14 @@ def _parser() -> argparse.ArgumentParser:
         "--output",
         default=str(DEFAULT_HISTORICAL_PRODUCT_REVENUE_OUTPUT),
     )
+    parser.add_argument(
+        "--resume-valid-existing",
+        action="store_true",
+        help=(
+            "Reuse an existing period certification only after non-mutating replay against "
+            "the current registered parser contract; recapture rejected/missing periods."
+        ),
+    )
     return parser
 
 
@@ -47,6 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         evaluation_date=args.evaluation_date,
         registry_path=Path(args.registry),
         output=output,
+        resume_valid_existing=args.resume_valid_existing,
     )
     pointer = output / "latest_historical_product_revenue_panel.json"
     verified = load_historical_product_revenue_panel_evidence(
@@ -64,6 +73,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "successful_periods": verified.successful_periods,
         "failed_period_count": len(verified.failed_periods),
         "failed_periods": verified.failed_periods,
+        "resume_valid_existing": result.get("resume_valid_existing", False),
+        "reused_periods": result.get("reused_periods", []),
+        "capture_attempted_periods": result.get("capture_attempted_periods", []),
+        "reuse_rejected_periods": result.get("reuse_rejected_periods", []),
+        "reuse_rejected_error_types": result.get("reuse_rejected_error_types", {}),
         "failed_diagnostic_bundle_count": len(diagnostics.diagnostics),
         "failed_diagnostic_paths": diagnostics.diagnostic_paths,
         "failed_diagnostic_errors": diagnostics.diagnostic_errors,
