@@ -39,7 +39,7 @@ class RegimeValidationProtocol:
     method_evidence_id: str
     company_revenue_reconciliation_tolerance_krw: int
     conditional_one_time_evaluation_pre_authorized: bool
-    holdout_may_be_loaded_before_training_gate: bool
+    holdout_may_be_scored_before_training_gate: bool
     require_training_gate_passed: bool
     require_immutable_result_reuse: bool
     holdout_benchmark_id: str
@@ -53,8 +53,8 @@ class RegimeValidationProtocol:
             raise ValueError("Regime validation reconciliation tolerance drifted")
         if not self.conditional_one_time_evaluation_pre_authorized:
             raise ValueError("Regime validation must pre-authorize conditional holdout use")
-        if self.holdout_may_be_loaded_before_training_gate:
-            raise ValueError("Regime validation cannot load holdout before training gate")
+        if self.holdout_may_be_scored_before_training_gate:
+            raise ValueError("Regime validation cannot score holdout before training gate")
         if not self.require_training_gate_passed or not self.require_immutable_result_reuse:
             raise ValueError("Regime validation holdout gate must remain fail-closed")
         if self.holdout_benchmark_id != "training_mean_gross_margin_scaled_revenue":
@@ -91,8 +91,8 @@ def load_regime_validation_protocol(
         conditional_one_time_evaluation_pre_authorized=(
             holdout.get("conditional_one_time_evaluation_pre_authorized") is True
         ),
-        holdout_may_be_loaded_before_training_gate=(
-            holdout.get("holdout_may_be_loaded_before_training_gate") is True
+        holdout_may_be_scored_before_training_gate=(
+            holdout.get("holdout_may_be_scored_before_training_gate") is True
         ),
         require_training_gate_passed=holdout.get("require_training_gate_passed") is True,
         require_immutable_result_reuse=holdout.get("require_immutable_result_reuse") is True,
