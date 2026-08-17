@@ -188,8 +188,10 @@ class HistoricalExpansionCompanyProbePeriodResult:
     fit_enabled: bool = False
 
     def __post_init__(self) -> None:
-        if self.success != (self.observation is not None and self.raw_payload_path is not None):
+        if self.success != (self.observation is not None):
             raise ValueError("Expansion company probe success state is inconsistent")
+        if self.success and self.raw_payload_path is None:
+            raise ValueError("Successful expansion company probe requires a raw payload")
         if self.success and (self.error_type is not None or self.error is not None):
             raise ValueError("Successful expansion company probe cannot retain an error")
         if not self.success and (self.error_type is None or self.error is None):
@@ -270,6 +272,7 @@ def run_expansion_company_profitability_probe(
     for candidate in frontier.candidates:
         period_root = root / candidate.period_id
         period_root.mkdir(parents=True, exist_ok=True)
+        raw_path: Path | None = None
         try:
             batch = client.financial_statements(
                 corp,
@@ -310,7 +313,11 @@ def run_expansion_company_profitability_probe(
                     period_id=candidate.period_id,
                     success=False,
                     observation=None,
-                    raw_payload_path=None,
+                    raw_payload_path=(
+                        str(raw_path.resolve())
+                        if raw_path is not None and raw_path.is_file()
+                        else None
+                    ),
                     error_type=type(exc).__name__,
                     error=str(exc),
                 )
