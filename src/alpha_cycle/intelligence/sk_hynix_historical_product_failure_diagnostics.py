@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -31,6 +32,47 @@ def _valid_sha(value: str) -> bool:
     return len(value) == 64 and all(char in "0123456789abcdef" for char in value)
 
 
+def _optional_date(payload: dict[str, object], key: str) -> date | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError as exc:
+        raise ValueError(f"Historical failure diagnostic {key} is invalid") from exc
+
+
+def _optional_datetime(payload: dict[str, object], key: str) -> datetime | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError as exc:
+        raise ValueError(f"Historical failure diagnostic {key} is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"Historical failure diagnostic {key} must be timezone-aware")
+    return parsed
+
+
+def _optional_bool(payload: dict[str, object], key: str) -> bool | None:
+    if key not in payload:
+        return None
+    value = payload[key]
+    if not isinstance(value, bool):
+        raise ValueError(f"Historical failure diagnostic {key} must be boolean")
+    return value
+
+
+def _optional_int(payload: dict[str, object], key: str) -> int | None:
+    if key not in payload:
+        return None
+    value = payload[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"Historical failure diagnostic {key} must be a non-negative integer")
+    return value
+
+
 @dataclass(frozen=True)
 class HistoricalProductRevenueFailureDiagnostic:
     period_id: str
@@ -43,6 +85,12 @@ class HistoricalProductRevenueFailureDiagnostic:
     text_sha256: str
     error_type: str
     error: str
+    receipt_date: date | None = None
+    source_url: str | None = None
+    retrieved_at: datetime | None = None
+    text_truncated: bool | None = None
+    archive_bytes: int | None = None
+    text_chars: int | None = None
     raw_archive_hash_verified: bool = True
     normalized_text_hash_verified: bool = True
     source_certification_promoted: bool = False
@@ -57,6 +105,24 @@ class HistoricalProductRevenueFailureDiagnostic:
             raise ValueError("Historical failure diagnostic hashes must be SHA-256")
         if not self.error_type or not self.error:
             raise ValueError("Historical failure diagnostic must retain parser failure detail")
+        if self.retrieved_at is not None and (
+            self.retrieved_at.tzinfo is None or self.retrieved_at.utcoffset() is None
+        ):
+            raise ValueError("Historical failure diagnostic retrieved_at must be timezone-aware")
+        if (
+            self.receipt_date is not None
+            and self.retrieved_at is not None
+            and self.receipt_date > self.retrieved_at.date()
+        ):
+            raise ValueError("Historical failure diagnostic retrieval precedes filing receipt")
+        if self.source_url is not None and not self.source_url.startswith(
+            "https://dart.fss.or.kr/"
+        ):
+            raise ValueError("Historical failure diagnostic source_url is not official DART")
+        if self.archive_bytes is not None and self.archive_bytes < 0:
+            raise ValueError("Historical failure diagnostic archive_bytes cannot be negative")
+        if self.text_chars is not None and self.text_chars < 0:
+            raise ValueError("Historical failure diagnostic text_chars cannot be negative")
         if not self.raw_archive_hash_verified or not self.normalized_text_hash_verified:
             raise ValueError("Historical failure diagnostic must verify preserved raw evidence")
         if (
@@ -66,6 +132,19 @@ class HistoricalProductRevenueFailureDiagnostic:
             or self.decision_score_enabled
         ):
             raise ValueError("Historical failure diagnostic exceeds its trust boundary")
+
+    @property
+    def retrieval_provenance_complete(self) -> bool:
+        """Return whether the failure retains all facts needed for later replay provenance."""
+
+        return (
+            self.receipt_date is not None
+            and bool(self.source_url)
+            and self.retrieved_at is not None
+            and self.text_truncated is False
+            and self.archive_bytes is not None
+            and self.text_chars is not None
+        )
 
 
 @dataclass(frozen=True)
@@ -160,19 +239,40 @@ def load_failure_diagnostic(
     archive_path = Path(str(payload.get("archive_path", "")))
     text_path = Path(str(payload.get("normalized_text_path", "")))
     try:
-        archive_bytes = archive_path.read_bytes()
+        archive_content = archive_path.read_bytes()
     except FileNotFoundError as exc:
         raise ValueError(f"Historical failure archive is missing: {period_id}") from exc
     try:
-        text_bytes = text_path.read_bytes()
+        text_content = text_path.read_bytes()
     except FileNotFoundError as exc:
         raise ValueError(f"Historical failure normalized text is missing: {period_id}") from exc
-    archive_sha = hashlib.sha256(archive_bytes).hexdigest()
-    text_sha = hashlib.sha256(text_bytes).hexdigest()
+    archive_sha = hashlib.sha256(archive_content).hexdigest()
+    text_sha = hashlib.sha256(text_content).hexdigest()
     if archive_sha != str(payload.get("archive_sha256", "")):
         raise ValueError(f"Historical failure archive hash mismatch: {period_id}")
     if text_sha != str(payload.get("text_sha256", "")):
         raise ValueError(f"Historical failure normalized text hash mismatch: {period_id}")
+
+    archive_bytes = _optional_int(payload, "archive_bytes")
+    text_chars = _optional_int(payload, "text_chars")
+    if archive_bytes is not None and archive_bytes != len(archive_content):
+        raise ValueError(f"Historical failure archive byte count mismatch: {period_id}")
+    if text_chars is not None:
+        try:
+            normalized_text = text_content.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ValueError(
+                f"Historical failure normalized text is not UTF-8: {period_id}"
+            ) from exc
+        if text_chars != len(normalized_text):
+            raise ValueError(f"Historical failure normalized text char count mismatch: {period_id}")
+
+    receipt_date = _optional_date(payload, "receipt_date")
+    retrieved_at = _optional_datetime(payload, "retrieved_at")
+    source_url_raw = payload.get("source_url")
+    source_url = None if source_url_raw is None else str(source_url_raw).strip() or None
+    text_truncated = _optional_bool(payload, "text_truncated")
+
     return HistoricalProductRevenueFailureDiagnostic(
         period_id=period_id,
         diagnostic_path=str(diagnostic_path.resolve()),
@@ -184,6 +284,12 @@ def load_failure_diagnostic(
         text_sha256=text_sha,
         error_type=str(payload.get("error_type", "")),
         error=str(payload.get("error", "")),
+        receipt_date=receipt_date,
+        source_url=source_url,
+        retrieved_at=retrieved_at,
+        text_truncated=text_truncated,
+        archive_bytes=archive_bytes,
+        text_chars=text_chars,
     )
 
 
