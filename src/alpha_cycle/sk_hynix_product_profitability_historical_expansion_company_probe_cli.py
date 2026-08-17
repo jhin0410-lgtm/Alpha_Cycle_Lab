@@ -7,9 +7,8 @@ from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
-from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_company_probe import (
-    DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT,
-    run_expansion_company_profitability_probe,
+from alpha_cycle.intelligence import (
+    sk_hynix_product_profitability_historical_expansion_company_probe as company_probe,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_frontier import (
     DEFAULT_HISTORICAL_EXPANSION_FRONTIER,
@@ -27,14 +26,17 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--evaluation-date", required=True, type=date.fromisoformat)
     parser.add_argument("--frontier", default=str(DEFAULT_HISTORICAL_EXPANSION_FRONTIER))
-    parser.add_argument("--output", default=str(DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT))
+    parser.add_argument(
+        "--output",
+        default=str(company_probe.DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     frontier = load_historical_expansion_frontier(Path(args.frontier))
-    results = run_expansion_company_profitability_probe(
+    results = company_probe.run_expansion_company_profitability_probe(
         OpenDartReadOnlyClient.from_env(),
         frontier,
         evaluation_date=args.evaluation_date,
