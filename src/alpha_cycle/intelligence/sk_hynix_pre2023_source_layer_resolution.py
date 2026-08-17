@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from alpha_cycle.intelligence import (
+    sk_hynix_product_profitability_historical_expansion_company_probe as company_probe,
+)
 from alpha_cycle.intelligence.sk_hynix_pre2023_cycle_driver_source_claims import (
     Pre2023CycleDriverPeriodProfile,
     profile_pre2023_cycle_driver_sources,
@@ -20,9 +23,6 @@ from alpha_cycle.intelligence.sk_hynix_pre2023_cycle_driver_source_claims import
 from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_source_closure import (
     ProductRevenueSourceClosurePeriod,
     audit_pre2023_product_revenue_sources,
-)
-from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_company_probe import (
-    DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_probe import (
     DEFAULT_PRODUCT_REVENUE_PROBE_OUTPUT,
@@ -36,9 +36,7 @@ _EXPECTED_PERIODS = (
     "2022Q2",
     "2022Q3",
 )
-_COMPANY_PROBE_STATUS = (
-    "skhynix_historical_expansion_company_profitability_probe_completed"
-)
+_COMPANY_PROBE_STATUS = "skhynix_historical_expansion_company_profitability_probe_completed"
 
 
 def _sha_payload(payload: object) -> str:
@@ -258,7 +256,7 @@ def _cycle_state(item: Pre2023CycleDriverPeriodProfile) -> str:
 def build_pre2023_source_layer_resolution(
     *,
     product_probe_output: str | Path = DEFAULT_PRODUCT_REVENUE_PROBE_OUTPUT,
-    company_probe_output: str | Path = DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT,
+    company_probe_output: str | Path = company_probe.DEFAULT_EXPANSION_COMPANY_PROBE_OUTPUT,
 ) -> tuple[Pre2023SourceLayerResolution, dict[str, VerifiedCompanyProfitabilityConstraint]]:
     company = _company_constraints(Path(company_probe_output))
     product = {
