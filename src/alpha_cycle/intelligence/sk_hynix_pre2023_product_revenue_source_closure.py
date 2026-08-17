@@ -1,12 +1,12 @@
 """Exhaustively profile preserved pre-2023 SK hynix filings for separable product revenue.
 
 The earlier expansion probe established that production parsers cannot resolve 2021Q1-Q3
-or 2022Q1-Q3.  This module answers a narrower source question before another parser family
+or 2022Q1-Q3. This module answers a narrower source question before another parser family
 is written: does the preserved official filing contain any table that directly separates
 DRAM and NAND revenue, or does the business-report product section expose only an aggregate
 bucket such as ``DRAM, NAND Flash, CIS 등``?
 
-The audit is diagnostic only.  A candidate is not a certification, absence of a candidate
+The audit is diagnostic only. A candidate is not a certification, absence of a candidate
 is not a synthetic allocation license, and aggregate revenue is never split by assumption.
 """
 
@@ -49,7 +49,7 @@ _TEXT_SUFFIXES = frozenset({".xml", ".html", ".htm", ".xhtml"})
 _DRAM_EXACT = frozenset({"dram", "d ram", "d램", "디램"})
 _NAND_EXACT = frozenset({"nand", "nand flash", "낸드", "낸드플래시", "플래시메모리"})
 _REVENUE_MARKERS = ("매출액", "수익", "revenue")
-_PRODUCT_MARKERS = ("주요 제품", "제품 등의 현황", "제품 및 서비스", "product")
+_PRODUCT_MARKERS = ("주요 제품", "제품 등의 현황", "제품 및 서비스", "제품", "product")
 _UNIT_MARKERS = ("백만원", "억원")
 _COMBINED_BUCKET = re.compile(
     r"dram.*(?:nand|낸드)|(?:nand|낸드).*dram",
@@ -162,6 +162,8 @@ class ProductRevenueTableWitness:
             not self.dram_label_rows or not self.nand_label_rows
         ):
             raise ValueError("Direct product-revenue candidate lacks separate labels")
+        if not self.unit_markers:
+            raise ValueError("Pre-2023 product-revenue witness lacks a KRW unit marker")
 
 
 @dataclass(frozen=True)
@@ -276,7 +278,8 @@ def build_product_revenue_source_closure(
                 nand_rows = _label_rows(grid, _NAND_EXACT)
                 has_revenue = _revenue_context(context)
                 has_product = _product_context(context)
-                if combined and has_revenue and has_product:
+                has_unit = bool(_unit_context(context))
+                if combined and has_revenue and has_product and has_unit:
                     aggregate.append(
                         _witness(
                             member_name=safe_name,
@@ -289,7 +292,7 @@ def build_product_revenue_source_closure(
                             nand_rows=nand_rows,
                         )
                     )
-                if dram_rows and nand_rows and has_revenue:
+                if dram_rows and nand_rows and has_revenue and has_product and has_unit:
                     labeled_rows = {row for row, _column in (*dram_rows, *nand_rows)}
                     amount_rows = sum(bool(_amounts(grid[row])) for row in labeled_rows)
                     if amount_rows >= 2:
