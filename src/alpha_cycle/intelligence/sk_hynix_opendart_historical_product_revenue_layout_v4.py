@@ -138,15 +138,13 @@ def _prefix_current_values(
             "Historical layout-v4 Q1 witness requires exactly four tokens between "
             f"revenue and prior boundary: count={len(amount_tokens)}"
         )
-    amounts = tuple(_parse_amount(token) for token in amount_tokens)
-    if any(amount is None for amount in amounts):
-        raise ValueError("Historical layout-v4 Q1 witness contains a non-numeric amount")
-    return (
-        float(amounts[0]),
-        float(amounts[1]),
-        float(amounts[2]),
-        float(amounts[3]),
-    )
+    amounts: list[float] = []
+    for token in amount_tokens:
+        amount = _parse_amount(token)
+        if amount is None:
+            raise ValueError("Historical layout-v4 Q1 witness contains a non-numeric amount")
+        amounts.append(amount)
+    return amounts[0], amounts[1], amounts[2], amounts[3]
 
 
 def _prefix_witness_metrics(
