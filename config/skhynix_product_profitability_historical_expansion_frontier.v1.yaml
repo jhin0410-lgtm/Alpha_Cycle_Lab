@@ -42,7 +42,7 @@ frontier:
       period_start: 2022-01-01
       period_end: 2022-03-31
       issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-first-quarter-2022-results/
-      issuer_release_published_date: 2022-04-27
+      issuer_release_published_date: 2022-04-26
       issuer_release_verified_present: true
       opendart_product_revenue_capture_status: not_attempted
       opendart_company_profitability_capture_status: not_attempted
@@ -52,7 +52,7 @@ frontier:
       period_start: 2022-04-01
       period_end: 2022-06-30
       issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-second-quarter-2022-results/
-      issuer_release_published_date: 2022-07-27
+      issuer_release_published_date: 2022-07-26
       issuer_release_verified_present: true
       opendart_product_revenue_capture_status: not_attempted
       opendart_company_profitability_capture_status: not_attempted
@@ -61,8 +61,8 @@ frontier:
     - period_id: 2022Q3
       period_start: 2022-07-01
       period_end: 2022-09-30
-      issuer_release_url: https://news.skhynix.com/sk-hynix-inc-reports-third-quarter-2022-results/
-      issuer_release_published_date: 2022-10-26
+      issuer_release_url: https://news.skhynix.com/sk-hynix-reports-third-quarter-2022-results/
+      issuer_release_published_date: 2022-10-25
       issuer_release_verified_present: true
       opendart_product_revenue_capture_status: not_attempted
       opendart_company_profitability_capture_status: not_attempted
