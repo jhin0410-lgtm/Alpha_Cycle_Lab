@@ -499,8 +499,10 @@ def build_structural_rank_probe(
     evidence_tickers = (historical.ticker, company.ticker, cycle.ticker)
     if any(ticker != method.ticker for ticker in evidence_tickers):
         raise ValueError("Structural rank probe received evidence for another issuer")
-    if historical.evaluation_date != evaluation_date or company.evaluation_date != evaluation_date:
-        raise ValueError("Structural rank probe evidence evaluation date mismatch")
+    if historical.evaluation_date != evaluation_date:
+        raise ValueError("Structural rank probe historical evidence evaluation date mismatch")
+    if company.evaluation_date > evaluation_date:
+        raise ValueError("Structural rank probe uses future company profitability evidence")
     if cycle.observed_date > evaluation_date:
         raise ValueError("Structural rank probe uses future cycle-driver evidence")
     if cycle.numeric_driver_values_available:
