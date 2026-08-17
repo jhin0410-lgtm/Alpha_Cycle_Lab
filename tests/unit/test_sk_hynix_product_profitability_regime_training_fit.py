@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 from typing import cast
 
 import numpy as np
 import pytest
 
-from alpha_cycle.intelligence import sk_hynix_product_profitability_regime_training_fit as fit_module
+from alpha_cycle.intelligence import (
+    sk_hynix_product_profitability_regime_training_fit as fit_module,
+)
 from alpha_cycle.intelligence.sk_hynix_product_profitability_regime_estimation_method import (
     load_frozen_regime_estimation_method,
 )
@@ -74,7 +77,7 @@ def test_frozen_training_gate_can_open_holdout_only_after_loocv_pass(
         base,
         closeout,
         frontier,
-        evaluation_date=method.training_periods and __import__("datetime").date(2026, 8, 17),
+        evaluation_date=date(2026, 8, 17),
     )
 
     assert result.row_count == 15
