@@ -10,6 +10,10 @@ from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_layou
     parse_historical_product_revenue_archive_v2,
     parse_historical_product_revenue_text_v2,
 )
+from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_layout_v3 import (
+    parse_historical_product_revenue_archive_v3,
+    parse_historical_product_revenue_text_v3,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_text_policy import (
     parse_historical_product_revenue_text_prioritized,
 )
@@ -29,7 +33,7 @@ def parse_periodic_product_revenue_text(
     spec: PeriodicProductRevenueSpec,
     text: str,
 ) -> ProductRevenueMetrics:
-    """Preserve existing strict precedence before trying newly observed historical families."""
+    """Preserve existing strict precedence before observed historical fallbacks."""
 
     try:
         return _current_text_parser(spec, text)
@@ -42,17 +46,21 @@ def parse_periodic_product_revenue_text(
             try:
                 return parse_historical_product_revenue_text_v2(spec, text)
             except ValueError as v2_error:
-                raise ValueError(
-                    "OpenDART product revenue text failed current and historical parsers: "
-                    f"current={current_error}; historical={historical_error}; v2={v2_error}"
-                ) from v2_error
+                try:
+                    return parse_historical_product_revenue_text_v3(spec, text)
+                except ValueError as v3_error:
+                    raise ValueError(
+                        "OpenDART product revenue text failed current and historical parsers: "
+                        f"current={current_error}; historical={historical_error}; "
+                        f"v2={v2_error}; v3={v3_error}"
+                    ) from v3_error
 
 
 def parse_periodic_product_revenue_archive(
     spec: PeriodicProductRevenueSpec,
     archive_bytes: bytes,
 ) -> ProductRevenueMetrics:
-    """Preserve existing historical row replay before trying observed raw layout-v2."""
+    """Preserve existing historical replay before observed raw layout fallbacks."""
 
     try:
         return _current_archive_parser(spec, archive_bytes)
@@ -65,10 +73,14 @@ def parse_periodic_product_revenue_archive(
             try:
                 return parse_historical_product_revenue_archive_v2(spec, archive_bytes)
             except ValueError as v2_error:
-                raise ValueError(
-                    "OpenDART product revenue archive failed current and historical parsers: "
-                    f"current={current_error}; historical={historical_error}; v2={v2_error}"
-                ) from v2_error
+                try:
+                    return parse_historical_product_revenue_archive_v3(spec, archive_bytes)
+                except ValueError as v3_error:
+                    raise ValueError(
+                        "OpenDART product revenue archive failed current and historical parsers: "
+                        f"current={current_error}; historical={historical_error}; "
+                        f"v2={v2_error}; v3={v3_error}"
+                    ) from v3_error
 
 
 __all__ = [
