@@ -151,13 +151,18 @@ def _write_failure_bundle(
     _write_normalized_text(text_path, archive)
     diagnostic = {
         "status": "skhynix_opendart_q2_product_revenue_parse_failed",
+        "captured_at": captured_at.isoformat(),
         "rcept_no": discovery.rcept_no,
         "report_name": discovery.report_name,
         "receipt_date": discovery.receipt_date.isoformat(),
+        "retrieved_at": archive.evidence.retrieved_at.isoformat(),
         "archive_path": str(archive_path),
         "archive_sha256": archive.evidence.archive_sha256,
+        "archive_bytes": archive.evidence.archive_bytes,
         "normalized_text_path": str(text_path),
         "text_sha256": archive.evidence.text_sha256,
+        "text_chars": archive.evidence.text_chars,
+        "text_truncated": archive.evidence.text_truncated,
         "source_url": f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={discovery.rcept_no}",
         "error_type": type(error).__name__,
         "error": str(error),
