@@ -167,7 +167,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             holdout_error = str(exc)
 
     coefficient_map = {
-        parameter: value for parameter, value in zip(method.parameters, training.coefficients)
+        parameter: value
+        for parameter, value in zip(
+            method.parameters,
+            training.coefficients,
+            strict=True,
+        )
     }
     stability = {
         item.parameter: {
