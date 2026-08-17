@@ -97,7 +97,8 @@ class ExactNameAccountSelection:
     def __post_init__(self) -> None:
         if self.label not in _ACCOUNT_NAMES:
             raise ValueError("Second-wave account selection label is unsupported")
-        if _norm(self.account_name) not in {_norm(item) for item in _ACCOUNT_NAMES[self.label]}:
+        allowed_names = {_norm(item) for item in _ACCOUNT_NAMES[self.label]}
+        if _norm(self.account_name) not in allowed_names:
             raise ValueError("Second-wave account selection used an unregistered exact name")
         if not self.account_ids:
             raise ValueError("Second-wave account selection must retain observed account IDs")
@@ -178,7 +179,10 @@ def _select_exact_name_account(
             )
         )
 
-    semantic = {(amount, receipt, available, _norm(name)) for amount, receipt, available, name, _ in raw_matches}
+    semantic = {
+        (amount, receipt, available, _norm(name))
+        for amount, receipt, available, name, _ in raw_matches
+    }
     if len(semantic) != 1:
         observed_names = tuple(sorted({name for _, _, _, name, _ in raw_matches}))
         raise ValueError(
