@@ -32,10 +32,19 @@ _EXPECTED_PERIODS = (
     "2022Q2",
     "2022Q3",
 )
-_SIGNAL_TERMS = (
+_PRODUCT_TRIGGER_TERMS = (
     "DRAM",
     "NAND",
     "NAND Flash",
+    "D램",
+    "디램",
+    "낸드",
+    "낸드플래시",
+    "메모리",
+    "Memory",
+)
+_SIGNAL_TERMS = (
+    *_PRODUCT_TRIGGER_TERMS,
     "3개월",
     "누적",
     "백만원",
@@ -149,7 +158,7 @@ def _profile_contexts(lines: tuple[str, ...]) -> tuple[HistoricalExpansionLayout
     trigger_indices = [
         index
         for index, line in enumerate(lines)
-        if "dram" in line.casefold() or "nand" in line.casefold()
+        if any(term.casefold() in line.casefold() for term in _PRODUCT_TRIGGER_TERMS)
     ]
     if not trigger_indices:
         return ()
@@ -165,20 +174,26 @@ def _profile_contexts(lines: tuple[str, ...]) -> tuple[HistoricalExpansionLayout
             windows.append((start, end))
 
     contexts: list[HistoricalExpansionLayoutContext] = []
+    trigger_report_terms = (
+        *_PRODUCT_TRIGGER_TERMS,
+        "3개월",
+        "누적",
+        "백만원",
+        "억원",
+        "매출액",
+    )
     for start, end in windows[:12]:
         block = lines[start:end]
         folded = "\n".join(block).casefold()
         triggers = tuple(
-            term
-            for term in ("DRAM", "NAND", "3개월", "누적", "백만원", "억원", "매출액")
-            if term.casefold() in folded
+            term for term in trigger_report_terms if term.casefold() in folded
         )
         units = tuple(unit for unit in ("백만원", "억원") if unit in folded)
         contexts.append(
             HistoricalExpansionLayoutContext(
                 start_line=start + 1,
                 end_line=end,
-                trigger_terms=triggers or ("DRAM/NAND",),
+                trigger_terms=triggers or ("memory-product",),
                 lines=block,
                 amount_token_count=sum(_is_amount_token(item) for item in block),
                 has_three_month_marker="3개월" in folded,
