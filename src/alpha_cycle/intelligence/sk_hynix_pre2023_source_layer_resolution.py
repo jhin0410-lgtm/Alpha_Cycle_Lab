@@ -1,8 +1,8 @@
 """Resolve pre-2023 SK hynix source layers without forcing them into the current model.
 
-The matrix joins three independently verified questions for 2021Q1-Q3 and 2022Q1-Q3:
-company-level profitability, direct product-revenue availability, and issuer ASP/shipment
-language. It is deliberately a source-resolution artifact, not a training-panel builder.
+The matrix joins independently verified company profitability, canonical certified direct
+product revenue, raw product-revenue discovery diagnostics, and issuer ASP/shipment language.
+Source promotion here does not promote a training row or enable fitting.
 """
 
 from __future__ import annotations
@@ -15,6 +15,10 @@ from typing import cast
 
 from alpha_cycle.intelligence import (
     sk_hynix_product_profitability_historical_expansion_company_probe as company_probe,
+)
+from alpha_cycle.intelligence.sk_hynix_pre2023_certified_product_revenue_registry import (
+    CertifiedPre2023ProductRevenue,
+    load_certified_pre2023_product_revenue_registry,
 )
 from alpha_cycle.intelligence.sk_hynix_pre2023_cycle_driver_source_claims import (
     Pre2023CycleDriverPeriodProfile,
@@ -164,6 +168,7 @@ class Pre2023SourceLayerResolutionPeriod:
         if self.period_id not in _EXPECTED_PERIODS:
             raise ValueError("Pre-2023 source-resolution period is unsupported")
         if self.product_revenue_source_state not in {
+            "direct_product_revenue_certified_current_retrieval",
             "aggregate_only_observed",
             "direct_candidate_requires_review",
             "no_revenue_witness_observed",
@@ -188,6 +193,12 @@ class Pre2023SourceLayerResolutionPeriod:
         )
         if any(forbidden):
             raise ValueError("Pre-2023 source resolution exceeded trust boundary")
+
+    @property
+    def direct_product_revenue_certified(self) -> bool:
+        return self.product_revenue_source_state == (
+            "direct_product_revenue_certified_current_retrieval"
+        )
 
 
 @dataclass(frozen=True)
@@ -236,8 +247,17 @@ class Pre2023SourceLayerResolution:
         ):
             raise ValueError("Pre-2023 source resolution exceeded model boundary")
 
+    @property
+    def direct_product_revenue_certified_count(self) -> int:
+        return sum(item.direct_product_revenue_certified for item in self.periods)
 
-def _product_state(item: ProductRevenueSourceClosurePeriod) -> str:
+
+def _product_state(
+    item: ProductRevenueSourceClosurePeriod,
+    certified: CertifiedPre2023ProductRevenue | None,
+) -> str:
+    if certified is not None and certified.direct_product_revenue_certified:
+        return "direct_product_revenue_certified_current_retrieval"
     if item.direct_separable_candidate_count > 0:
         return "direct_candidate_requires_review"
     if item.aggregate_only_observed:
@@ -267,11 +287,22 @@ def build_pre2023_source_layer_resolution(
         item.period_id: item
         for item in profile_pre2023_cycle_driver_sources(output=product_probe_output)
     }
+    certified_registry = load_certified_pre2023_product_revenue_registry()
+    certified = {item.period_id: item for item in certified_registry.periods}
+    for period_id in _EXPECTED_PERIODS:
+        if period_id not in company:
+            continue
+        if certified[period_id].company_revenue_krw != company[period_id].revenue_krw:
+            raise ValueError(
+                f"Pre-2023 certified product/company revenue mismatch: {period_id}"
+            )
     periods = tuple(
         Pre2023SourceLayerResolutionPeriod(
             period_id=period_id,
             company_profitability_constraint_verified=period_id in company,
-            product_revenue_source_state=_product_state(product[period_id]),
+            product_revenue_source_state=_product_state(
+                product[period_id], certified.get(period_id)
+            ),
             aggregate_product_bucket_witness_count=(
                 product[period_id].aggregate_bucket_witness_count
             ),
@@ -290,6 +321,10 @@ def build_pre2023_source_layer_resolution(
         "periods": [item.__dict__ for item in periods],
         "company_raw_hashes": {
             period_id: item.raw_payload_sha256 for period_id, item in sorted(company.items())
+        },
+        "certified_product_registry_sha256": certified_registry.manifest_sha256,
+        "certified_product_archive_hashes": {
+            item.period_id: item.source_archive_sha256 for item in certified_registry.periods
         },
         "synthetic_product_allocation_allowed": False,
         "numeric_driver_point_imputation_allowed": False,
@@ -312,6 +347,8 @@ def build_pre2023_source_layer_resolution(
         ),
         current_model_training_row_eligible_count=0,
     )
+    if resolution.direct_product_revenue_certified_count != 6:
+        raise ValueError("Pre-2023 certified product-revenue promotion is incomplete")
     return resolution, company
 
 
