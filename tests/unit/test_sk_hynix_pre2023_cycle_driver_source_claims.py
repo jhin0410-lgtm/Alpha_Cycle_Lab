@@ -96,4 +96,8 @@ def test_cycle_driver_direction_only_group_statement_covers_shipments(tmp_path: 
     assert ("dram", "bit_volume") in direction_only
     assert ("nand", "bit_volume") in direction_only
     assert profile.source_language_four_field_coverage is True
-    assert all(claim.normalized_interval_text is None for claim in profile.claims if claim.source_magnitude_text == "direction_only")
+    assert all(
+        claim.normalized_interval_text is None
+        for claim in profile.claims
+        if claim.source_magnitude_text == "direction_only"
+    )
