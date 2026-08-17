@@ -29,7 +29,7 @@ def parse_periodic_product_revenue_text(
     spec: PeriodicProductRevenueSpec,
     text: str,
 ) -> ProductRevenueMetrics:
-    """Prefer current parsing, then evidence-bound historical families, then legacy fallback."""
+    """Preserve existing strict precedence before trying newly observed historical families."""
 
     try:
         return _current_text_parser(spec, text)
@@ -37,22 +37,22 @@ def parse_periodic_product_revenue_text(
         if spec.parser_id != HISTORICAL_PRODUCT_REVENUE_PARSER_ID:
             raise
         try:
-            return parse_historical_product_revenue_text_v2(spec, text)
-        except ValueError as v2_error:
+            return parse_historical_product_revenue_text_prioritized(spec, text)
+        except ValueError as historical_error:
             try:
-                return parse_historical_product_revenue_text_prioritized(spec, text)
-            except ValueError as historical_error:
+                return parse_historical_product_revenue_text_v2(spec, text)
+            except ValueError as v2_error:
                 raise ValueError(
                     "OpenDART product revenue text failed current and historical parsers: "
-                    f"current={current_error}; v2={v2_error}; historical={historical_error}"
-                ) from historical_error
+                    f"current={current_error}; historical={historical_error}; v2={v2_error}"
+                ) from v2_error
 
 
 def parse_periodic_product_revenue_archive(
     spec: PeriodicProductRevenueSpec,
     archive_bytes: bytes,
 ) -> ProductRevenueMetrics:
-    """Prefer current structural replay, then strict observed historical raw layouts."""
+    """Preserve existing historical row replay before trying observed raw layout-v2."""
 
     try:
         return _current_archive_parser(spec, archive_bytes)
@@ -60,15 +60,15 @@ def parse_periodic_product_revenue_archive(
         if spec.parser_id != HISTORICAL_PRODUCT_REVENUE_PARSER_ID:
             raise
         try:
-            return parse_historical_product_revenue_archive_v2(spec, archive_bytes)
-        except ValueError as v2_error:
+            return parse_historical_product_revenue_archive_fallback(spec, archive_bytes)
+        except ValueError as historical_error:
             try:
-                return parse_historical_product_revenue_archive_fallback(spec, archive_bytes)
-            except ValueError as historical_error:
+                return parse_historical_product_revenue_archive_v2(spec, archive_bytes)
+            except ValueError as v2_error:
                 raise ValueError(
                     "OpenDART product revenue archive failed current and historical parsers: "
-                    f"current={current_error}; v2={v2_error}; historical={historical_error}"
-                ) from historical_error
+                    f"current={current_error}; historical={historical_error}; v2={v2_error}"
+                ) from v2_error
 
 
 __all__ = [
