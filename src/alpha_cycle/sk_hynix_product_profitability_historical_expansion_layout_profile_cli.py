@@ -7,10 +7,8 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_layout_profile import (
-    HistoricalExpansionLayoutContext,
-    HistoricalExpansionLayoutProfile,
-    profile_historical_expansion_failures,
+from alpha_cycle.intelligence import (
+    sk_hynix_product_profitability_historical_expansion_layout_profile as layout_profile,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_historical_expansion_probe import (
     DEFAULT_PRODUCT_REVENUE_PROBE_OUTPUT,
@@ -33,7 +31,9 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _interesting_lines(context: HistoricalExpansionLayoutContext) -> tuple[str, ...]:
+def _interesting_lines(
+    context: layout_profile.HistoricalExpansionLayoutContext,
+) -> tuple[str, ...]:
     terms = (
         "dram",
         "nand",
@@ -62,7 +62,9 @@ def _interesting_lines(context: HistoricalExpansionLayoutContext) -> tuple[str, 
     return tuple(selected)
 
 
-def _summary(profile: HistoricalExpansionLayoutProfile) -> dict[str, object]:
+def _summary(
+    profile: layout_profile.HistoricalExpansionLayoutProfile,
+) -> dict[str, object]:
     return {
         "period_id": profile.period_id,
         "evidence_id": profile.evidence_id,
@@ -98,7 +100,9 @@ def _summary(profile: HistoricalExpansionLayoutProfile) -> dict[str, object]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    profiles = profile_historical_expansion_failures(output=Path(args.probe_output))
+    profiles = layout_profile.profile_historical_expansion_failures(
+        output=Path(args.probe_output)
+    )
     captured_at = datetime.now(UTC)
     root = Path(args.output)
     root.mkdir(parents=True, exist_ok=True)
