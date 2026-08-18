@@ -99,12 +99,13 @@ def load_periodic_product_revenue_certification(
     pointer = _object(Path(pointer_path), "Periodic product revenue pointer")
     if pointer.get("status") != "skhynix_opendart_q2_product_revenue_certified":
         raise ValueError("Periodic product revenue pointer status is invalid")
-    if date.fromisoformat(str(pointer.get("evaluation_date", ""))) != evaluation_date:
-        raise ValueError("Periodic product revenue evaluation date mismatch")
+    source_evaluation_date = date.fromisoformat(str(pointer.get("evaluation_date", "")))
+    if source_evaluation_date > evaluation_date:
+        raise ValueError("Periodic product revenue evidence was not yet observable")
     spec, _contract_hash = load_bound_periodic_product_revenue_parser_contract(pointer)
 
     certification = _certification(Path(str(pointer.get("certification_path", ""))))
-    if certification.evaluation_date != evaluation_date:
+    if certification.evaluation_date != source_evaluation_date:
         raise ValueError("Periodic product revenue certification evaluation date mismatch")
     if str(pointer.get("evidence_id", "")) != certification.evidence_id:
         raise ValueError("Periodic product revenue pointer/certification evidence mismatch")
@@ -134,7 +135,7 @@ def load_periodic_product_revenue_certification(
     document = _parse_document_archive(
         archive_bytes,
         receipt=certification.rcept_no,
-        retrieved_at=datetime.combine(evaluation_date, datetime.min.time(), tzinfo=UTC),
+        retrieved_at=datetime.combine(source_evaluation_date, datetime.min.time(), tzinfo=UTC),
     )
     if document.text_sha256 != certification.text_sha256:
         raise ValueError("Periodic product revenue ZIP does not reproduce normalized text hash")
@@ -173,7 +174,7 @@ def load_periodic_product_revenue_certification(
         discovery,
         document,
         metrics,
-        evaluation_date=evaluation_date,
+        evaluation_date=source_evaluation_date,
     )
     expected_id = hashlib.sha256(
         json.dumps(
