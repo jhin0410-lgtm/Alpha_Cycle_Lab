@@ -1,9 +1,10 @@
-"""Recover second-wave SK hynix product revenue from preserved failed parser archives.
+"""Recover historical SK hynix product revenue from preserved failed parser archives.
 
-This is a narrow, fail-closed replay path for the 2019Q1-2020Q3 frontier. It never guesses a
-product split. It scans only structured tables with explicit DRAM/NAND/Other/Total rows and
-certifies a table only when the direct-quarter product sum exactly equals the independently
-verified consolidated company revenue.
+This is a narrow, fail-closed replay path for the exact-numeric 2017Q1-2020Q3 Q1-Q3
+frontiers. It never guesses a product split. It scans only structured tables with explicit
+DRAM/NAND/Other/Total rows and certifies a table only when the direct-quarter product sum
+exactly equals the independently verified consolidated company revenue. Q4 remains outside
+this recovery contract.
 """
 
 from __future__ import annotations
@@ -31,7 +32,22 @@ _NAND = frozenset({"nand", "nand flash", "낸드", "낸드플래시"})
 _OTHER = frozenset({"기타", "other", "others"})
 _TOTAL = frozenset({"합계", "합 계", "total"})
 _CURRENT_HEADERS = frozenset({"당분기", "당반기"})
-_EXPECTED_PERIODS = frozenset({"2019Q1", "2019Q2", "2019Q3", "2020Q1", "2020Q2", "2020Q3"})
+_EXPECTED_PERIODS = frozenset(
+    {
+        "2017Q1",
+        "2017Q2",
+        "2017Q3",
+        "2018Q1",
+        "2018Q2",
+        "2018Q3",
+        "2019Q1",
+        "2019Q2",
+        "2019Q3",
+        "2020Q1",
+        "2020Q2",
+        "2020Q3",
+    }
+)
 
 
 def _norm(value: str) -> str:
@@ -53,13 +69,13 @@ def _sha(payload: object) -> str:
 def _amount(value: str, label: str) -> int:
     text = value.strip().replace(",", "")
     if not text or text == "-":
-        raise ValueError(f"Second-wave product {label} is missing")
+        raise ValueError(f"Historical product {label} is missing")
     try:
         parsed = Decimal(text)
     except InvalidOperation as exc:
-        raise ValueError(f"Second-wave product {label} is not numeric") from exc
+        raise ValueError(f"Historical product {label} is not numeric") from exc
     if not parsed.is_finite() or parsed != parsed.to_integral_value() or parsed < 0:
-        raise ValueError(f"Second-wave product {label} must be non-negative integral million KRW")
+        raise ValueError(f"Historical product {label} must be non-negative integral million KRW")
     return int(parsed)
 
 
@@ -68,7 +84,7 @@ def _label_row(
 ) -> tuple[str, ...]:
     matches = tuple(row for row in rows if row and _norm(row[0]) in labels)
     if len(matches) != 1:
-        raise ValueError(f"Second-wave product {label} row count={len(matches)}")
+        raise ValueError(f"Historical product {label} row count={len(matches)}")
     return matches[0]
 
 
@@ -92,13 +108,13 @@ def _direct_column(rows: tuple[tuple[str, ...], ...]) -> tuple[int, str]:
         }
     )
     if len(current) != 1:
-        raise ValueError(f"Second-wave direct-quarter column is ambiguous: {current}")
+        raise ValueError(f"Historical direct-quarter column is ambiguous: {current}")
     return current[0], "direct_quarter_current_period"
 
 
 def _at(row: tuple[str, ...], column: int, label: str) -> int:
     if column >= len(row):
-        raise ValueError(f"Second-wave product {label} lacks selected quarter column")
+        raise ValueError(f"Historical product {label} lacks selected quarter column")
     return _amount(row[column], label)
 
 
@@ -126,20 +142,20 @@ class SecondWaveRecoveredProductRevenue:
 
     def __post_init__(self) -> None:
         if self.period_id not in _EXPECTED_PERIODS:
-            raise ValueError("Second-wave recovered product period is unsupported")
+            raise ValueError("Historical recovered product period is unsupported")
         if len(self.rcept_no) != 14 or not self.rcept_no.isdigit():
-            raise ValueError("Second-wave recovered product receipt is invalid")
+            raise ValueError("Historical recovered product receipt is invalid")
         if len(self.evidence_id) != 64 or len(self.source_archive_sha256) != 64:
-            raise ValueError("Second-wave recovered product hashes must be SHA-256")
+            raise ValueError("Historical recovered product hashes must be SHA-256")
         if (
             self.dram_revenue_million_krw
             + self.nand_revenue_million_krw
             + self.other_revenue_million_krw
             != self.total_revenue_million_krw
         ):
-            raise ValueError("Second-wave recovered product sum identity failed")
+            raise ValueError("Historical recovered product sum identity failed")
         if self.total_revenue_million_krw * 1_000_000 != self.company_revenue_krw:
-            raise ValueError("Second-wave recovered product does not tie to company revenue")
+            raise ValueError("Historical recovered product does not tie to company revenue")
         if (
             not self.direct_product_revenue_certified
             or not self.current_retrieval_historical_source_fact
@@ -148,7 +164,7 @@ class SecondWaveRecoveredProductRevenue:
             or self.training_row_promoted
             or self.fit_enabled
         ):
-            raise ValueError("Second-wave recovered product exceeded source boundary")
+            raise ValueError("Historical recovered product exceeded source boundary")
 
 
 @dataclass(frozen=True)
@@ -171,9 +187,9 @@ class SecondWaveProductRecoveryResult:
 
     def __post_init__(self) -> None:
         if self.certified != (self.observation is not None):
-            raise ValueError("Second-wave product recovery success state is inconsistent")
+            raise ValueError("Historical product recovery success state is inconsistent")
         if self.certified == (self.error is not None):
-            raise ValueError("Second-wave product recovery error state is inconsistent")
+            raise ValueError("Historical product recovery error state is inconsistent")
 
 
 def certify_rows(
@@ -194,7 +210,7 @@ def certify_rows(
 def _latest_diagnostic(period_root: Path) -> Path:
     failed = period_root / "failed"
     if not failed.is_dir():
-        raise ValueError(f"Second-wave failed product root is missing: {period_root}")
+        raise ValueError(f"Historical failed product root is missing: {period_root}")
     paths = sorted(
         (item / "diagnostic.json" for item in failed.iterdir() if item.is_dir()),
         key=lambda path: path.parent.name,
@@ -202,7 +218,7 @@ def _latest_diagnostic(period_root: Path) -> Path:
     )
     found = next((path for path in paths if path.is_file()), None)
     if found is None:
-        raise ValueError(f"Second-wave failed product diagnostic is missing: {period_root}")
+        raise ValueError(f"Historical failed product diagnostic is missing: {period_root}")
     return found
 
 
@@ -214,7 +230,7 @@ def recover_failed_second_wave_product_revenue(
     company_rcept_no: str,
 ) -> SecondWaveProductRecoveryResult:
     if period_id not in _EXPECTED_PERIODS:
-        raise ValueError("Second-wave recovery period is unsupported")
+        raise ValueError("Historical recovery period is unsupported")
     diagnostic = load_failure_diagnostic(period_id, _latest_diagnostic(Path(period_output)))
     if diagnostic.rcept_no != company_rcept_no:
         return SecondWaveProductRecoveryResult(
@@ -228,11 +244,11 @@ def recover_failed_second_wave_product_revenue(
         )
     archive_bytes = Path(diagnostic.archive_path).read_bytes()
     if hashlib.sha256(archive_bytes).hexdigest() != diagnostic.archive_sha256:
-        raise ValueError("Second-wave recovery archive hash mismatch")
+        raise ValueError("Historical recovery archive hash mismatch")
     try:
         archive = zipfile.ZipFile(io.BytesIO(archive_bytes))
     except zipfile.BadZipFile as exc:
-        raise ValueError("Second-wave recovery source is not a ZIP") from exc
+        raise ValueError("Historical recovery source is not a ZIP") from exc
 
     reviews: list[SecondWaveProductCandidateReview] = []
     accepted: list[SecondWaveRecoveredProductRevenue] = []
