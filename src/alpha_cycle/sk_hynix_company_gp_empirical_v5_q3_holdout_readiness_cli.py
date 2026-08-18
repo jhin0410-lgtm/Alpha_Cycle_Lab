@@ -10,9 +10,6 @@ from pathlib import Path
 from .intelligence.sec_product_cycle_driver_support import (
     DEFAULT_SEC_PRODUCT_CYCLE_DRIVER_POINTER,
 )
-from .intelligence.sk_hynix_company_gp_empirical_regime_fit import (
-    load_company_gp_empirical_rows,
-)
 from .intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout import (
     DEFAULT_V5_Q3_HOLDOUT_BINDING,
     build_v5_q3_validation_binding,
@@ -21,6 +18,9 @@ from .intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout import (
 from .intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout_protocol import (
     DEFAULT_V5_Q3_HOLDOUT_PROTOCOL,
     load_frozen_v5_q3_holdout_protocol,
+)
+from .intelligence.sk_hynix_company_gross_profit_empirical_regime_fit import (
+    load_company_gp_empirical_rows,
 )
 from .intelligence.sk_hynix_company_gross_profit_empirical_regime_method import (
     DEFAULT_COMPANY_GP_EMPIRICAL_METHOD,
