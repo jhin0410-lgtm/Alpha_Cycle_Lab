@@ -73,8 +73,8 @@ def load_historical_product_revenue_panel_evidence(
     if pointer.get("status") != "skhynix_opendart_historical_product_revenue_panel_captured":
         raise ValueError("Historical product-revenue panel pointer status is invalid")
     source_evaluation_date = date.fromisoformat(str(pointer.get("evaluation_date", "")))
-    if source_evaluation_date != evaluation_date:
-        raise ValueError("Historical product-revenue panel evaluation date mismatch")
+    if source_evaluation_date > evaluation_date:
+        raise ValueError("Historical product-revenue panel was not yet observable")
     raw_entries = pointer.get("entries")
     if not isinstance(raw_entries, list):
         raise ValueError("Historical product-revenue panel entries must be an array")
@@ -88,7 +88,7 @@ def load_historical_product_revenue_panel_evidence(
         period_pointer_path = Path(item.pointer_path)
         certification = load_periodic_product_revenue_certification(
             period_pointer_path,
-            evaluation_date=evaluation_date,
+            evaluation_date=source_evaluation_date,
         )
         if certification.evidence_id != item.certification_evidence_id:
             raise ValueError(
@@ -104,7 +104,7 @@ def load_historical_product_revenue_panel_evidence(
             raise ValueError(f"Historical product revenue chain mismatch: {item.period_id}")
 
     reconstructed = build_historical_product_revenue_panel_evidence(
-        evaluation_date=evaluation_date,
+        evaluation_date=source_evaluation_date,
         entries=entries,
     )
     if reconstructed.evidence_id != str(pointer.get("evidence_id", "")):
