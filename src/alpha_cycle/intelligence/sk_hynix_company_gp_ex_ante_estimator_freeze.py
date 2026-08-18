@@ -1,9 +1,7 @@
 """Target-blind estimator freeze and sample preflight for SK hynix ex-ante GP research.
 
-This module is deliberately incapable of loading company-GP targets. It binds a small,
-pre-registered candidate set and determines whether the PIT feature panel is large enough to
-run the already-frozen chronological comparison without changing candidates after seeing
-performance.
+This module cannot load company-GP targets. It binds a preregistered candidate set and checks
+whether the PIT feature panel is large enough to run the frozen chronological comparison.
 """
 
 from __future__ import annotations
@@ -57,15 +55,14 @@ def _list(value: object, label: str) -> list[object]:
 
 
 def _sha(payload: object) -> str:
-    return hashlib.sha256(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
-    ).hexdigest()
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _heuristic_training_rows(parameter_count: int) -> int:
@@ -94,7 +91,8 @@ class FrozenExAnteEstimatorCandidate:
         expected_minimum = _heuristic_training_rows(self.parameter_count)
         if self.minimum_training_rows != expected_minimum:
             raise ValueError("Ex-ante estimator heuristic training floor drifted")
-        if self.required_total_rows_for_eight_folds_if_scored_alone != expected_minimum + 8:
+        expected_total = expected_minimum + 8
+        if self.required_total_rows_for_eight_folds_if_scored_alone != expected_total:
             raise ValueError("Ex-ante estimator standalone panel requirement drifted")
         if not set(self.predictors).issubset(_EXPECTED_FEATURES):
             raise ValueError("Ex-ante estimator candidate uses a non-frozen feature")
@@ -140,61 +138,72 @@ class FrozenExAnteEstimatorSelection:
             raise ValueError("Ex-ante estimator freeze evidence id must be SHA-256")
         if self.freeze_id != "skhynix_company_gp_ex_ante_estimator_selection":
             raise ValueError("Ex-ante estimator freeze id drifted")
-        if (
-            self.freeze_version != "1.0-frozen-pre-target-join"
-            or self.status != "frozen_pre_target_join"
-        ):
+        frozen = self.freeze_version == "1.0-frozen-pre-target-join"
+        if not frozen or self.status != "frozen_pre_target_join":
             raise ValueError("Ex-ante estimator selection is not frozen pre-target-join")
-        if self.ticker != "000660" or self.target_metric != "company_gross_profit_krw_million":
-            raise ValueError("Ex-ante estimator ticker or target drifted")
-        if self.protocol_path != "config/skhynix_company_gp_ex_ante_forecast_protocol.v1.yaml":
+        if self.ticker != "000660":
+            raise ValueError("Ex-ante estimator ticker drifted")
+        if self.target_metric != "company_gross_profit_krw_million":
+            raise ValueError("Ex-ante estimator target drifted")
+        expected_protocol = "config/skhynix_company_gp_ex_ante_forecast_protocol.v1.yaml"
+        if self.protocol_path != expected_protocol:
             raise ValueError("Ex-ante estimator protocol path drifted")
-        if self.pit_certification_contract_path != (
+        expected_pit = (
             "config/skhynix_company_gp_ex_ante_lagged_filing_certification.v1.yaml"
-        ):
+        )
+        if self.pit_certification_contract_path != expected_pit:
             raise ValueError("Ex-ante estimator PIT certification path drifted")
-        if self.certified_base_target_rows != 14 or self.certified_base_feature_observations != 70:
-            raise ValueError("Ex-ante estimator certified base dimensions drifted")
+        if self.certified_base_target_rows != 14:
+            raise ValueError("Ex-ante estimator certified base row count drifted")
+        if self.certified_base_feature_observations != 70:
+            raise ValueError("Ex-ante estimator certified feature count drifted")
         if self.feature_ids != _EXPECTED_FEATURES:
             raise ValueError("Ex-ante estimator feature schema drifted")
-        if self.benchmark_id != "previous_reported_quarter_gross_profit_persistence":
+        expected_benchmark = "previous_reported_quarter_gross_profit_persistence"
+        if self.benchmark_id != expected_benchmark:
             raise ValueError("Ex-ante estimator benchmark drifted")
         if self.benchmark_prediction_rule != "lagged_company_gross_profit":
             raise ValueError("Ex-ante estimator benchmark prediction rule drifted")
-        if tuple(item.candidate_id for item in self.candidates) != _EXPECTED_CANDIDATES:
+        candidate_ids = tuple(item.candidate_id for item in self.candidates)
+        if candidate_ids != _EXPECTED_CANDIDATES:
             raise ValueError("Ex-ante estimator candidate order drifted")
-        if self.minimum_scored_folds != 8 or self.shared_initial_training_rows != 12:
-            raise ValueError("Ex-ante estimator shared chronological fold rule drifted")
+        if self.minimum_scored_folds != 8:
+            raise ValueError("Ex-ante estimator scored-fold count drifted")
+        if self.shared_initial_training_rows != 12:
+            raise ValueError("Ex-ante estimator initial training size drifted")
         if self.required_rows_before_first_target_join != 20:
             raise ValueError("Ex-ante estimator first-target-join row floor drifted")
-        if self.shared_initial_training_rows != max(
+        maximum_candidate_floor = max(
             item.minimum_training_rows for item in self.candidates
-        ):
+        )
+        if self.shared_initial_training_rows != maximum_candidate_floor:
             raise ValueError("Ex-ante estimator shared training floor is inconsistent")
-        if self.required_rows_before_first_target_join != (
-            self.shared_initial_training_rows + self.minimum_scored_folds
-        ):
+        required = self.shared_initial_training_rows + self.minimum_scored_folds
+        if self.required_rows_before_first_target_join != required:
             raise ValueError("Ex-ante estimator panel requirement is inconsistent")
-        if not self.parameter_count_includes_intercept or self.heuristic_is_statistical_theorem:
-            raise ValueError("Ex-ante estimator sample heuristic semantics drifted")
+        if not self.parameter_count_includes_intercept:
+            raise ValueError("Ex-ante estimator p must include the intercept")
+        if self.heuristic_is_statistical_theorem:
+            raise ValueError("Ex-ante estimator sample heuristic cannot be a theorem")
         if not self.require_every_candidate_sample_eligible:
-            raise ValueError("Ex-ante estimator must keep all candidates eligible before join")
-        if self.random_cross_validation_allowed or not self.candidate_must_strictly_beat_benchmark:
-            raise ValueError("Ex-ante estimator chronological benchmark gate drifted")
-        if any(
-            (
-                self.hyperparameter_tuning_allowed,
-                self.candidate_addition_after_first_target_join_allowed,
-                self.feature_subset_change_after_first_target_join_allowed,
-                self.target_join_allowed_now,
-                self.estimator_fit_allowed_now,
-                self.first_pit_backtest_run,
-                self.final_estimator_selected,
-                self.q3_target_read,
-                self.q3_source_outcome_loaded,
-                self.numeric_forward_forecast_enabled,
-            )
-        ):
+            raise ValueError("Ex-ante estimator must preserve all candidates before join")
+        if self.random_cross_validation_allowed:
+            raise ValueError("Ex-ante estimator cannot use random CV")
+        if not self.candidate_must_strictly_beat_benchmark:
+            raise ValueError("Ex-ante estimator must strictly beat the benchmark")
+        prohibited = (
+            self.hyperparameter_tuning_allowed,
+            self.candidate_addition_after_first_target_join_allowed,
+            self.feature_subset_change_after_first_target_join_allowed,
+            self.target_join_allowed_now,
+            self.estimator_fit_allowed_now,
+            self.first_pit_backtest_run,
+            self.final_estimator_selected,
+            self.q3_target_read,
+            self.q3_source_outcome_loaded,
+            self.numeric_forward_forecast_enabled,
+        )
+        if any(prohibited):
             raise ValueError("Ex-ante estimator freeze opened prohibited scope")
 
 
@@ -232,7 +241,12 @@ class ExAnteEstimatorFreezePreflight:
     q3_source_outcome_loaded: bool = False
 
     def __post_init__(self) -> None:
-        if self.target_join_authorized or self.estimator_fit_authorized or self.historical_backtest_run:
+        opened = (
+            self.target_join_authorized,
+            self.estimator_fit_authorized,
+            self.historical_backtest_run,
+        )
+        if any(opened):
             raise ValueError("Estimator preflight cannot authorize target access or fitting")
         if self.q3_target_read or self.q3_source_outcome_loaded:
             raise ValueError("Estimator preflight cannot open protected Q3 state")
@@ -253,12 +267,16 @@ def load_frozen_ex_ante_estimator_selection(
     sample = _mapping(body.get("sample_adequacy"), "sample_adequacy")
     selection = _mapping(body.get("chronological_selection"), "chronological_selection")
     trust = _mapping(body.get("trust_boundary"), "trust_boundary")
-    feature_ids = tuple(str(item) for item in _list(base.get("feature_ids"), "feature_ids"))
+
+    feature_ids = tuple(
+        str(item) for item in _list(base.get("feature_ids"), "feature_ids")
+    )
     candidates: list[FrozenExAnteEstimatorCandidate] = []
     for raw_candidate in _list(body.get("candidates"), "candidates"):
         candidate = _mapping(raw_candidate, "candidate")
         predictors = tuple(
-            str(item) for item in _list(candidate.get("predictors"), "candidate.predictors")
+            str(item)
+            for item in _list(candidate.get("predictors"), "candidate.predictors")
         )
         candidates.append(
             FrozenExAnteEstimatorCandidate(
@@ -268,26 +286,36 @@ def load_frozen_ex_ante_estimator_selection(
                 parameter_count=int(str(candidate.get("parameter_count", -1))),
                 predictors=predictors,
                 minimum_training_rows=int(
-                    str(candidate.get("candidate_minimum_training_rows_from_heuristic", -1))
+                    str(
+                        candidate.get(
+                            "candidate_minimum_training_rows_from_heuristic",
+                            -1,
+                        )
+                    )
                 ),
                 required_total_rows_for_eight_folds_if_scored_alone=int(
-                    str(candidate.get("required_total_rows_for_eight_folds_if_scored_alone", -1))
+                    str(
+                        candidate.get(
+                            "required_total_rows_for_eight_folds_if_scored_alone",
+                            -1,
+                        )
+                    )
                 ),
             )
         )
-    if any(
-        freeze_state.get(key) is True
-        for key in (
-            "historical_target_values_read_for_this_freeze",
-            "historical_target_join_run",
-            "historical_backtest_run",
-            "2026q1_used_for_selection",
-            "2026q3_target_read",
-            "2026q3_source_outcome_loaded",
-            "2026q3_evaluated",
-        )
-    ):
+
+    target_blind_keys = (
+        "historical_target_values_read_for_this_freeze",
+        "historical_target_join_run",
+        "historical_backtest_run",
+        "2026q1_used_for_selection",
+        "2026q3_target_read",
+        "2026q3_source_outcome_loaded",
+        "2026q3_evaluated",
+    )
+    if any(freeze_state.get(key) is True for key in target_blind_keys):
         raise ValueError("Ex-ante estimator freeze was not target-blind")
+
     stable = {"schema_version": root["schema_version"], "freeze": body}
     return FrozenExAnteEstimatorSelection(
         evidence_id=_sha(stable),
@@ -297,29 +325,50 @@ def load_frozen_ex_ante_estimator_selection(
         ticker=str(body.get("ticker", "")).zfill(6),
         target_metric=str(body.get("target_metric", "")),
         protocol_path=str(body.get("protocol_path", "")),
-        pit_certification_contract_path=str(body.get("pit_certification_contract_path", "")),
+        pit_certification_contract_path=str(
+            body.get("pit_certification_contract_path", "")
+        ),
         certified_base_target_rows=int(str(base.get("target_row_count", -1))),
-        certified_base_feature_observations=int(str(base.get("feature_observation_count", -1))),
+        certified_base_feature_observations=int(
+            str(base.get("feature_observation_count", -1))
+        ),
         feature_ids=feature_ids,
         benchmark_id=str(benchmark.get("benchmark_id", "")),
         benchmark_prediction_rule=str(benchmark.get("prediction_rule", "")),
         candidates=tuple(candidates),
         minimum_scored_folds=int(str(sample.get("minimum_scored_folds", -1))),
-        shared_initial_training_rows=int(str(sample.get("shared_initial_training_rows", -1))),
-        required_rows_before_first_target_join=int(
-            str(sample.get("required_complete_target_rows_before_first_target_join", -1))
+        shared_initial_training_rows=int(
+            str(sample.get("shared_initial_training_rows", -1))
         ),
-        parameter_count_includes_intercept=sample.get("parameter_count_includes_intercept") is True,
-        heuristic_is_statistical_theorem=sample.get("heuristic_is_statistical_theorem") is True,
+        required_rows_before_first_target_join=int(
+            str(
+                sample.get(
+                    "required_complete_target_rows_before_first_target_join",
+                    -1,
+                )
+            )
+        ),
+        parameter_count_includes_intercept=(
+            sample.get("parameter_count_includes_intercept") is True
+        ),
+        heuristic_is_statistical_theorem=(
+            sample.get("heuristic_is_statistical_theorem") is True
+        ),
         require_every_candidate_sample_eligible=(
-            sample.get("require_every_frozen_candidate_sample_eligible_before_first_target_join")
+            sample.get(
+                "require_every_frozen_candidate_sample_eligible_before_first_target_join"
+            )
             is True
         ),
-        random_cross_validation_allowed=selection.get("random_cross_validation_allowed") is True,
+        random_cross_validation_allowed=(
+            selection.get("random_cross_validation_allowed") is True
+        ),
         candidate_must_strictly_beat_benchmark=(
             selection.get("candidate_must_strictly_beat_benchmark") is True
         ),
-        hyperparameter_tuning_allowed=selection.get("hyperparameter_tuning_allowed") is True,
+        hyperparameter_tuning_allowed=(
+            selection.get("hyperparameter_tuning_allowed") is True
+        ),
         candidate_addition_after_first_target_join_allowed=(
             selection.get("candidate_addition_after_first_target_join_allowed") is True
         ),
@@ -331,8 +380,12 @@ def load_frozen_ex_ante_estimator_selection(
         first_pit_backtest_run=trust.get("first_pit_backtest_run") is True,
         final_estimator_selected=trust.get("final_estimator_selected") is True,
         q3_target_read=trust.get("2026q3_target_read") is True,
-        q3_source_outcome_loaded=trust.get("2026q3_source_outcome_loaded") is True,
-        numeric_forward_forecast_enabled=trust.get("numeric_forward_forecast_enabled") is True,
+        q3_source_outcome_loaded=(
+            trust.get("2026q3_source_outcome_loaded") is True
+        ),
+        numeric_forward_forecast_enabled=(
+            trust.get("numeric_forward_forecast_enabled") is True
+        ),
     )
 
 
@@ -348,8 +401,11 @@ def build_ex_ante_estimator_freeze_preflight(
     rows: dict[str, set[str]] = {}
     for observation in bundle.observations:
         rows.setdefault(observation.period_id, set()).add(observation.feature_id)
+
     expected = set(freeze.feature_ids)
-    exact = bool(rows) and all(feature_ids == expected for feature_ids in rows.values())
+    exact = bool(rows) and all(
+        feature_ids == expected for feature_ids in rows.values()
+    )
     row_count = len(rows)
     candidate_preflight = tuple(
         ExAnteEstimatorCandidatePreflight(
@@ -367,6 +423,9 @@ def build_ex_ante_estimator_freeze_preflight(
         for item in freeze.candidates
     )
     shared_folds = max(0, row_count - freeze.shared_initial_training_rows)
+    all_candidate_ready = all(
+        item.individually_sample_eligible_now for item in candidate_preflight
+    )
     return ExAnteEstimatorFreezePreflight(
         freeze_evidence_id=freeze.evidence_id,
         bundle_evidence_id=bundle.evidence_id,
@@ -381,14 +440,15 @@ def build_ex_ante_estimator_freeze_preflight(
         shared_initial_training_rows=freeze.shared_initial_training_rows,
         minimum_scored_folds=freeze.minimum_scored_folds,
         shared_scored_folds_available_now=shared_folds,
-        required_rows_before_first_target_join=freeze.required_rows_before_first_target_join,
+        required_rows_before_first_target_join=(
+            freeze.required_rows_before_first_target_join
+        ),
         row_shortfall_before_first_target_join=max(
-            0, freeze.required_rows_before_first_target_join - row_count
+            0,
+            freeze.required_rows_before_first_target_join - row_count,
         ),
         candidates=candidate_preflight,
-        all_frozen_candidates_sample_eligible_now=all(
-            item.individually_sample_eligible_now for item in candidate_preflight
-        ),
+        all_frozen_candidates_sample_eligible_now=all_candidate_ready,
     )
 
 
