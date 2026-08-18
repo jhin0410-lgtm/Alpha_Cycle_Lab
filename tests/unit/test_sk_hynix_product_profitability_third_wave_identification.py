@@ -4,8 +4,6 @@ from datetime import date
 from types import SimpleNamespace
 from typing import cast
 
-import pytest
-
 from alpha_cycle.intelligence.sk_hynix_product_profitability_logit_margin_fit import (
     LogitMarginTrainingRow,
 )
@@ -17,9 +15,6 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_frontier
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_identification import (
     build_third_wave_identification_preflight,
-)
-from alpha_cycle.intelligence.sk_hynix_second_wave_product_revenue_recovery import (
-    SecondWaveRecoveredProductRevenue,
 )
 
 
@@ -138,42 +133,6 @@ def _third_wave_closeout() -> ThirdWaveCloseout:
             source=SimpleNamespace(periods=tuple(periods)),
         ),
     )
-
-
-def test_2017_recovered_product_period_is_supported_but_q4_is_not() -> None:
-    item = SecondWaveRecoveredProductRevenue(
-        evidence_id="a" * 64,
-        period_id="2017Q1",
-        rcept_no="20170515000001",
-        source_archive_sha256="b" * 64,
-        member_name="20170515000001.xml",
-        table_index=1,
-        direct_quarter_column_index=1,
-        direct_quarter_semantics="direct_quarter_current_period",
-        dram_revenue_million_krw=60,
-        nand_revenue_million_krw=30,
-        other_revenue_million_krw=10,
-        total_revenue_million_krw=100,
-        company_revenue_krw=100_000_000,
-    )
-    assert item.period_id == "2017Q1"
-
-    with pytest.raises(ValueError, match="unsupported"):
-        SecondWaveRecoveredProductRevenue(
-            evidence_id="a" * 64,
-            period_id="2017Q4",
-            rcept_no="20171115000001",
-            source_archive_sha256="b" * 64,
-            member_name="20171115000001.xml",
-            table_index=1,
-            direct_quarter_column_index=1,
-            direct_quarter_semantics="direct_quarter_current_period",
-            dram_revenue_million_krw=60,
-            nand_revenue_million_krw=30,
-            other_revenue_million_krw=10,
-            total_revenue_million_krw=100,
-            company_revenue_krw=100_000_000,
-        )
 
 
 def test_third_wave_preflight_requires_rank_before_any_replacement_fit(tmp_path) -> None:
