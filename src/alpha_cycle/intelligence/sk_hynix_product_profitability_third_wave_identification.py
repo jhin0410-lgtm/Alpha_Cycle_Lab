@@ -14,6 +14,8 @@ import json
 import math
 from dataclasses import asdict, dataclass
 from datetime import date
+from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -21,6 +23,7 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_logit_margin_fit im
     LogitMarginTrainingRow,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_closeout import (
+    DEFAULT_THIRD_WAVE_PRODUCT_OUTPUT,
     ThirdWaveCloseout,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_frontier import (
@@ -62,6 +65,24 @@ def _condition(matrix: np.ndarray) -> float | None:
 
 def _regime(asp: float, bit: float) -> str:
     return f"asp={asp:+.0f},bit={bit:+.0f}"
+
+
+def _json_object(path: Path, label: str) -> dict[str, object]:
+    try:
+        raw: object = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError(f"{label} not found: {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{label} is invalid JSON: {path}") from exc
+    if not isinstance(raw, dict):
+        raise ValueError(f"{label} must be an object")
+    return {str(key): value for key, value in cast(dict[object, object], raw).items()}
+
+
+def _mapping(value: object, label: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    return {str(key): item for key, item in cast(dict[object, object], value).items()}
 
 
 @dataclass(frozen=True)
@@ -217,25 +238,89 @@ def _from_logit_row(row: LogitMarginTrainingRow) -> IdentificationRow:
     )
 
 
+def _direct_certified_product(
+    product_root: Path,
+    period_id: str,
+    *,
+    company_rcept_no: str,
+    company_revenue_krw: int,
+) -> tuple[float, float, float, float]:
+    pointer_path = product_root / period_id / "latest_certification.json"
+    pointer = _json_object(pointer_path, "Third-wave direct product pointer")
+    if pointer.get("status") != "skhynix_opendart_q2_product_revenue_certified":
+        raise ValueError("Third-wave direct product pointer status is invalid")
+    certification_path = Path(str(pointer.get("certification_path", "")))
+    certification = _json_object(
+        certification_path,
+        "Third-wave direct product certification",
+    )
+    if str(certification.get("evidence_id", "")) != str(pointer.get("evidence_id", "")):
+        raise ValueError("Third-wave direct product evidence binding diverged")
+    if str(certification.get("rcept_no", "")) != company_rcept_no:
+        raise ValueError("Third-wave direct product/company receipts diverged")
+    archive_sha = str(certification.get("archive_sha256", ""))
+    if archive_sha != str(pointer.get("archive_sha256", "")) or len(archive_sha) != 64:
+        raise ValueError("Third-wave direct product archive hash binding diverged")
+    archive_path = Path(str(pointer.get("archive_path", "")))
+    if hashlib.sha256(archive_path.read_bytes()).hexdigest() != archive_sha:
+        raise ValueError("Third-wave direct product archive hash mismatch")
+    metrics = _mapping(certification.get("metrics"), "Third-wave direct product metrics")
+    if str(metrics.get("unit", "")) != "KRW_million":
+        raise ValueError("Third-wave direct product unit is invalid")
+    required_flags = (
+        certification.get("direct_product_revenue_semantics_certified") is True,
+        certification.get("other_amount_certified") is True,
+        certification.get("company_revenue_reconciliation_certified") is True,
+    )
+    if not all(required_flags):
+        raise ValueError("Third-wave direct product trust flags are incomplete")
+    dram = float(str(metrics.get("dram_total", "nan")))
+    nand = float(str(metrics.get("nand_and_solutions", "nan")))
+    other = float(str(metrics.get("other_products_services", "nan")))
+    total = float(str(metrics.get("reported_company_revenue", "nan")))
+    if min(dram, nand, other, total) < 0.0 or not all(
+        math.isfinite(value) for value in (dram, nand, other, total)
+    ):
+        raise ValueError("Third-wave direct product amounts are invalid")
+    if abs(dram + nand + other - total) > 0.5:
+        raise ValueError("Third-wave direct product sum does not reconcile")
+    if abs(total - company_revenue_krw / 1_000_000.0) > 0.5:
+        raise ValueError("Third-wave direct product total does not match company revenue")
+    return dram, nand, other, total
+
+
 def _third_wave_rows(
     closeout: ThirdWaveCloseout,
     frontier: ThirdWaveFrontier,
+    *,
+    product_output: str | Path,
 ) -> tuple[IdentificationRow, ...]:
     if not closeout.all_six_source_layers_complete:
         raise ValueError("Identification preflight requires six source-complete third-wave rows")
     candidate_by_period = {item.period_id: item for item in frontier.candidates}
+    product_root = Path(product_output)
     rows: list[IdentificationRow] = []
     for period in closeout.source.periods:
         company = period.company_observation
+        if company is None:
+            raise ValueError(f"Identification preflight lacks company row: {period.period_id}")
         recovery = period.product_recovery
-        if company is None or recovery is None or recovery.observation is None:
-            raise ValueError(
-                f"Identification preflight lacks recovered third-wave row: {period.period_id}"
+        if recovery is not None and recovery.observation is not None:
+            product = recovery.observation
+            if product.rcept_no != company.rcept_no:
+                raise ValueError("Identification preflight third-wave receipts diverged")
+            dram = float(product.dram_revenue_million_krw)
+            nand = float(product.nand_revenue_million_krw)
+            other = float(product.other_revenue_million_krw)
+            total = float(product.total_revenue_million_krw)
+        else:
+            dram, nand, other, total = _direct_certified_product(
+                product_root,
+                period.period_id,
+                company_rcept_no=company.rcept_no,
+                company_revenue_krw=company.revenue_krw,
             )
-        product = recovery.observation
         candidate = candidate_by_period[period.period_id]
-        if product.rcept_no != company.rcept_no:
-            raise ValueError("Identification preflight third-wave receipts diverged")
         drivers = candidate.drivers_qoq_percent
         rows.append(
             IdentificationRow(
@@ -243,15 +328,15 @@ def _third_wave_rows(
                 source_group="third_wave_exact_numeric_downcast",
                 company_revenue_krw_million=company.revenue_krw / 1_000_000.0,
                 company_gross_profit_krw_million=company.gross_profit_krw / 1_000_000.0,
-                dram_revenue_krw_million=float(product.dram_revenue_million_krw),
-                nand_revenue_krw_million=float(product.nand_revenue_million_krw),
-                other_revenue_krw_million=float(product.other_revenue_million_krw),
+                dram_revenue_krw_million=dram,
+                nand_revenue_krw_million=nand,
+                other_revenue_krw_million=other,
                 dram_asp_direction_code=_sign(drivers.dram_asp),
                 dram_bit_volume_direction_code=_sign(drivers.dram_bit_volume),
                 nand_asp_direction_code=_sign(drivers.nand_asp),
                 nand_bit_volume_direction_code=_sign(drivers.nand_bit_volume),
                 company_product_revenue_reconciled=(
-                    product.total_revenue_million_krw * 1_000_000 == company.revenue_krw
+                    abs(total - company.revenue_krw / 1_000_000.0) <= 0.5
                 ),
             )
         )
@@ -281,10 +366,20 @@ def _panel(panel_id: str, rows: tuple[IdentificationRow, ...]) -> PanelIdentific
         full_column_rank=rank == _PARAMETER_COUNT,
         normalized_condition_number_report_only=_condition(matrix),
         dram_regimes=tuple(
-            sorted({_regime(row.dram_asp_direction_code, row.dram_bit_volume_direction_code) for row in rows})
+            sorted(
+                {
+                    _regime(row.dram_asp_direction_code, row.dram_bit_volume_direction_code)
+                    for row in rows
+                }
+            )
         ),
         nand_regimes=tuple(
-            sorted({_regime(row.nand_asp_direction_code, row.nand_bit_volume_direction_code) for row in rows})
+            sorted(
+                {
+                    _regime(row.nand_asp_direction_code, row.nand_bit_volume_direction_code)
+                    for row in rows
+                }
+            )
         ),
         dram_revenue_share_range=(float(np.min(shares[:, 0])), float(np.max(shares[:, 0]))),
         nand_revenue_share_range=(float(np.min(shares[:, 1])), float(np.max(shares[:, 1]))),
@@ -298,6 +393,7 @@ def build_third_wave_identification_preflight(
     base_v2_rows: tuple[LogitMarginTrainingRow, ...],
     closeout: ThirdWaveCloseout,
     frontier: ThirdWaveFrontier,
+    product_output: str | Path = DEFAULT_THIRD_WAVE_PRODUCT_OUTPUT,
 ) -> ThirdWaveIdentificationPreflight:
     if tuple(row.period_id for row in base_v2_rows[-1:]) != (_SPENT_HOLDOUT,):
         raise ValueError("Identification preflight requires spent 2026Q1 as final development row")
@@ -305,7 +401,11 @@ def build_third_wave_identification_preflight(
     if len(base_historical) != 15:
         raise ValueError("Identification preflight requires the original fifteen historical rows")
     spent_q1 = _from_logit_row(base_v2_rows[-1])
-    third = _third_wave_rows(closeout, frontier)
+    third = _third_wave_rows(
+        closeout,
+        frontier,
+        product_output=product_output,
+    )
     clean_rows = third + base_historical
     development_rows = clean_rows + (spent_q1,)
     clean = _panel("clean_historical_21", clean_rows)
