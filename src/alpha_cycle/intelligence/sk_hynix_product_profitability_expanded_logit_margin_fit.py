@@ -1,9 +1,9 @@
 """Fit the frozen SK hynix v3 expanded clean-panel bounded margin model.
 
 The training panel is exactly 21 clean historical rows: six source-complete 2017Q1-2018Q3
-rows plus the original fifteen v1 training rows.  The already-seen 2026Q1 outcome is loaded
+rows plus the original fifteen v1 training rows. The already-seen 2026Q1 outcome is loaded
 only as a retrospective contaminated stress diagnostic and never enters estimation, LOOCV,
-or a model-selection gate.  2026Q3 is not loaded here.
+or a model-selection gate. 2026Q3 is not loaded here.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import math
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
-from typing import cast
 
 import numpy as np
 
@@ -25,7 +24,7 @@ from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_panel
     DEFAULT_HISTORICAL_PRODUCT_REVENUE_POINTER,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_quarterly_company_profitability import (
-    DEFAULT_QUARTLY_COMPANY_PROFITABILITY_POINTER,
+    DEFAULT_QUARTERLY_COMPANY_PROFITABILITY_POINTER,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_expanded_logit_margin_method import (
     FrozenExpandedLogitMarginMethod,
@@ -44,16 +43,11 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_regime_holdout impo
     DEFAULT_REGIME_HOLDOUT_POINTER,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_closeout import (
-    DEFAULT_THIRD_WAVE_PRODUCT_OUTPUT,
     ThirdWaveCloseout,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_frontier import (
     ThirdWaveFrontier,
 )
-
-
-# Keep this source-loader import alias explicit so V3 binds to the same verified Q1 inputs as V2.
-# The V2 outcome itself is not reused as a V3 fit result.
 
 
 def _sha(payload: object) -> str:
@@ -223,7 +217,11 @@ class ContaminatedQ1StressDiagnostic:
     def __post_init__(self) -> None:
         if self.period_id != "2026Q1":
             raise ValueError("Expanded contaminated stress period drifted")
-        if self.used_for_fit or self.used_for_model_selection_gate or self.claimed_as_independent_holdout:
+        if (
+            self.used_for_fit
+            or self.used_for_model_selection_gate
+            or self.claimed_as_independent_holdout
+        ):
             raise ValueError("Expanded Q1 stress diagnostic exceeded contamination boundary")
 
 
@@ -364,7 +362,7 @@ def load_expanded_logit_margin_rows(
     v1_training_pointer: str | Path = DEFAULT_REGIME_TRAINING_FIT_POINTER,
     v1_holdout_pointer: str | Path = DEFAULT_REGIME_HOLDOUT_POINTER,
     historical_product_revenue_pointer: str | Path = DEFAULT_HISTORICAL_PRODUCT_REVENUE_POINTER,
-    company_profitability_pointer: str | Path = DEFAULT_QUARTLY_COMPANY_PROFITABILITY_POINTER,
+    company_profitability_pointer: str | Path = DEFAULT_QUARTERLY_COMPANY_PROFITABILITY_POINTER,
     cycle_driver_pointer: str | Path = DEFAULT_SEC_PRODUCT_CYCLE_DRIVER_POINTER,
 ) -> tuple[tuple[ExpandedLogitMarginRow, ...], ExpandedLogitMarginRow]:
     v2_method = load_frozen_logit_margin_method(v2_method_path)
