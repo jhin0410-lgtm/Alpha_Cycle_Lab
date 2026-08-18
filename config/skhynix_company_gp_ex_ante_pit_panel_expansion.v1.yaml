@@ -1,0 +1,136 @@
+schema_version: 1
+expansion:
+  expansion_id: skhynix_company_gp_ex_ante_pit_panel_expansion
+  expansion_version: 1.0-frozen-pre-source-replay
+  status: frozen_pre_source_replay
+  ticker: "000660"
+  scientific_scope: target_blind_pit_feature_panel_expansion_only
+
+  bindings:
+    protocol_path: config/skhynix_company_gp_ex_ante_forecast_protocol.v1.yaml
+    estimator_freeze_path: config/skhynix_company_gp_ex_ante_estimator_freeze.v1.yaml
+    base_certification_contract_path: config/skhynix_company_gp_ex_ante_lagged_filing_certification.v1.yaml
+    base_bundle_evidence_id: e66b63d5fd95a07482cbc43086f82482d1775abf7a3fc36d78a566730dd7d771
+    estimator_freeze_evidence_id: f7000f312a698a90ec5b16b6eb05e5b18e42462e0d9f0d7bdef83567c8a82ebc
+    base_certification_contract_evidence_id: 7d297882f567b55c3adc6b12a06a15607011f57ed0839c801b41f5694bee8215
+
+  panel_geometry:
+    base_target_row_count: 14
+    base_feature_observation_count: 70
+    features_per_target_row: 5
+    required_total_target_rows_before_first_target_join: 20
+    required_additional_target_rows: 6
+    required_total_feature_observations: 100
+    base_bundle_must_remain_immutable: true
+    expansion_must_compose_with_base_by_evidence_id: true
+
+  frozen_feature_ids:
+    - lagged_company_revenue
+    - lagged_company_gross_profit
+    - lagged_company_gross_margin
+    - lagged_nand_revenue_share
+    - lagged_other_revenue_share
+
+  primary_source_to_target_mappings:
+    - source_period: 2021Q1
+      target_period: 2021Q2
+      report_code: "11013"
+      expected_receipt: "20210517000667"
+    - source_period: 2021Q2
+      target_period: 2021Q3
+      report_code: "11012"
+      expected_receipt: "20210817001301"
+    - source_period: 2022Q1
+      target_period: 2022Q2
+      report_code: "11013"
+      expected_receipt: "20220516001502"
+    - source_period: 2022Q2
+      target_period: 2022Q3
+      report_code: "11012"
+      expected_receipt: "20220816001536"
+    - source_period: 2016Q1
+      target_period: 2016Q2
+      report_code: "11013"
+      expected_receipt: null
+    - source_period: 2016Q2
+      target_period: 2016Q3
+      report_code: "11012"
+      expected_receipt: null
+
+  source_only_fallback_policy:
+    enabled: true
+    trigger: primary_source_period_unavailable_or_unverifiable_under_frozen_source_contract
+    target_or_backtest_performance_may_trigger_fallback: false
+    fallback_order:
+      - source_period: 2015Q1
+        target_period: 2015Q2
+        report_code: "11013"
+      - source_period: 2015Q2
+        target_period: 2015Q3
+        report_code: "11012"
+      - source_period: 2014Q1
+        target_period: 2014Q2
+        report_code: "11013"
+      - source_period: 2014Q2
+        target_period: 2014Q3
+        report_code: "11012"
+    selection_rule: first_complete_source_year_pair_in_frozen_order
+    partial_year_pair_selection_allowed: false
+    changing_fallback_order_after_target_join_allowed: false
+
+  source_contract:
+    source_authority: opendart_or_issuer_filing
+    provenance_class: timestamped_immutable_filing
+    company_and_product_receipt_must_match: true
+    receipt_must_be_no_later_than_target_forecast_origin: true
+    company_raw_json_bytes_sha256_required: true
+    product_raw_zip_bytes_sha256_required: true
+    company_revenue_cost_of_sales_gross_profit_identity_required: true
+    product_categories_required:
+      - DRAM
+      - NAND
+      - Other
+      - Total
+    product_components_must_sum_to_product_total: true
+    company_product_revenue_reconciliation_tolerance_krw: 1000000
+    later_retrieval_allowed_only_for_pinned_immutable_receipt: true
+    current_retrieval_only_without_document_identity_is_pit_evidence: false
+    inferred_or_synthetic_product_allocation_allowed: false
+
+  acquisition_policy:
+    existing_certified_registry_values_are_source_hints_not_automatic_pit_promotion: true
+    existing_private_archived_bytes_may_be_replayed: true
+    missing_private_archived_bytes_may_be_reacquired_from_pinned_immutable_receipt: true
+    acquisition_may_read_company_gp_target_for_target_period: false
+    acquisition_may_read_current_quarter_outcome: false
+    source_diagnostic_may_select_fallback_using_source_status_only: true
+    product_discovery_window_method: period_end_plus_1_day_through_period_end_plus_120_days
+    product_discovery_window_may_be_tuned_by_year_after_source_replay: false
+    exact_periodic_report_name_required: true
+    correction_disclosures_allowed: false
+
+  completion_gate:
+    exactly_six_additional_target_rows_required: true
+    exactly_thirty_additional_feature_observations_required: true
+    combined_target_rows_required: 20
+    combined_feature_observations_required: 100
+    every_added_observation_must_be_point_in_time_eligible: true
+    zero_rejected_observations_required: true
+    duplicate_target_periods_forbidden: true
+    target_values_must_be_absent: true
+
+  trust_boundary:
+    historical_target_values_read_for_this_expansion: false
+    target_join_allowed: false
+    estimator_fit_allowed: false
+    historical_backtest_run: false
+    final_estimator_selected: false
+    2026q1_used_for_selection: false
+    2026q3_target_read: false
+    2026q3_source_outcome_loaded: false
+    2026q3_evaluated: false
+    numeric_forward_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    investment_action_enabled: false
