@@ -29,12 +29,22 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_protocol import (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Inspect the target-blind SK hynix ex-ante estimator freeze without loading GP targets"
+            "Inspect the target-blind SK hynix ex-ante estimator freeze without "
+            "loading GP targets"
         )
     )
-    parser.add_argument("--freeze", default=str(DEFAULT_COMPANY_GP_EX_ANTE_ESTIMATOR_FREEZE))
-    parser.add_argument("--protocol", default=str(DEFAULT_COMPANY_GP_EX_ANTE_PROTOCOL))
-    parser.add_argument("--frontier", default=str(DEFAULT_COMPANY_GP_EX_ANTE_FEATURE_FRONTIER))
+    parser.add_argument(
+        "--freeze",
+        default=str(DEFAULT_COMPANY_GP_EX_ANTE_ESTIMATOR_FREEZE),
+    )
+    parser.add_argument(
+        "--protocol",
+        default=str(DEFAULT_COMPANY_GP_EX_ANTE_PROTOCOL),
+    )
+    parser.add_argument(
+        "--frontier",
+        default=str(DEFAULT_COMPANY_GP_EX_ANTE_FEATURE_FRONTIER),
+    )
     parser.add_argument("--bundle", default=str(DEFAULT_LAGGED_FILING_BUNDLE))
     return parser
 
@@ -51,11 +61,26 @@ def main() -> int:
         frontier,
         bundle,
     )
+
+    if result.row_shortfall_before_first_target_join > 0:
+        next_action = (
+            "expand_target_blind_pit_development_panel_to_at_least_20_rows_"
+            "and_refreeze_period_scope_before_first_target_join"
+        )
+    else:
+        next_action = (
+            "implement_separate_target_join_and_chronological_backtest_runner_"
+            "without_changing_the_frozen_candidates"
+        )
+
+    sample_ready = (
+        result.all_frozen_candidates_sample_eligible_now
+        and result.shared_scored_folds_available_now >= result.minimum_scored_folds
+    )
     payload = {
         "status": (
             "skhynix_ex_ante_estimator_freeze_sample_ready"
-            if result.all_frozen_candidates_sample_eligible_now
-            and result.shared_scored_folds_available_now >= result.minimum_scored_folds
+            if sample_ready
             else "skhynix_ex_ante_estimator_freeze_sample_incomplete"
         ),
         "freeze_version": freeze.freeze_version,
@@ -63,7 +88,9 @@ def main() -> int:
         "bundle_evidence_id": bundle.evidence_id,
         "current_target_blind_feature_rows": result.current_target_blind_feature_rows,
         "current_feature_observation_count": result.current_feature_observation_count,
-        "all_rows_have_exact_frozen_feature_set": result.all_rows_have_exact_frozen_feature_set,
+        "all_rows_have_exact_frozen_feature_set": (
+            result.all_rows_have_exact_frozen_feature_set
+        ),
         "all_observations_point_in_time_eligible": (
             result.all_observations_point_in_time_eligible
         ),
@@ -86,11 +113,7 @@ def main() -> int:
         "historical_backtest_run": result.historical_backtest_run,
         "2026q3_target_read": result.q3_target_read,
         "2026q3_source_outcome_loaded": result.q3_source_outcome_loaded,
-        "next_action": (
-            "expand_target_blind_pit_development_panel_to_at_least_20_rows_and_refreeze_period_scope_before_first_target_join"
-            if result.row_shortfall_before_first_target_join > 0
-            else "implement_separate_target_join_and_chronological_backtest_runner_without_changing_the_frozen_candidates"
-        ),
+        "next_action": next_action,
     }
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
