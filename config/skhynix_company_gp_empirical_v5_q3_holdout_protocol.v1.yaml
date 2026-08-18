@@ -1,0 +1,70 @@
+schema_version: 1
+protocol:
+  protocol_id: skhynix_company_gp_empirical_v5_q3_prospective_holdout
+  protocol_version: 1.0-frozen-pre-outcome
+  status: frozen_pre_outcome
+  ticker: "000660"
+  bound_method_id: skhynix_company_gross_profit_empirical_regime_ols
+  bound_method_version: 5.0-frozen-pre-fit
+  bound_method_evidence_id: e7507064c46f96e3e253c46f9bd958a0577bb183275a3960b8ad369b578aea38
+  bound_fit_evaluation_date: 2026-08-18
+  holdout_period: 2026Q3
+  target_metric: company_gross_profit_krw_million
+  temporal_alignment: contemporaneous_same_quarter
+  scientific_scope:
+    validates_out_of_sample_company_gp_relationship: true
+    validates_literal_product_margins: false
+    validates_pre_earnings_forecastability: false
+    contemporaneous_inputs_may_be_disclosed_with_quarterly_results: true
+    ex_ante_forecasting_layer_required_for_pre_earnings_investment_use: true
+  pre_authorization:
+    conditional_one_time_evaluation_pre_authorized: true
+    require_bound_v5_development_gate_passed: true
+    require_bound_v5_fit_evaluation_date_match: true
+    require_bound_v5_method_evidence_match: true
+    require_complete_certified_holdout_source_layers: true
+    require_company_product_revenue_reconciliation: true
+    company_revenue_reconciliation_tolerance_krw: 1000000
+    require_immutable_result_reuse: true
+    refit_before_holdout_allowed: false
+    refit_after_holdout_allowed: false
+  holdout_design:
+    parameter_count: 7
+    design_terms:
+      - company_revenue
+      - company_revenue_x_dram_asp_direction
+      - company_revenue_x_dram_bit_volume_direction
+      - company_revenue_x_nand_asp_direction
+      - company_revenue_x_nand_bit_volume_direction
+      - nand_revenue
+      - other_revenue
+    direction_transform: sign_only_minus_one_zero_plus_one
+    exact_numeric_driver_magnitudes_used_in_scoring: false
+    benchmark_id: training_mean_company_gross_margin_scaled_by_holdout_company_revenue
+    require_model_absolute_error_better_than_benchmark: true
+  source_policy:
+    holdout_source_outcome_may_be_loaded_before_source_complete: false
+    holdout_target_may_be_read_for_readiness_check: false
+    readiness_checker_must_not_load_2026q3_source_outcome: true
+    scorer_may_load_2026q3_only_after_explicit_source_completeness_gate: true
+    company_profitability_must_be_certified: true
+    product_revenue_mix_must_be_certified: true
+    cycle_driver_directions_must_be_certified: true
+    source_evidence_ids_must_be_bound_into_immutable_result: true
+  outcome_policy:
+    holdout_spent_after_first_score: true
+    first_score_is_immutable: true
+    repeated_calls_reuse_first_result: true
+    method_selection_after_holdout_score_allowed: false
+    threshold_tuning_after_holdout_score_allowed: false
+  structural_closeout:
+    v1_v4_product_margin_structural_branch_closed: true
+    product_margin_structural_interpretation_allowed: false
+    product_margin_output_enabled: false
+    v5_scope: empirical_company_gp_predictor_only
+  trust_boundary:
+    numeric_forward_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    investment_action_enabled: false
