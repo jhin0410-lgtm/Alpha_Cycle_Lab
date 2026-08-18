@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from dateutil.parser import isoparse
 from datetime import date
 from pathlib import Path
 from typing import cast
@@ -143,10 +142,10 @@ def load_frozen_v5_q3_holdout_protocol(
         raise ValueError("V5 Q3 holdout method id binding diverged")
     if str(protocol.get("bound_method_version", "")) != method.method_version:
         raise ValueError("V5 Q3 holdout method version binding diverged")
-    if str(protocol.get("holdout_period", "")) != method.future_holdout_period:
+    if str(protocol.get("holdout_period", "")) != method.untouched_future_holdout_period:
         raise ValueError("V5 Q3 holdout period binding diverged")
     raw_date = protocol.get("bound_fit_evaluation_date")
-    fit_date = raw_date if isinstance(raw_date, date) else isoparse(str(raw_date)).date()
+    fit_date = raw_date if isinstance(raw_date, date) else date.fromisoformat(str(raw_date))
     result = FrozenV5Q3HoldoutProtocol(
         evidence_id=evidence_id,
         protocol_id=str(protocol.get("protocol_id", "")),
