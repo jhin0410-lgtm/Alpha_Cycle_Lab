@@ -1,0 +1,118 @@
+schema_version: 1
+certification:
+  certification_id: skhynix_company_gp_ex_ante_lagged_filing_pit
+  certification_version: 1.0-frozen-pre-certification
+  status: frozen_pre_certification
+  ticker: "000660"
+  protocol_path: config/skhynix_company_gp_ex_ante_forecast_protocol.v1.yaml
+  feature_frontier_path: config/skhynix_company_gp_ex_ante_feature_frontier.v1.yaml
+
+  source_to_target_mapping:
+    2017Q1: 2017Q2
+    2017Q2: 2017Q3
+    2018Q1: 2018Q2
+    2018Q2: 2018Q3
+    2019Q1: 2019Q2
+    2019Q2: 2019Q3
+    2020Q1: 2020Q2
+    2020Q2: 2020Q3
+    2023Q1: 2023Q2
+    2023Q2: 2023Q3
+    2024Q1: 2024Q2
+    2024Q2: 2024Q3
+    2025Q1: 2025Q2
+    2025Q2: 2025Q3
+
+  expected_source_periods:
+    - 2017Q1
+    - 2017Q2
+    - 2018Q1
+    - 2018Q2
+    - 2019Q1
+    - 2019Q2
+    - 2020Q1
+    - 2020Q2
+    - 2023Q1
+    - 2023Q2
+    - 2024Q1
+    - 2024Q2
+    - 2025Q1
+    - 2025Q2
+
+  expected_target_periods:
+    - 2017Q2
+    - 2017Q3
+    - 2018Q2
+    - 2018Q3
+    - 2019Q2
+    - 2019Q3
+    - 2020Q2
+    - 2020Q3
+    - 2023Q2
+    - 2023Q3
+    - 2024Q2
+    - 2024Q3
+    - 2025Q2
+    - 2025Q3
+
+  expected_target_row_count_if_complete: 14
+  expected_features_per_target_row: 5
+  expected_feature_observation_count_if_complete: 70
+
+  feature_ids:
+    - lagged_company_revenue
+    - lagged_company_gross_profit
+    - lagged_company_gross_margin
+    - lagged_nand_revenue_share
+    - lagged_other_revenue_share
+
+  source_policy:
+    company_source: official_opendart_consolidated_periodic_filing
+    product_mix_source: official_opendart_periodic_filing
+    require_company_and_product_same_rcept_no: true
+    require_company_accounting_identity: true
+    require_product_direct_sum_identity: true
+    require_product_total_ties_company_revenue: true
+    require_source_available_by_target_forecast_origin: true
+    require_actual_company_raw_json_bytes_sha256: true
+    require_actual_product_archive_bytes_sha256: true
+    require_pinned_receipt_identity: true
+    source_available_at_semantics: receipt_date_end_of_day_asia_seoul
+    later_retrieval_allowed_for_immutable_receipt_document: true
+    current_retrieval_does_not_change_historical_receipt_date: true
+
+  transform_policy:
+    lagged_company_revenue: direct_source_fact
+    lagged_company_gross_profit: direct_source_fact
+    lagged_company_gross_margin: deterministic_gross_profit_divided_by_revenue
+    lagged_nand_revenue_share: deterministic_nand_revenue_divided_by_reported_company_revenue
+    lagged_other_revenue_share: deterministic_other_revenue_divided_by_reported_company_revenue
+
+  exclusions:
+    q1_target_rows_supported: false
+    reason_q1_targets_excluded: >-
+      Prior-quarter Q4 product-revenue recovery is outside the registered source contract and
+      Q4 prior-quarter earnings information is not generally available by the March 1-style
+      Q1 forecast origin. No Q4 values are synthesized or backfilled.
+    cycle_driver_features_certified_in_this_step: false
+    macro_features_certified_in_this_step: false
+    memory_price_feature_certified_in_this_step: false
+
+  completion_gate:
+    require_all_14_target_rows: true
+    require_exactly_5_features_per_target_row: true
+    require_all_70_observations_pit_eligible: true
+    require_zero_rejected_observations: true
+    require_target_values_absent: true
+
+  trust_boundary:
+    target_join_allowed: false
+    estimator_fit_allowed: false
+    first_pit_backtest_run: false
+    2026q3_target_read: false
+    2026q3_source_outcome_loaded: false
+    numeric_forward_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    investment_action_enabled: false
