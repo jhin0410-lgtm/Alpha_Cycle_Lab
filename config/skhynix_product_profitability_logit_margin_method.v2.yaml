@@ -1,0 +1,95 @@
+schema_version: 1
+method:
+  method_id: skhynix_product_profitability_logit_margin_nls
+  method_version: 2.0-frozen-pre-fit
+  status: frozen_pre_fit
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+  temporal_alignment: contemporaneous_same_quarter
+  training_periods:
+    - 2019Q1
+    - 2019Q2
+    - 2019Q3
+    - 2020Q1
+    - 2020Q2
+    - 2020Q3
+    - 2023Q1
+    - 2023Q2
+    - 2023Q3
+    - 2024Q1
+    - 2024Q2
+    - 2024Q3
+    - 2025Q1
+    - 2025Q2
+    - 2025Q3
+    - 2026Q1
+  contaminated_development_periods:
+    - 2026Q1
+  untouched_holdout_period: 2026Q3
+  driver_encoding:
+    encoding_id: issuer_direction_regime_sign_v1
+    semantics: categorical_direction_regime
+    increase_code: 1.0
+    flat_code: 0.0
+    decrease_code: -1.0
+    exact_numeric_magnitude_used_for_fit: false
+    sign_transform_is_method_assumption: true
+  structural_parameterization:
+    link: logistic_sigmoid
+    parameters:
+      - dram_logit_intercept
+      - dram_asp_direction_effect
+      - dram_bit_volume_direction_effect
+      - nand_logit_intercept
+      - nand_asp_direction_effect
+      - nand_bit_volume_direction_effect
+      - other_logit_margin
+    equation: company_gp = dram_revenue*sigmoid(dram_score) + nand_revenue*sigmoid(nand_score) + other_revenue*sigmoid(other_logit_margin)
+    product_margin_lower_bound: 0.0
+    product_margin_upper_bound: 1.0
+    bounds_are_structural_by_link_function: true
+    product_profitability_is_direct_source_fact: false
+  solver:
+    solver_id: deterministic_damped_gauss_newton_v1
+    initialization: all_product_logit_intercepts_equal_logit_training_mean_gross_margin_effects_zero
+    optimization_scale: mean_training_company_revenue_krw_million
+    metrics_reported_in_original_krw_million: true
+    damping_matrix: diagonal_jtj_with_floor_1e-12
+    initial_damping: 0.001
+    damping_increase_factor: 10.0
+    damping_decrease_factor: 10.0
+    maximum_iterations: 500
+    maximum_rejected_steps_per_iteration: 12
+    parameter_step_tolerance: 1.0e-10
+    relative_sse_tolerance: 1.0e-12
+    minimum_sigmoid_probability_for_logit_initialization: 1.0e-6
+    maximum_sigmoid_probability_for_logit_initialization: 0.999999
+  validation_gate:
+    required_row_count: 16
+    required_parameter_count: 7
+    required_residual_degrees_of_freedom: 9
+    require_full_jacobian_column_rank: true
+    require_optimizer_convergence: true
+    require_all_leave_one_out_folds_converged: true
+    require_all_leave_one_out_jacobians_full_rank: true
+    benchmark_id: leave_one_out_mean_gross_margin_scaled_revenue
+    require_loocv_mae_better_than_benchmark: true
+    require_all_component_margins_inside_unit_interval: true
+    leverage_report_only: true
+    parameter_jackknife_report_only: true
+  freeze_provenance:
+    v1_training_results_seen_before_v2_freeze: true
+    v1_2026q1_holdout_seen_before_v2_freeze: true
+    v2_coefficients_seen_before_freeze: false
+    v2_fit_metrics_seen_before_freeze: false
+    2026q3_holdout_outcome_seen_before_freeze: false
+    method_version_frozen: true
+  trust_boundary:
+    2026q1_is_development_data_not_holdout: true
+    2026q2_is_not_claimed_as_untouched_holdout: true
+    2026q3_reserved_as_future_untouched_holdout: true
+    fit_can_open_future_holdout_readiness: false
+    numeric_forward_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
