@@ -14,7 +14,7 @@ from .intelligence.sk_hynix_opendart_historical_product_revenue_panel import (
     DEFAULT_HISTORICAL_PRODUCT_REVENUE_POINTER,
 )
 from .intelligence.sk_hynix_opendart_quarterly_company_profitability import (
-    DEFAULT_QUARTLY_COMPANY_PROFITABILITY_POINTER,
+    DEFAULT_QUARTERLY_COMPANY_PROFITABILITY_POINTER,
 )
 from .intelligence.sk_hynix_product_profitability_logit_margin_fit import (
     build_logit_margin_fit,
@@ -32,7 +32,9 @@ from .intelligence.sk_hynix_product_profitability_regime_holdout import (
     DEFAULT_REGIME_VALIDATION_OUTPUT,
 )
 
-DEFAULT_LOGIT_MARGIN_FIT_OUTPUT = DEFAULT_REGIME_VALIDATION_OUTPUT / "latest_v2_logit_margin_fit.json"
+DEFAULT_LOGIT_MARGIN_FIT_OUTPUT = (
+    DEFAULT_REGIME_VALIDATION_OUTPUT / "latest_v2_logit_margin_fit.json"
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -53,7 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--company-profitability-pointer",
-        default=str(DEFAULT_QUARTLY_COMPANY_PROFITABILITY_POINTER),
+        default=str(DEFAULT_QUARTERLY_COMPANY_PROFITABILITY_POINTER),
     )
     parser.add_argument(
         "--cycle-driver-pointer",
@@ -112,7 +114,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             result.normalized_jacobian_condition_number
         ),
         "parameters": {
-            name: value for name, value in zip(method.parameters, result.parameters, strict=True)
+            name: value
+            for name, value in zip(method.parameters, result.parameters, strict=True)
         },
         "in_sample_mae_krw_million": result.in_sample_mae_krw_million,
         "in_sample_rmse_krw_million": result.in_sample_rmse_krw_million,
