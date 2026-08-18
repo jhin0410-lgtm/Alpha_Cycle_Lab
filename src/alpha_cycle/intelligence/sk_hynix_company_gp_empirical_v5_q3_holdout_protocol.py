@@ -20,6 +20,9 @@ from alpha_cycle.intelligence.sk_hynix_company_gross_profit_empirical_regime_met
 DEFAULT_V5_Q3_HOLDOUT_PROTOCOL = Path(
     "config/skhynix_company_gp_empirical_v5_q3_holdout_protocol.v1.yaml"
 )
+V5_Q3_BENCHMARK_ID = (
+    "training_mean_company_gross_margin_scaled_by_holdout_company_revenue"
+)
 
 
 def _mapping(value: object, label: str) -> dict[object, object]:
@@ -75,7 +78,10 @@ class FrozenV5Q3HoldoutProtocol:
             raise ValueError("V5 Q3 holdout evidence ids must be SHA-256")
         if self.protocol_id != "skhynix_company_gp_empirical_v5_q3_prospective_holdout":
             raise ValueError("V5 Q3 holdout protocol id drifted")
-        if self.protocol_version != "1.0-frozen-pre-outcome" or self.status != "frozen_pre_outcome":
+        if (
+            self.protocol_version != "1.0-frozen-pre-outcome"
+            or self.status != "frozen_pre_outcome"
+        ):
             raise ValueError("V5 Q3 holdout protocol is not frozen pre-outcome")
         if self.bound_method_id != "skhynix_company_gross_profit_empirical_regime_ols":
             raise ValueError("V5 Q3 holdout method id drifted")
@@ -85,7 +91,7 @@ class FrozenV5Q3HoldoutProtocol:
             raise ValueError("V5 Q3 holdout fit-evaluation binding drifted")
         if self.holdout_period != "2026Q3" or self.parameter_count != 7:
             raise ValueError("V5 Q3 holdout period or parameter count drifted")
-        if self.benchmark_id != "training_mean_company_gross_margin_scaled_by_holdout_company_revenue":
+        if self.benchmark_id != V5_Q3_BENCHMARK_ID:
             raise ValueError("V5 Q3 holdout benchmark drifted")
         if self.company_revenue_reconciliation_tolerance_krw != 1_000_000:
             raise ValueError("V5 Q3 holdout reconciliation tolerance drifted")
@@ -176,10 +182,13 @@ def load_frozen_v5_q3_holdout_protocol(
         refit_before_holdout_allowed=preauth.get("refit_before_holdout_allowed") is True,
         refit_after_holdout_allowed=preauth.get("refit_after_holdout_allowed") is True,
         readiness_checker_must_not_load_holdout=(
-            source_policy.get("readiness_checker_must_not_load_2026q3_source_outcome") is True
+            source_policy.get("readiness_checker_must_not_load_2026q3_source_outcome")
+            is True
         ),
         scorer_requires_explicit_source_bundle=(
-            source_policy.get("scorer_may_load_2026q3_only_after_explicit_source_completeness_gate")
+            source_policy.get(
+                "scorer_may_load_2026q3_only_after_explicit_source_completeness_gate"
+            )
             is True
         ),
         validates_pre_earnings_forecastability=(
@@ -188,7 +197,9 @@ def load_frozen_v5_q3_holdout_protocol(
         product_margin_structural_interpretation_allowed=(
             closeout.get("product_margin_structural_interpretation_allowed") is True
         ),
-        numeric_forward_forecast_enabled=trust.get("numeric_forward_forecast_enabled") is True,
+        numeric_forward_forecast_enabled=(
+            trust.get("numeric_forward_forecast_enabled") is True
+        ),
         fair_value_estimate_enabled=trust.get("fair_value_estimate_enabled") is True,
         target_price_enabled=trust.get("target_price_enabled") is True,
         decision_score_enabled=trust.get("decision_score_enabled") is True,
@@ -200,5 +211,6 @@ def load_frozen_v5_q3_holdout_protocol(
 __all__ = [
     "DEFAULT_V5_Q3_HOLDOUT_PROTOCOL",
     "FrozenV5Q3HoldoutProtocol",
+    "V5_Q3_BENCHMARK_ID",
     "load_frozen_v5_q3_holdout_protocol",
 ]
