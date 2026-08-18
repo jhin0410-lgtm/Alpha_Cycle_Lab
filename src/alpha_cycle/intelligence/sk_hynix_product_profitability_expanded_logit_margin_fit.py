@@ -30,6 +30,7 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_expanded_logit_marg
     FrozenExpandedLogitMarginMethod,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_logit_margin_fit import (
+    LogitMarginTrainingRow,
     load_logit_margin_training_rows,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_logit_margin_method import (
@@ -295,23 +296,25 @@ class ExpandedLogitMarginFitResult:
             raise ValueError("Expanded fit exceeded development trust boundary")
 
 
-def _from_v2_row(row: object, *, stress: bool = False) -> ExpandedLogitMarginRow:
+def _from_v2_row(
+    row: LogitMarginTrainingRow,
+    *,
+    stress: bool = False,
+) -> ExpandedLogitMarginRow:
     return ExpandedLogitMarginRow(
-        period_id=str(getattr(row, "period_id")),
+        period_id=row.period_id,
         source_group=(
             "spent_v1_holdout_contaminated_stress" if stress else "v1_training_reuse"
         ),
-        company_revenue_krw_million=float(getattr(row, "company_revenue_krw_million")),
-        company_gross_profit_krw_million=float(
-            getattr(row, "company_gross_profit_krw_million")
-        ),
-        dram_revenue_krw_million=float(getattr(row, "dram_revenue_krw_million")),
-        nand_revenue_krw_million=float(getattr(row, "nand_revenue_krw_million")),
-        other_revenue_krw_million=float(getattr(row, "other_revenue_krw_million")),
-        dram_asp_direction_code=float(getattr(row, "dram_asp_direction_code")),
-        dram_bit_volume_direction_code=float(getattr(row, "dram_bit_volume_direction_code")),
-        nand_asp_direction_code=float(getattr(row, "nand_asp_direction_code")),
-        nand_bit_volume_direction_code=float(getattr(row, "nand_bit_volume_direction_code")),
+        company_revenue_krw_million=row.company_revenue_krw_million,
+        company_gross_profit_krw_million=row.company_gross_profit_krw_million,
+        dram_revenue_krw_million=row.dram_revenue_krw_million,
+        nand_revenue_krw_million=row.nand_revenue_krw_million,
+        other_revenue_krw_million=row.other_revenue_krw_million,
+        dram_asp_direction_code=row.dram_asp_direction_code,
+        dram_bit_volume_direction_code=row.dram_bit_volume_direction_code,
+        nand_asp_direction_code=row.nand_asp_direction_code,
+        nand_bit_volume_direction_code=row.nand_bit_volume_direction_code,
     )
 
 
