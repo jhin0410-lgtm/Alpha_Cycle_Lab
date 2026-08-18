@@ -16,12 +16,12 @@ from typing import cast
 
 import numpy as np
 
-from alpha_cycle.intelligence.sk_hynix_company_gp_empirical_regime_fit import (
-    CompanyGPEmpiricalRow,
-    build_company_gp_empirical_fit,
-)
 from alpha_cycle.intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout_protocol import (
     FrozenV5Q3HoldoutProtocol,
+)
+from alpha_cycle.intelligence.sk_hynix_company_gross_profit_empirical_regime_fit import (
+    CompanyGPEmpiricalRow,
+    build_company_gp_empirical_fit,
 )
 from alpha_cycle.intelligence.sk_hynix_company_gross_profit_empirical_regime_method import (
     FrozenCompanyGPEmpiricalMethod,
@@ -400,7 +400,7 @@ def load_v5_q3_validation_binding(
             str(payload.get("fit_evaluation_date", ""))
         ),
         training_periods=tuple(str(item) for item in periods),
-        coefficients=tuple(float(item) for item in coefficients),
+        coefficients=tuple(float(str(item)) for item in coefficients),
         training_mean_company_gross_margin=_float(
             payload,
             "training_mean_company_gross_margin",
