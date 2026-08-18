@@ -6,9 +6,6 @@ from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
-from .intelligence.sk_hynix_company_gross_profit_empirical_regime_method import (
-    DEFAULT_COMPANY_GP_EMPIRICAL_METHOD,
-)
 from .intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout import (
     DEFAULT_V5_Q3_HOLDOUT_BINDING,
     DEFAULT_V5_Q3_HOLDOUT_RESULT,
@@ -20,13 +17,16 @@ from .intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout_protocol import (
     DEFAULT_V5_Q3_HOLDOUT_PROTOCOL,
     load_frozen_v5_q3_holdout_protocol,
 )
+from .intelligence.sk_hynix_company_gross_profit_empirical_regime_method import (
+    DEFAULT_COMPANY_GP_EMPIRICAL_METHOD,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Spend the frozen SK hynix V5 2026Q3 holdout exactly once from an explicit "
-            "certified source bundle. This CLI performs no network acquisition."
+            "Spend the frozen SK hynix V5 2026Q3 holdout exactly once from an "
+            "explicit certified source bundle. This CLI performs no network acquisition."
         )
     )
     parser.add_argument("--source-bundle", required=True)
@@ -45,7 +45,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     binding = load_v5_q3_validation_binding(Path(args.binding))
     if binding.method_evidence_id != method.evidence_id:
-        raise ValueError("V5 Q3 scorer binding does not match current frozen V5 method")
+        raise ValueError(
+            "V5 Q3 scorer binding does not match current frozen V5 method"
+        )
     source = load_v5_q3_certified_source_bundle(Path(args.source_bundle))
     result, reused_existing = score_v5_q3_holdout_once(
         protocol,
@@ -63,11 +65,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         "holdout_period": result.holdout_period,
         "reused_existing_immutable_result": reused_existing,
         "company_revenue_reconciled": result.company_revenue_reconciled,
-        "actual_gross_profit_krw_million": result.actual_gross_profit_krw_million,
+        "actual_gross_profit_krw_million": (
+            result.actual_gross_profit_krw_million
+        ),
         "model_prediction_krw_million": result.model_prediction_krw_million,
-        "model_absolute_error_krw_million": result.model_absolute_error_krw_million,
-        "benchmark_prediction_krw_million": result.benchmark_prediction_krw_million,
-        "benchmark_absolute_error_krw_million": result.benchmark_absolute_error_krw_million,
+        "model_absolute_error_krw_million": (
+            result.model_absolute_error_krw_million
+        ),
+        "benchmark_prediction_krw_million": (
+            result.benchmark_prediction_krw_million
+        ),
+        "benchmark_absolute_error_krw_million": (
+            result.benchmark_absolute_error_krw_million
+        ),
         "model_beats_benchmark": result.model_beats_benchmark,
         "holdout_validation_passed": result.holdout_validation_passed,
         "validation_scope": result.validation_scope,
@@ -81,7 +91,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "result": asdict(result),
         "result_path": str(Path(args.output).resolve()),
     }
-    print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True, default=str))
+    print(
+        json.dumps(
+            summary,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+    )
     return 0
 
 
