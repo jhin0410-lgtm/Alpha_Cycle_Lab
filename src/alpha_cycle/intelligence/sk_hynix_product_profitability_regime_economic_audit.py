@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import cast
 
@@ -24,7 +24,9 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_regime_holdout impo
     DEFAULT_REGIME_VALIDATION_OUTPUT,
 )
 
-DEFAULT_REGIME_TRAINING_FIT_POINTER = DEFAULT_REGIME_VALIDATION_OUTPUT / "latest_training_fit.json"
+DEFAULT_REGIME_TRAINING_FIT_POINTER = (
+    DEFAULT_REGIME_VALIDATION_OUTPUT / "latest_training_fit.json"
+)
 DEFAULT_REGIME_ECONOMIC_AUDIT_OUTPUT = (
     DEFAULT_REGIME_VALIDATION_OUTPUT / "latest_economic_plausibility_audit.json"
 )
@@ -97,7 +99,12 @@ class RegimeEconomicAuditResult:
     next_action: str
 
     def __post_init__(self) -> None:
-        hashes = (self.evidence_id, self.method_evidence_id, self.training_fit_evidence_id, self.holdout_evidence_id)
+        hashes = (
+            self.evidence_id,
+            self.method_evidence_id,
+            self.training_fit_evidence_id,
+            self.holdout_evidence_id,
+        )
         if any(len(value) != 64 for value in hashes):
             raise ValueError("Economic audit evidence ids must be SHA-256")
         expected_hard = (
@@ -111,7 +118,12 @@ class RegimeEconomicAuditResult:
         expected_structural = self.holdout_validation_passed and not expected_hard
         if self.structural_product_margin_interpretation_allowed != expected_structural:
             raise ValueError("Economic audit structural interpretation flag is inconsistent")
-        if self.forward_structural_forecast_allowed or self.target_price_enabled or self.decision_score_enabled:
+        downstream_open = (
+            self.forward_structural_forecast_allowed
+            or self.target_price_enabled
+            or self.decision_score_enabled
+        )
+        if downstream_open:
             raise ValueError("Economic audit cannot open forward decision outputs")
         if expected_hard and self.v1_scope != "validated_empirical_regime_predictor_only":
             raise ValueError("Economic audit must restrict v1 scope after hard-bound failure")
@@ -160,7 +172,7 @@ def build_regime_economic_audit(
     coefficients = _tuple_numbers(training.get("coefficients"), "training coefficients")
     if len(coefficients) != 7:
         raise ValueError("Economic audit requires seven frozen coefficients")
-    if not training.get("training_gate_passed") is True:
+    if training.get("training_gate_passed") is not True:
         raise ValueError("Economic audit requires a passed frozen training gate")
     holdout_passed = holdout.get("holdout_validation_passed") is True
     model_beats = holdout.get("model_beats_benchmark") is True
@@ -187,8 +199,8 @@ def build_regime_economic_audit(
         "holdout_evidence_id": holdout_evidence_id,
         "holdout_validation_passed": holdout_passed,
         "model_beats_holdout_benchmark": model_beats,
-        "dram": dram.__dict__,
-        "nand": nand.__dict__,
+        "dram": asdict(dram),
+        "nand": asdict(nand),
         "other_margin_constant": coefficients[6],
         "any_product_revenue_hard_bound_violation": hard,
         "predictive_validation_retained": holdout_passed,
@@ -199,7 +211,26 @@ def build_regime_economic_audit(
         "v1_scope": scope,
         "next_action": next_action,
     }
-    return RegimeEconomicAuditResult(evidence_id=_sha(stable), **stable)
+    evidence_id = _sha(stable)
+    return RegimeEconomicAuditResult(
+        evidence_id=evidence_id,
+        method_evidence_id=method.evidence_id,
+        training_fit_evidence_id=training_evidence_id,
+        holdout_evidence_id=holdout_evidence_id,
+        holdout_validation_passed=holdout_passed,
+        model_beats_holdout_benchmark=model_beats,
+        dram=dram,
+        nand=nand,
+        other_margin_constant=coefficients[6],
+        any_product_revenue_hard_bound_violation=hard,
+        predictive_validation_retained=holdout_passed,
+        structural_product_margin_interpretation_allowed=structural,
+        forward_structural_forecast_allowed=False,
+        target_price_enabled=False,
+        decision_score_enabled=False,
+        v1_scope=scope,
+        next_action=next_action,
+    )
 
 
 def load_and_build_regime_economic_audit(
