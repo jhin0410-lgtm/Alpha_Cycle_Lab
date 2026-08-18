@@ -28,7 +28,7 @@ from alpha_cycle.providers.opendart_documents import _decode_text, _safe_member_
 _TEXT_SUFFIXES = frozenset({".xml", ".html", ".htm", ".xhtml"})
 _DRAM = frozenset({"dram", "d ram", "d램", "디램"})
 _NAND = frozenset({"nand", "nand flash", "낸드", "낸드플래시"})
-_OTHER = frozenset({"기타", "other", "others"})
+_OTHER = frozenset({"기타", "기 타", "other", "others"})
 _TOTAL = frozenset({"합계", "합 계", "total"})
 _CURRENT_HEADERS = frozenset({"당분기", "당반기"})
 _EXPECTED_PERIODS = frozenset(

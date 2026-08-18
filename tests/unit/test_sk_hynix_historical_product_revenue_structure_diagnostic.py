@@ -77,6 +77,34 @@ def test_structure_diagnostic_finds_shared_nonzero_label_column_without_certifyi
     assert result.future_holdout_evaluated is False
 
 
+def test_structure_diagnostic_recognizes_source_backed_spaced_korean_other_label(
+    tmp_path: Path,
+) -> None:
+    html = """
+    <p>(단위: 백만원) 매출</p>
+    <table>
+      <tr><th>구분</th><th>당분기</th></tr>
+      <tr><td>DRAM</td><td>60</td></tr>
+      <tr><td>NAND Flash</td><td>30</td></tr>
+      <tr><td>기 타</td><td>10</td></tr>
+      <tr><td>합 계</td><td>100</td></tr>
+    </table>
+    """
+    period_root = _write_failure_bundle(tmp_path, "2018Q1", html)
+    result = diagnose_failed_historical_product_revenue_structure(
+        "2018Q1",
+        period_root,
+    )
+
+    review = result.reviews[0]
+    assert review.other_label_columns == (0,)
+    assert review.shared_four_label_columns == (0,)
+    assert "other_not_in_first_column" not in review.structural_rejection_reasons
+    assert review.current_recovery_shape_matches is True
+    assert result.source_certification_promoted is False
+    assert result.residual_other_derivation_allowed is False
+
+
 def test_structure_diagnostic_never_derives_missing_other_as_residual(tmp_path: Path) -> None:
     html = """
     <p>(단위: 백만원) 매출</p>

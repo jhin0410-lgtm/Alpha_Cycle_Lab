@@ -28,6 +28,25 @@ def test_second_wave_recovery_uses_direct_three_month_column_and_exact_tieout() 
     assert (dram, nand, other, total) == (4000, 2000, 500, 6500)
 
 
+def test_recovery_accepts_source_backed_spaced_korean_other_label_for_q1() -> None:
+    rows = (
+        ("(단위: 백만원)", "(단위: 백만원)", "(단위: 백만원)"),
+        ("구 분", "당분기", "전분기"),
+        ("DRAM", "4,000", "3,000"),
+        ("NAND Flash", "2,000", "1,500"),
+        ("기 타", "500", "400"),
+        ("합 계", "6,500", "4,900"),
+    )
+
+    column, semantics, dram, nand, other, total = certify_rows(
+        rows, 6_500_000_000
+    )
+
+    assert column == 1
+    assert semantics == "direct_quarter_current_period"
+    assert (dram, nand, other, total) == (4000, 2000, 500, 6500)
+
+
 def test_second_wave_recovery_rejects_nonconsolidated_total() -> None:
     rows = (
         ("구 분", "당분기", "전분기"),
