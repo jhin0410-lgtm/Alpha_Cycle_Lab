@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from alpha_cycle.intelligence.sk_hynix_second_wave_product_revenue_recovery import (
+    SecondWaveRecoveredProductRevenue,
     certify_rows,
 )
 
@@ -38,3 +39,39 @@ def test_second_wave_recovery_rejects_nonconsolidated_total() -> None:
 
     with pytest.raises(ValueError, match="verified consolidated revenue"):
         certify_rows(rows, 6_600_000_000)
+
+
+def test_recovered_product_supports_preregistered_2017_q1_q3_but_not_q4() -> None:
+    item = SecondWaveRecoveredProductRevenue(
+        evidence_id="a" * 64,
+        period_id="2017Q1",
+        rcept_no="20170515000001",
+        source_archive_sha256="b" * 64,
+        member_name="20170515000001.xml",
+        table_index=1,
+        direct_quarter_column_index=1,
+        direct_quarter_semantics="direct_quarter_current_period",
+        dram_revenue_million_krw=60,
+        nand_revenue_million_krw=30,
+        other_revenue_million_krw=10,
+        total_revenue_million_krw=100,
+        company_revenue_krw=100_000_000,
+    )
+    assert item.period_id == "2017Q1"
+
+    with pytest.raises(ValueError, match="unsupported"):
+        SecondWaveRecoveredProductRevenue(
+            evidence_id="a" * 64,
+            period_id="2017Q4",
+            rcept_no="20171115000001",
+            source_archive_sha256="b" * 64,
+            member_name="20171115000001.xml",
+            table_index=1,
+            direct_quarter_column_index=1,
+            direct_quarter_semantics="direct_quarter_current_period",
+            dram_revenue_million_krw=60,
+            nand_revenue_million_krw=30,
+            other_revenue_million_krw=10,
+            total_revenue_million_krw=100,
+            company_revenue_krw=100_000_000,
+        )
