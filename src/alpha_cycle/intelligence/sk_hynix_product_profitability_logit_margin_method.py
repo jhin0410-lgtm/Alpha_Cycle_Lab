@@ -19,9 +19,22 @@ DEFAULT_LOGIT_MARGIN_METHOD = Path(
     "config/skhynix_product_profitability_logit_margin_method.v2.yaml"
 )
 _EXPECTED_TRAINING_PERIODS = (
-    "2019Q1", "2019Q2", "2019Q3", "2020Q1", "2020Q2", "2020Q3",
-    "2023Q1", "2023Q2", "2023Q3", "2024Q1", "2024Q2", "2024Q3",
-    "2025Q1", "2025Q2", "2025Q3", "2026Q1",
+    "2019Q1",
+    "2019Q2",
+    "2019Q3",
+    "2020Q1",
+    "2020Q2",
+    "2020Q3",
+    "2023Q1",
+    "2023Q2",
+    "2023Q3",
+    "2024Q1",
+    "2024Q2",
+    "2024Q3",
+    "2025Q1",
+    "2025Q2",
+    "2025Q3",
+    "2026Q1",
 )
 _EXPECTED_PARAMETERS = (
     "dram_logit_intercept",
@@ -50,9 +63,14 @@ def _strings(value: object, label: str) -> tuple[str, ...]:
 
 
 def _sha(payload: object) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()
-    ).hexdigest()
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -60,6 +78,7 @@ class LogitMarginSolverContract:
     solver_id: str
     optimization_scale: str
     metrics_reported_in_original_krw_million: bool
+    damping_matrix: str
     initial_damping: float
     damping_increase_factor: float
     damping_decrease_factor: float
@@ -77,6 +96,8 @@ class LogitMarginSolverContract:
             raise ValueError("Logit-margin optimization scale drifted")
         if not self.metrics_reported_in_original_krw_million:
             raise ValueError("Logit-margin metrics unit contract drifted")
+        if self.damping_matrix != "diagonal_jtj_with_floor_1e-12":
+            raise ValueError("Logit-margin damping matrix drifted")
         if self.initial_damping != 0.001:
             raise ValueError("Logit-margin initial damping drifted")
         if (self.damping_increase_factor, self.damping_decrease_factor) != (10.0, 10.0):
@@ -85,10 +106,11 @@ class LogitMarginSolverContract:
             raise ValueError("Logit-margin iteration contract drifted")
         if (self.parameter_step_tolerance, self.relative_sse_tolerance) != (1e-10, 1e-12):
             raise ValueError("Logit-margin convergence tolerances drifted")
-        if (self.minimum_initialization_probability, self.maximum_initialization_probability) != (
-            1e-6,
-            0.999999,
-        ):
+        probability_bounds = (
+            self.minimum_initialization_probability,
+            self.maximum_initialization_probability,
+        )
+        if probability_bounds != (1e-6, 0.999999):
             raise ValueError("Logit-margin initialization probability bounds drifted")
 
 
@@ -177,14 +199,22 @@ class FrozenLogitMarginMethod:
             raise ValueError("Logit-margin v2 outcomes were seen before freeze")
         if self.holdout_outcome_seen_before_freeze or not self.method_version_frozen:
             raise ValueError("Logit-margin future holdout freeze boundary drifted")
-        if not (
+        temporal_boundary = (
             self.q1_is_development_not_holdout
             and self.q2_not_claimed_untouched
             and self.q3_reserved_future_holdout
-        ):
+        )
+        if not temporal_boundary:
             raise ValueError("Logit-margin temporal trust boundary drifted")
-        if any((self.numeric_forward_forecast_enabled, self.fair_value_estimate_enabled,
-                self.target_price_enabled, self.decision_score_enabled)):
+        downstream_open = any(
+            (
+                self.numeric_forward_forecast_enabled,
+                self.fair_value_estimate_enabled,
+                self.target_price_enabled,
+                self.decision_score_enabled,
+            )
+        )
+        if downstream_open:
             raise ValueError("Logit-margin method opened downstream outputs")
         if len(self.evidence_id) != 64:
             raise ValueError("Logit-margin method evidence id must be SHA-256")
@@ -203,7 +233,10 @@ def load_frozen_logit_margin_method(
     if root.get("schema_version") != 1:
         raise ValueError("Logit-margin manifest schema is invalid")
     method = _mapping(root.get("method"), "method")
-    structural = _mapping(method.get("structural_parameterization"), "structural_parameterization")
+    structural = _mapping(
+        method.get("structural_parameterization"),
+        "structural_parameterization",
+    )
     driver = _mapping(method.get("driver_encoding"), "driver_encoding")
     solver = _mapping(method.get("solver"), "solver")
     gate = _mapping(method.get("validation_gate"), "validation_gate")
@@ -232,7 +265,8 @@ def load_frozen_logit_margin_method(
         target_metric=str(method.get("target_metric", "")),
         training_periods=_strings(method.get("training_periods"), "training_periods"),
         contaminated_development_periods=_strings(
-            method.get("contaminated_development_periods"), "contaminated_development_periods"
+            method.get("contaminated_development_periods"),
+            "contaminated_development_periods",
         ),
         untouched_holdout_period=str(method.get("untouched_holdout_period", "")),
         parameters=_strings(structural.get("parameters"), "parameters"),
@@ -242,15 +276,24 @@ def load_frozen_logit_margin_method(
             metrics_reported_in_original_krw_million=(
                 solver.get("metrics_reported_in_original_krw_million") is True
             ),
+            damping_matrix=str(solver.get("damping_matrix", "")),
             initial_damping=float(str(solver.get("initial_damping", "nan"))),
-            damping_increase_factor=float(str(solver.get("damping_increase_factor", "nan"))),
-            damping_decrease_factor=float(str(solver.get("damping_decrease_factor", "nan"))),
+            damping_increase_factor=float(
+                str(solver.get("damping_increase_factor", "nan"))
+            ),
+            damping_decrease_factor=float(
+                str(solver.get("damping_decrease_factor", "nan"))
+            ),
             maximum_iterations=int(str(solver.get("maximum_iterations", 0))),
             maximum_rejected_steps_per_iteration=int(
                 str(solver.get("maximum_rejected_steps_per_iteration", 0))
             ),
-            parameter_step_tolerance=float(str(solver.get("parameter_step_tolerance", "nan"))),
-            relative_sse_tolerance=float(str(solver.get("relative_sse_tolerance", "nan"))),
+            parameter_step_tolerance=float(
+                str(solver.get("parameter_step_tolerance", "nan"))
+            ),
+            relative_sse_tolerance=float(
+                str(solver.get("relative_sse_tolerance", "nan"))
+            ),
             minimum_initialization_probability=float(
                 str(solver.get("minimum_sigmoid_probability_for_logit_initialization", "nan"))
             ),
@@ -264,7 +307,9 @@ def load_frozen_logit_margin_method(
             required_residual_degrees_of_freedom=int(
                 str(gate.get("required_residual_degrees_of_freedom", 0))
             ),
-            require_full_jacobian_column_rank=gate.get("require_full_jacobian_column_rank") is True,
+            require_full_jacobian_column_rank=(
+                gate.get("require_full_jacobian_column_rank") is True
+            ),
             require_optimizer_convergence=gate.get("require_optimizer_convergence") is True,
             require_all_leave_one_out_folds_converged=(
                 gate.get("require_all_leave_one_out_folds_converged") is True
@@ -288,16 +333,28 @@ def load_frozen_logit_margin_method(
         v1_2026q1_holdout_seen_before_v2_freeze=(
             freeze.get("v1_2026q1_holdout_seen_before_v2_freeze") is True
         ),
-        v2_coefficients_seen_before_freeze=freeze.get("v2_coefficients_seen_before_freeze") is True,
-        v2_fit_metrics_seen_before_freeze=freeze.get("v2_fit_metrics_seen_before_freeze") is True,
+        v2_coefficients_seen_before_freeze=(
+            freeze.get("v2_coefficients_seen_before_freeze") is True
+        ),
+        v2_fit_metrics_seen_before_freeze=(
+            freeze.get("v2_fit_metrics_seen_before_freeze") is True
+        ),
         holdout_outcome_seen_before_freeze=(
             freeze.get("2026q3_holdout_outcome_seen_before_freeze") is True
         ),
         method_version_frozen=freeze.get("method_version_frozen") is True,
-        q1_is_development_not_holdout=trust.get("2026q1_is_development_data_not_holdout") is True,
-        q2_not_claimed_untouched=trust.get("2026q2_is_not_claimed_as_untouched_holdout") is True,
-        q3_reserved_future_holdout=trust.get("2026q3_reserved_as_future_untouched_holdout") is True,
-        numeric_forward_forecast_enabled=trust.get("numeric_forward_forecast_enabled") is True,
+        q1_is_development_not_holdout=(
+            trust.get("2026q1_is_development_data_not_holdout") is True
+        ),
+        q2_not_claimed_untouched=(
+            trust.get("2026q2_is_not_claimed_as_untouched_holdout") is True
+        ),
+        q3_reserved_future_holdout=(
+            trust.get("2026q3_reserved_as_future_untouched_holdout") is True
+        ),
+        numeric_forward_forecast_enabled=(
+            trust.get("numeric_forward_forecast_enabled") is True
+        ),
         fair_value_estimate_enabled=trust.get("fair_value_estimate_enabled") is True,
         target_price_enabled=trust.get("target_price_enabled") is True,
         decision_score_enabled=trust.get("decision_score_enabled") is True,
@@ -305,6 +362,9 @@ def load_frozen_logit_margin_method(
 
 
 __all__ = [
-    "DEFAULT_LOGIT_MARGIN_METHOD", "FrozenLogitMarginMethod", "LogitMarginSolverContract",
-    "LogitMarginValidationGate", "load_frozen_logit_margin_method",
+    "DEFAULT_LOGIT_MARGIN_METHOD",
+    "FrozenLogitMarginMethod",
+    "LogitMarginSolverContract",
+    "LogitMarginValidationGate",
+    "load_frozen_logit_margin_method",
 ]
