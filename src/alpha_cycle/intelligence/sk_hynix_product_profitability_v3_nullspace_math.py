@@ -45,8 +45,9 @@ class JacobianDecomposition:
 
 
 def sigmoid(value: np.ndarray) -> np.ndarray:
-    clipped = np.clip(value, -60.0, 60.0)
-    return 1.0 / (1.0 + np.exp(-clipped))
+    clipped = np.asarray(np.clip(value, -60.0, 60.0), dtype=float)
+    result = 1.0 / (1.0 + np.exp(-clipped))
+    return np.asarray(result, dtype=float)
 
 
 def normalized_condition(matrix: np.ndarray) -> float | None:
