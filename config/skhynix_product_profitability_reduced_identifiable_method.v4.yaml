@@ -1,0 +1,120 @@
+schema_version: 1
+method:
+  method_id: skhynix_product_profitability_reduced_identifiable_logit_margin_nls
+  method_version: 4.0-frozen-pre-fit
+  status: frozen_pre_fit
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+  temporal_alignment: contemporaneous_same_quarter
+  training_periods:
+    - 2017Q1
+    - 2017Q2
+    - 2017Q3
+    - 2018Q1
+    - 2018Q2
+    - 2018Q3
+    - 2019Q1
+    - 2019Q2
+    - 2019Q3
+    - 2020Q1
+    - 2020Q2
+    - 2020Q3
+    - 2023Q1
+    - 2023Q2
+    - 2023Q3
+    - 2024Q1
+    - 2024Q2
+    - 2024Q3
+    - 2025Q1
+    - 2025Q2
+    - 2025Q3
+  contaminated_stress_periods:
+    - 2026Q1
+  untouched_holdout_period: 2026Q3
+  driver_encoding:
+    encoding_id: issuer_direction_regime_sign_v1
+    semantics: categorical_direction_regime
+    increase_code: 1.0
+    flat_code: 0.0
+    decrease_code: -1.0
+    exact_numeric_magnitude_used_for_fit: false
+    sign_transform_is_method_assumption: true
+  structural_parameterization:
+    link: logistic_sigmoid
+    parameters:
+      - dram_logit_intercept
+      - dram_asp_direction_effect
+      - dram_bit_volume_direction_effect
+      - nand_logit_intercept
+      - nand_asp_direction_effect
+    equation: company_gp_prediction = dram_revenue*sigmoid(dram_score) + nand_revenue*sigmoid(nand_score)
+    dram_score: dram_logit_intercept + dram_asp_direction_effect*dram_asp_sign + dram_bit_volume_direction_effect*dram_bit_sign
+    nand_score: nand_logit_intercept + nand_asp_direction_effect*nand_asp_sign
+    product_margin_lower_bound: 0.0
+    product_margin_upper_bound: 1.0
+    bounds_are_structural_by_link_function: true
+    nand_bit_volume_effect_removed: true
+    nand_bit_volume_effect_removal_basis: v3_nonlinear_nullspace_identification_failure
+    other_independent_margin_parameter_removed: true
+    other_margin_claimed_zero: false
+    other_revenue_contribution_role: unmodeled_company_gross_profit_residual
+    product_profitability_is_direct_source_fact: false
+    coefficients_are_model_outputs_not_literal_source_margins: true
+  solver:
+    solver_id: deterministic_damped_gauss_newton_v1
+    initialization: dram_and_nand_logit_intercepts_equal_logit_training_mean_gross_margin_effects_zero
+    optimization_scale: mean_training_company_revenue_krw_million
+    metrics_reported_in_original_krw_million: true
+    damping_matrix: diagonal_jtj_with_floor_1e-12
+    initial_damping: 0.001
+    damping_increase_factor: 10.0
+    damping_decrease_factor: 10.0
+    maximum_iterations: 500
+    maximum_rejected_steps_per_iteration: 12
+    parameter_step_tolerance: 1.0e-10
+    relative_sse_tolerance: 1.0e-12
+    minimum_sigmoid_probability_for_logit_initialization: 1.0e-6
+    maximum_sigmoid_probability_for_logit_initialization: 0.999999
+  prefit_identification_gate:
+    required_row_count: 21
+    required_parameter_count: 5
+    required_residual_degrees_of_freedom: 16
+    require_full_reduced_direction_design_rank: true
+    require_all_leave_one_out_reduced_direction_designs_full_rank: true
+    condition_number_report_only: true
+  validation_gate:
+    required_row_count: 21
+    required_parameter_count: 5
+    required_residual_degrees_of_freedom: 16
+    require_optimizer_convergence: true
+    require_full_jacobian_column_rank: true
+    require_all_leave_one_out_folds_converged: true
+    require_all_leave_one_out_jacobians_full_rank: true
+    benchmark_id: leave_one_out_mean_gross_margin_scaled_revenue
+    require_loocv_mae_better_than_benchmark: true
+    require_all_modeled_component_margins_inside_unit_interval: true
+    condition_number_report_only: true
+    parameter_jackknife_report_only: true
+    v3_performance_comparison_report_only: true
+    contaminated_2026q1_stress_report_only: true
+  freeze_provenance:
+    v1_training_results_seen_before_v4_freeze: true
+    v1_2026q1_holdout_seen_before_v4_freeze: true
+    v2_coefficients_metrics_and_gate_failure_seen_before_v4_freeze: true
+    v3_coefficients_metrics_and_gate_failure_seen_before_v4_freeze: true
+    v3_nullspace_diagnostic_seen_before_v4_freeze: true
+    v4_coefficients_seen_before_freeze: false
+    v4_fit_metrics_seen_before_freeze: false
+    2026q3_holdout_outcome_seen_before_freeze: false
+    method_version_frozen: true
+  trust_boundary:
+    2026q1_is_contaminated_stress_only: true
+    2026q1_used_for_fit: false
+    2026q1_used_for_model_selection_gate: false
+    2026q2_is_not_claimed_as_untouched_holdout: true
+    2026q3_reserved_as_future_untouched_holdout: true
+    fit_can_open_future_holdout_readiness: false
+    numeric_forward_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
