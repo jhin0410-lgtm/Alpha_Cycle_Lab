@@ -104,6 +104,10 @@ expansion:
     acquisition_may_read_company_gp_target_for_target_period: false
     acquisition_may_read_current_quarter_outcome: false
     source_diagnostic_may_select_fallback_using_source_status_only: true
+    product_discovery_window_method: period_end_plus_1_day_through_period_end_plus_120_days
+    product_discovery_window_may_be_tuned_by_year_after_source_replay: false
+    exact_periodic_report_name_required: true
+    correction_disclosures_allowed: false
 
   completion_gate:
     exactly_six_additional_target_rows_required: true
