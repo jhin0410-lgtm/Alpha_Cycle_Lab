@@ -13,9 +13,6 @@ from .intelligence.sec_product_cycle_driver_support import (
 from .intelligence.sk_hynix_company_gp_empirical_regime_fit import (
     load_company_gp_empirical_rows,
 )
-from .intelligence.sk_hynix_company_gross_profit_empirical_regime_method import (
-    DEFAULT_COMPANY_GP_EMPIRICAL_METHOD,
-)
 from .intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout import (
     DEFAULT_V5_Q3_HOLDOUT_BINDING,
     build_v5_q3_validation_binding,
@@ -24,6 +21,9 @@ from .intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout import (
 from .intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout_protocol import (
     DEFAULT_V5_Q3_HOLDOUT_PROTOCOL,
     load_frozen_v5_q3_holdout_protocol,
+)
+from .intelligence.sk_hynix_company_gross_profit_empirical_regime_method import (
+    DEFAULT_COMPANY_GP_EMPIRICAL_METHOD,
 )
 from .intelligence.sk_hynix_opendart_historical_product_revenue_panel import (
     DEFAULT_HISTORICAL_PRODUCT_REVENUE_POINTER,
@@ -63,8 +63,9 @@ DEFAULT_V5_FIT_REPORT = (
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Bind the already-passed frozen SK hynix V5 development fit to the frozen "
-            "2026Q3 prospective holdout protocol without loading or evaluating any Q3 data."
+            "Bind the already-passed frozen SK hynix V5 development fit to the "
+            "frozen 2026Q3 prospective holdout protocol without loading or "
+            "evaluating any Q3 data."
         )
     )
     parser.add_argument("--evaluation-date", required=True, type=date.fromisoformat)
@@ -118,7 +119,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         v2_method_path=Path(args.v2_method),
         v1_training_pointer=Path(args.v1_training),
         v1_holdout_pointer=Path(args.v1_holdout),
-        historical_product_revenue_pointer=Path(args.historical_product_revenue_pointer),
+        historical_product_revenue_pointer=Path(
+            args.historical_product_revenue_pointer
+        ),
         company_profitability_pointer=Path(args.company_profitability_pointer),
         cycle_driver_pointer=Path(args.cycle_driver_pointer),
     )
@@ -129,16 +132,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         rows,
         contaminated_q1,
     )
-    output = persist_v5_q3_validation_binding(binding, Path(args.binding_output))
+    output = persist_v5_q3_validation_binding(
+        binding,
+        Path(args.binding_output),
+    )
     summary = {
-        "status": "skhynix_v5_q3_holdout_readiness_bound_without_holdout_exposure",
+        "status": (
+            "skhynix_v5_q3_holdout_readiness_bound_without_holdout_exposure"
+        ),
         "protocol_version": protocol.protocol_version,
         "protocol_evidence_id": protocol.evidence_id,
         "method_evidence_id": method.evidence_id,
         "fit_evidence_id": binding.fit_evidence_id,
         "fit_evaluation_date": binding.fit_evaluation_date.isoformat(),
         "development_gate_passed": binding.development_gate_passed,
-        "training_fit_reproduced_exactly": binding.training_fit_reproduced_exactly,
+        "training_fit_reproduced_exactly": (
+            binding.training_fit_reproduced_exactly
+        ),
         "training_row_count": len(binding.training_periods),
         "training_mean_company_gross_margin_report_only": (
             binding.training_mean_company_gross_margin
@@ -161,7 +171,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         "binding_path": str(output.resolve()),
         "binding": asdict(binding),
     }
-    print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True, default=str))
+    print(
+        json.dumps(
+            summary,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+    )
     return 0
 
 
