@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import asdict, replace
 from datetime import date
 
 import pytest
@@ -7,6 +10,8 @@ import pytest
 from alpha_cycle.intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout import (
     V5Q3CertifiedSourceBundle,
     V5Q3ValidationBinding,
+    load_v5_q3_validation_binding,
+    persist_v5_q3_validation_binding,
     score_v5_q3_holdout_once,
 )
 from alpha_cycle.intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout_protocol import (
@@ -14,8 +19,20 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout_protoc
 )
 
 
+def _hash(payload: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _binding(method_evidence_id: str, protocol_evidence_id: str) -> V5Q3ValidationBinding:
-    return V5Q3ValidationBinding(
+    seed = V5Q3ValidationBinding(
         evidence_id="a" * 64,
         protocol_evidence_id=protocol_evidence_id,
         method_evidence_id=method_evidence_id,
@@ -28,6 +45,9 @@ def _binding(method_evidence_id: str, protocol_evidence_id: str) -> V5Q3Validati
         development_gate_passed=True,
         training_fit_reproduced_exactly=True,
     )
+    payload = asdict(seed)
+    payload.pop("evidence_id")
+    return replace(seed, evidence_id=_hash(payload))
 
 
 def _source(evidence_id: str = "d" * 64) -> V5Q3CertifiedSourceBundle:
@@ -63,6 +83,20 @@ def test_frozen_v5_q3_protocol_binds_current_v5_method() -> None:
     assert not protocol.validates_pre_earnings_forecastability
     assert not protocol.product_margin_structural_interpretation_allowed
     assert not protocol.numeric_forward_forecast_enabled
+
+
+def test_v5_q3_validation_binding_detects_persisted_tampering(tmp_path) -> None:
+    protocol, method = load_frozen_v5_q3_holdout_protocol()
+    binding = _binding(method.evidence_id, protocol.evidence_id)
+    path = tmp_path / "binding.json"
+    persist_v5_q3_validation_binding(binding, path)
+    assert load_v5_q3_validation_binding(path).evidence_id == binding.evidence_id
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["binding"]["coefficients"][0] = 0.75
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="evidence hash mismatch"):
+        load_v5_q3_validation_binding(path)
 
 
 def test_v5_q3_score_is_immutable_and_reuses_first_result(tmp_path) -> None:

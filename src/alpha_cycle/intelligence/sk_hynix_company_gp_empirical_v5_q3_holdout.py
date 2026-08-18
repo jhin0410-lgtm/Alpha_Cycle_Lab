@@ -286,6 +286,17 @@ class V5Q3HoldoutResult:
             raise ValueError("V5 Q3 holdout opened prohibited downstream scope")
 
 
+def _binding_unhashed_payload(binding: V5Q3ValidationBinding) -> dict[str, object]:
+    payload: dict[str, object] = asdict(binding)
+    payload.pop("evidence_id")
+    return payload
+
+
+def _validate_binding_evidence(binding: V5Q3ValidationBinding) -> None:
+    if _sha(_binding_unhashed_payload(binding)) != binding.evidence_id:
+        raise ValueError("V5 Q3 validation binding evidence hash mismatch")
+
+
 def build_v5_q3_validation_binding(
     protocol: FrozenV5Q3HoldoutProtocol,
     method: FrozenCompanyGPEmpiricalMethod,
@@ -338,11 +349,11 @@ def build_v5_q3_validation_binding(
         for row in rows
     )
     training_hash = _sha(training_snapshot)
-    stable: dict[str, object] = {
+    unhashed: dict[str, object] = {
         "protocol_evidence_id": protocol.evidence_id,
         "method_evidence_id": method.evidence_id,
         "fit_evidence_id": rebuilt.evidence_id,
-        "fit_evaluation_date": fit_date.isoformat(),
+        "fit_evaluation_date": fit_date,
         "training_periods": rebuilt.training_periods,
         "coefficients": rebuilt.coefficients,
         "training_mean_company_gross_margin": training_mean_margin,
@@ -352,9 +363,12 @@ def build_v5_q3_validation_binding(
         "holdout_period": protocol.holdout_period,
         "holdout_loaded": False,
         "holdout_evaluated": False,
+        "numeric_forward_forecast_enabled": False,
+        "target_price_enabled": False,
+        "decision_score_enabled": False,
     }
-    return V5Q3ValidationBinding(
-        evidence_id=_sha(stable),
+    binding = V5Q3ValidationBinding(
+        evidence_id=_sha(unhashed),
         protocol_evidence_id=protocol.evidence_id,
         method_evidence_id=method.evidence_id,
         fit_evidence_id=rebuilt.evidence_id,
@@ -366,12 +380,15 @@ def build_v5_q3_validation_binding(
         development_gate_passed=rebuilt.development_gate_passed,
         training_fit_reproduced_exactly=True,
     )
+    _validate_binding_evidence(binding)
+    return binding
 
 
 def persist_v5_q3_validation_binding(
     binding: V5Q3ValidationBinding,
     path: str | Path = DEFAULT_V5_Q3_HOLDOUT_BINDING,
 ) -> Path:
+    _validate_binding_evidence(binding)
     output = Path(path)
     payload: dict[str, object] = {
         "schema_version": 1,
@@ -386,12 +403,14 @@ def load_v5_q3_validation_binding(
     path: str | Path = DEFAULT_V5_Q3_HOLDOUT_BINDING,
 ) -> V5Q3ValidationBinding:
     root = _object(Path(path), "V5 Q3 validation binding")
+    if root.get("schema_version") != 1:
+        raise ValueError("V5 Q3 validation binding schema is invalid")
     if root.get("status") != "skhynix_v5_q3_holdout_validation_binding_ready":
         raise ValueError("V5 Q3 validation binding status is invalid")
     payload = _mapping(root.get("binding"), "V5 Q3 validation binding payload")
     periods = cast(list[object], payload.get("training_periods", []))
     coefficients = cast(list[object], payload.get("coefficients", []))
-    return V5Q3ValidationBinding(
+    binding = V5Q3ValidationBinding(
         evidence_id=str(payload.get("evidence_id", "")),
         protocol_evidence_id=str(payload.get("protocol_evidence_id", "")),
         method_evidence_id=str(payload.get("method_evidence_id", "")),
@@ -413,7 +432,14 @@ def load_v5_q3_validation_binding(
         holdout_period=str(payload.get("holdout_period", "")),
         holdout_loaded=payload.get("holdout_loaded") is True,
         holdout_evaluated=payload.get("holdout_evaluated") is True,
+        numeric_forward_forecast_enabled=(
+            payload.get("numeric_forward_forecast_enabled") is True
+        ),
+        target_price_enabled=payload.get("target_price_enabled") is True,
+        decision_score_enabled=payload.get("decision_score_enabled") is True,
     )
+    _validate_binding_evidence(binding)
+    return binding
 
 
 def load_v5_q3_certified_source_bundle(
@@ -637,6 +663,7 @@ def score_v5_q3_holdout_once(
     *,
     output: str | Path = DEFAULT_V5_Q3_HOLDOUT_RESULT,
 ) -> tuple[V5Q3HoldoutResult, bool]:
+    _validate_binding_evidence(binding)
     if binding.protocol_evidence_id != protocol.evidence_id:
         raise ValueError("V5 Q3 scorer protocol/binding mismatch")
     if binding.method_evidence_id != protocol.bound_method_evidence_id:
