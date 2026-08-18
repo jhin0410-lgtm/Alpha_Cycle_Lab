@@ -17,7 +17,6 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_identifi
     build_third_wave_identification_preflight,
 )
 
-
 _BASE_PERIODS = (
     "2019Q1",
     "2019Q2",
