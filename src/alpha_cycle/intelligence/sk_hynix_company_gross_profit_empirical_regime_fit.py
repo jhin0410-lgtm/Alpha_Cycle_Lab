@@ -203,7 +203,10 @@ class CompanyGPEmpiricalFitResult:
             self.loocv_mae_krw_million < self.benchmark_loocv_mae_krw_million
         ):
             raise ValueError("V5 benchmark flag is inconsistent")
-        if self.product_margin_structural_interpretation_allowed or self.product_margin_output_enabled:
+        if (
+            self.product_margin_structural_interpretation_allowed
+            or self.product_margin_output_enabled
+        ):
             raise ValueError("V5 cannot reopen product-margin structural scope")
         if self.future_holdout_period != "2026Q3":
             raise ValueError("V5 future holdout drifted")
