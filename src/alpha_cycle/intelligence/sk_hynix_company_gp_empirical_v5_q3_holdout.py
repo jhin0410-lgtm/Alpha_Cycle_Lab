@@ -20,11 +20,11 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_empirical_regime_fit import (
     CompanyGPEmpiricalRow,
     build_company_gp_empirical_fit,
 )
-from alpha_cycle.intelligence.sk_hynix_company_gross_profit_empirical_regime_method import (
-    FrozenCompanyGPEmpiricalMethod,
-)
 from alpha_cycle.intelligence.sk_hynix_company_gp_empirical_v5_q3_holdout_protocol import (
     FrozenV5Q3HoldoutProtocol,
+)
+from alpha_cycle.intelligence.sk_hynix_company_gross_profit_empirical_regime_method import (
+    FrozenCompanyGPEmpiricalMethod,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_regime_holdout import (
     DEFAULT_REGIME_VALIDATION_OUTPUT,
@@ -65,7 +65,10 @@ def _object(path: Path, label: str) -> dict[str, object]:
 def _mapping(value: object, label: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be an object")
-    return {str(key): item for key, item in cast(dict[object, object], value).items()}
+    return {
+        str(key): item
+        for key, item in cast(dict[object, object], value).items()
+    }
 
 
 def _float(payload: dict[str, object], key: str) -> float:
@@ -117,10 +120,16 @@ class V5Q3ValidationBinding:
         if len(self.training_periods) != 21 or len(self.coefficients) != 7:
             raise ValueError("V5 Q3 validation binding dimensions drifted")
         if not 0.0 < self.training_mean_company_gross_margin < 1.0:
-            raise ValueError("V5 Q3 validation binding training mean gross margin is invalid")
+            raise ValueError(
+                "V5 Q3 validation binding training mean gross margin is invalid"
+            )
         if not self.development_gate_passed or not self.training_fit_reproduced_exactly:
             raise ValueError("V5 Q3 validation binding requires reproduced passed V5 fit")
-        if self.holdout_period != "2026Q3" or self.holdout_loaded or self.holdout_evaluated:
+        if (
+            self.holdout_period != "2026Q3"
+            or self.holdout_loaded
+            or self.holdout_evaluated
+        ):
             raise ValueError("V5 Q3 validation binding cannot expose holdout data")
         if any(
             (
@@ -165,7 +174,10 @@ class V5Q3CertifiedSourceBundle:
             raise ValueError("V5 Q3 source bundle evidence ids must be SHA-256")
         if self.period_id != "2026Q3":
             raise ValueError("V5 Q3 source bundle period drifted")
-        if self.company_revenue_krw_million <= 0.0 or self.product_total_revenue_krw_million <= 0.0:
+        if (
+            self.company_revenue_krw_million <= 0.0
+            or self.product_total_revenue_krw_million <= 0.0
+        ):
             raise ValueError("V5 Q3 source bundle revenue must be positive")
         if min(self.nand_revenue_krw_million, self.other_revenue_krw_million) < 0.0:
             raise ValueError("V5 Q3 source bundle product revenue cannot be negative")
@@ -218,7 +230,9 @@ class V5Q3HoldoutResult:
     benchmark_absolute_error_krw_million: float
     model_beats_benchmark: bool
     holdout_validation_passed: bool
-    validation_scope: str = "out_of_sample_contemporaneous_company_gp_relationship_only"
+    validation_scope: str = (
+        "out_of_sample_contemporaneous_company_gp_relationship_only"
+    )
     validates_pre_earnings_forecastability: bool = False
     holdout_spent: bool = True
     immutable_result: bool = True
@@ -243,7 +257,10 @@ class V5Q3HoldoutResult:
             raise ValueError("V5 Q3 holdout result hashes must be SHA-256")
         if self.holdout_period != "2026Q3":
             raise ValueError("V5 Q3 holdout result period drifted")
-        expected_better = self.model_absolute_error_krw_million < self.benchmark_absolute_error_krw_million
+        expected_better = (
+            self.model_absolute_error_krw_million
+            < self.benchmark_absolute_error_krw_million
+        )
         if self.model_beats_benchmark != expected_better:
             raise ValueError("V5 Q3 holdout benchmark comparison is inconsistent")
         expected_pass = self.company_revenue_reconciled and expected_better
@@ -251,7 +268,11 @@ class V5Q3HoldoutResult:
             raise ValueError("V5 Q3 holdout validation flag is inconsistent")
         if self.validates_pre_earnings_forecastability:
             raise ValueError("V5 Q3 holdout cannot claim pre-earnings forecastability")
-        if not self.holdout_spent or not self.immutable_result or self.refit_after_holdout_allowed:
+        if (
+            not self.holdout_spent
+            or not self.immutable_result
+            or self.refit_after_holdout_allowed
+        ):
             raise ValueError("V5 Q3 holdout immutability boundary drifted")
         if self.product_margin_structural_interpretation_allowed or any(
             (
@@ -280,7 +301,10 @@ def build_v5_q3_validation_binding(
     result_payload = _mapping(root.get("result"), "V5 fit result")
     if result_payload.get("development_gate_passed") is not True:
         raise ValueError("V5 Q3 validation binding requires passed V5 development gate")
-    if result_payload.get("future_holdout_loaded") is True or result_payload.get("future_holdout_evaluated") is True:
+    if (
+        result_payload.get("future_holdout_loaded") is True
+        or result_payload.get("future_holdout_evaluated") is True
+    ):
         raise ValueError("V5 Q3 validation binding detected prior holdout exposure")
     fit_date = date.fromisoformat(str(result_payload.get("evaluation_date", "")))
     if fit_date != protocol.bound_fit_evaluation_date:
@@ -299,7 +323,8 @@ def build_v5_q3_validation_binding(
     training_mean_margin = float(
         np.mean(
             [
-                row.company_gross_profit_krw_million / row.company_revenue_krw_million
+                row.company_gross_profit_krw_million
+                / row.company_revenue_krw_million
                 for row in rows
             ]
         )
@@ -364,27 +389,42 @@ def load_v5_q3_validation_binding(
     if root.get("status") != "skhynix_v5_q3_holdout_validation_binding_ready":
         raise ValueError("V5 Q3 validation binding status is invalid")
     payload = _mapping(root.get("binding"), "V5 Q3 validation binding payload")
+    periods = cast(list[object], payload.get("training_periods", []))
+    coefficients = cast(list[object], payload.get("coefficients", []))
     return V5Q3ValidationBinding(
         evidence_id=str(payload.get("evidence_id", "")),
         protocol_evidence_id=str(payload.get("protocol_evidence_id", "")),
         method_evidence_id=str(payload.get("method_evidence_id", "")),
         fit_evidence_id=str(payload.get("fit_evidence_id", "")),
-        fit_evaluation_date=date.fromisoformat(str(payload.get("fit_evaluation_date", ""))),
-        training_periods=tuple(str(item) for item in cast(list[object], payload.get("training_periods", []))),
-        coefficients=tuple(float(item) for item in cast(list[object], payload.get("coefficients", []))),
-        training_mean_company_gross_margin=_float(payload, "training_mean_company_gross_margin"),
+        fit_evaluation_date=date.fromisoformat(
+            str(payload.get("fit_evaluation_date", ""))
+        ),
+        training_periods=tuple(str(item) for item in periods),
+        coefficients=tuple(float(item) for item in coefficients),
+        training_mean_company_gross_margin=_float(
+            payload,
+            "training_mean_company_gross_margin",
+        ),
         training_snapshot_hash=str(payload.get("training_snapshot_hash", "")),
         development_gate_passed=payload.get("development_gate_passed") is True,
-        training_fit_reproduced_exactly=payload.get("training_fit_reproduced_exactly") is True,
+        training_fit_reproduced_exactly=(
+            payload.get("training_fit_reproduced_exactly") is True
+        ),
         holdout_period=str(payload.get("holdout_period", "")),
         holdout_loaded=payload.get("holdout_loaded") is True,
         holdout_evaluated=payload.get("holdout_evaluated") is True,
     )
 
 
-def load_v5_q3_certified_source_bundle(path: str | Path) -> V5Q3CertifiedSourceBundle:
+def load_v5_q3_certified_source_bundle(
+    path: str | Path,
+) -> V5Q3CertifiedSourceBundle:
     root = _object(Path(path), "V5 Q3 certified source bundle")
-    if root.get("schema_version") != 1 or root.get("status") != "skhynix_v5_q3_certified_source_bundle_complete":
+    if (
+        root.get("schema_version") != 1
+        or root.get("status")
+        != "skhynix_v5_q3_certified_source_bundle_complete"
+    ):
         raise ValueError("V5 Q3 certified source bundle wrapper is invalid")
     payload = _mapping(root.get("bundle"), "V5 Q3 certified source bundle payload")
     unhashed = {key: value for key, value in payload.items() if key != "evidence_id"}
@@ -393,23 +433,49 @@ def load_v5_q3_certified_source_bundle(path: str | Path) -> V5Q3CertifiedSourceB
     return V5Q3CertifiedSourceBundle(
         evidence_id=str(payload.get("evidence_id", "")),
         period_id=str(payload.get("period_id", "")),
-        source_evaluation_date=date.fromisoformat(str(payload.get("source_evaluation_date", ""))),
-        company_profitability_evidence_id=str(payload.get("company_profitability_evidence_id", "")),
-        product_revenue_evidence_id=str(payload.get("product_revenue_evidence_id", "")),
+        source_evaluation_date=date.fromisoformat(
+            str(payload.get("source_evaluation_date", ""))
+        ),
+        company_profitability_evidence_id=str(
+            payload.get("company_profitability_evidence_id", "")
+        ),
+        product_revenue_evidence_id=str(
+            payload.get("product_revenue_evidence_id", "")
+        ),
         cycle_driver_evidence_id=str(payload.get("cycle_driver_evidence_id", "")),
         company_revenue_krw_million=_float(payload, "company_revenue_krw_million"),
-        product_total_revenue_krw_million=_float(payload, "product_total_revenue_krw_million"),
-        actual_gross_profit_krw_million=_float(payload, "actual_gross_profit_krw_million"),
+        product_total_revenue_krw_million=_float(
+            payload,
+            "product_total_revenue_krw_million",
+        ),
+        actual_gross_profit_krw_million=_float(
+            payload,
+            "actual_gross_profit_krw_million",
+        ),
         nand_revenue_krw_million=_float(payload, "nand_revenue_krw_million"),
         other_revenue_krw_million=_float(payload, "other_revenue_krw_million"),
         dram_asp_direction_code=_float(payload, "dram_asp_direction_code"),
-        dram_bit_volume_direction_code=_float(payload, "dram_bit_volume_direction_code"),
+        dram_bit_volume_direction_code=_float(
+            payload,
+            "dram_bit_volume_direction_code",
+        ),
         nand_asp_direction_code=_float(payload, "nand_asp_direction_code"),
-        nand_bit_volume_direction_code=_float(payload, "nand_bit_volume_direction_code"),
-        company_profitability_certified=payload.get("company_profitability_certified") is True,
-        product_revenue_mix_certified=payload.get("product_revenue_mix_certified") is True,
-        cycle_driver_directions_certified=payload.get("cycle_driver_directions_certified") is True,
-        source_bundle_certified_complete=payload.get("source_bundle_certified_complete") is True,
+        nand_bit_volume_direction_code=_float(
+            payload,
+            "nand_bit_volume_direction_code",
+        ),
+        company_profitability_certified=(
+            payload.get("company_profitability_certified") is True
+        ),
+        product_revenue_mix_certified=(
+            payload.get("product_revenue_mix_certified") is True
+        ),
+        cycle_driver_directions_certified=(
+            payload.get("cycle_driver_directions_certified") is True
+        ),
+        source_bundle_certified_complete=(
+            payload.get("source_bundle_certified_complete") is True
+        ),
     )
 
 
@@ -417,36 +483,150 @@ def _result_from_payload(payload: dict[str, object]) -> V5Q3HoldoutResult:
     return V5Q3HoldoutResult(
         evidence_id=str(payload.get("evidence_id", "")),
         protocol_evidence_id=str(payload.get("protocol_evidence_id", "")),
-        validation_binding_evidence_id=str(payload.get("validation_binding_evidence_id", "")),
+        validation_binding_evidence_id=str(
+            payload.get("validation_binding_evidence_id", "")
+        ),
         method_evidence_id=str(payload.get("method_evidence_id", "")),
         fit_evidence_id=str(payload.get("fit_evidence_id", "")),
-        source_bundle_evidence_id=str(payload.get("source_bundle_evidence_id", "")),
+        source_bundle_evidence_id=str(
+            payload.get("source_bundle_evidence_id", "")
+        ),
         holdout_period=str(payload.get("holdout_period", "")),
-        source_evaluation_date=date.fromisoformat(str(payload.get("source_evaluation_date", ""))),
-        company_revenue_reconciled=payload.get("company_revenue_reconciled") is True,
+        source_evaluation_date=date.fromisoformat(
+            str(payload.get("source_evaluation_date", ""))
+        ),
+        company_revenue_reconciled=(
+            payload.get("company_revenue_reconciled") is True
+        ),
         company_revenue_krw_million=_float(payload, "company_revenue_krw_million"),
-        actual_gross_profit_krw_million=_float(payload, "actual_gross_profit_krw_million"),
+        actual_gross_profit_krw_million=_float(
+            payload,
+            "actual_gross_profit_krw_million",
+        ),
         model_prediction_krw_million=_float(payload, "model_prediction_krw_million"),
-        model_absolute_error_krw_million=_float(payload, "model_absolute_error_krw_million"),
-        benchmark_prediction_krw_million=_float(payload, "benchmark_prediction_krw_million"),
-        benchmark_absolute_error_krw_million=_float(payload, "benchmark_absolute_error_krw_million"),
+        model_absolute_error_krw_million=_float(
+            payload,
+            "model_absolute_error_krw_million",
+        ),
+        benchmark_prediction_krw_million=_float(
+            payload,
+            "benchmark_prediction_krw_million",
+        ),
+        benchmark_absolute_error_krw_million=_float(
+            payload,
+            "benchmark_absolute_error_krw_million",
+        ),
         model_beats_benchmark=payload.get("model_beats_benchmark") is True,
-        holdout_validation_passed=payload.get("holdout_validation_passed") is True,
+        holdout_validation_passed=(
+            payload.get("holdout_validation_passed") is True
+        ),
         validation_scope=str(payload.get("validation_scope", "")),
         validates_pre_earnings_forecastability=(
             payload.get("validates_pre_earnings_forecastability") is True
         ),
         holdout_spent=payload.get("holdout_spent") is True,
         immutable_result=payload.get("immutable_result") is True,
-        refit_after_holdout_allowed=payload.get("refit_after_holdout_allowed") is True,
+        refit_after_holdout_allowed=(
+            payload.get("refit_after_holdout_allowed") is True
+        ),
         product_margin_structural_interpretation_allowed=(
             payload.get("product_margin_structural_interpretation_allowed") is True
         ),
-        numeric_forward_forecast_enabled=payload.get("numeric_forward_forecast_enabled") is True,
-        fair_value_estimate_enabled=payload.get("fair_value_estimate_enabled") is True,
+        numeric_forward_forecast_enabled=(
+            payload.get("numeric_forward_forecast_enabled") is True
+        ),
+        fair_value_estimate_enabled=(
+            payload.get("fair_value_estimate_enabled") is True
+        ),
         target_price_enabled=payload.get("target_price_enabled") is True,
         decision_score_enabled=payload.get("decision_score_enabled") is True,
         investment_action_enabled=payload.get("investment_action_enabled") is True,
+    )
+
+
+def _build_result(
+    protocol: FrozenV5Q3HoldoutProtocol,
+    binding: V5Q3ValidationBinding,
+    source: V5Q3CertifiedSourceBundle,
+) -> V5Q3HoldoutResult:
+    delta_krw = int(
+        round(
+            (
+                source.product_total_revenue_krw_million
+                - source.company_revenue_krw_million
+            )
+            * 1_000_000.0
+        )
+    )
+    reconciled = (
+        abs(delta_krw) <= protocol.company_revenue_reconciliation_tolerance_krw
+    )
+    if not reconciled:
+        raise ValueError("V5 Q3 holdout company/product revenue reconciliation failed")
+    model_prediction = float(
+        np.dot(
+            np.asarray(source.design_terms, dtype=float),
+            np.asarray(binding.coefficients, dtype=float),
+        )
+    )
+    benchmark_prediction = (
+        binding.training_mean_company_gross_margin
+        * source.company_revenue_krw_million
+    )
+    model_error = abs(source.actual_gross_profit_krw_million - model_prediction)
+    benchmark_error = abs(
+        source.actual_gross_profit_krw_million - benchmark_prediction
+    )
+    better = model_error < benchmark_error
+    common: dict[str, object] = {
+        "protocol_evidence_id": protocol.evidence_id,
+        "validation_binding_evidence_id": binding.evidence_id,
+        "method_evidence_id": binding.method_evidence_id,
+        "fit_evidence_id": binding.fit_evidence_id,
+        "source_bundle_evidence_id": source.evidence_id,
+        "holdout_period": source.period_id,
+        "source_evaluation_date": source.source_evaluation_date.isoformat(),
+        "company_revenue_reconciled": reconciled,
+        "company_revenue_krw_million": source.company_revenue_krw_million,
+        "actual_gross_profit_krw_million": source.actual_gross_profit_krw_million,
+        "model_prediction_krw_million": model_prediction,
+        "model_absolute_error_krw_million": model_error,
+        "benchmark_prediction_krw_million": benchmark_prediction,
+        "benchmark_absolute_error_krw_million": benchmark_error,
+        "model_beats_benchmark": better,
+        "holdout_validation_passed": better and reconciled,
+        "validation_scope": (
+            "out_of_sample_contemporaneous_company_gp_relationship_only"
+        ),
+        "validates_pre_earnings_forecastability": False,
+        "holdout_spent": True,
+        "immutable_result": True,
+        "refit_after_holdout_allowed": False,
+        "product_margin_structural_interpretation_allowed": False,
+        "numeric_forward_forecast_enabled": False,
+        "fair_value_estimate_enabled": False,
+        "target_price_enabled": False,
+        "decision_score_enabled": False,
+        "investment_action_enabled": False,
+    }
+    return V5Q3HoldoutResult(
+        evidence_id=_sha(common),
+        protocol_evidence_id=protocol.evidence_id,
+        validation_binding_evidence_id=binding.evidence_id,
+        method_evidence_id=binding.method_evidence_id,
+        fit_evidence_id=binding.fit_evidence_id,
+        source_bundle_evidence_id=source.evidence_id,
+        holdout_period=source.period_id,
+        source_evaluation_date=source.source_evaluation_date,
+        company_revenue_reconciled=reconciled,
+        company_revenue_krw_million=source.company_revenue_krw_million,
+        actual_gross_profit_krw_million=source.actual_gross_profit_krw_million,
+        model_prediction_krw_million=model_prediction,
+        model_absolute_error_krw_million=model_error,
+        benchmark_prediction_krw_million=benchmark_prediction,
+        benchmark_absolute_error_krw_million=benchmark_error,
+        model_beats_benchmark=better,
+        holdout_validation_passed=better and reconciled,
     )
 
 
@@ -468,8 +648,12 @@ def score_v5_q3_holdout_once(
         root = _object(pointer, "V5 Q3 immutable holdout result")
         if root.get("status") != "skhynix_v5_q3_holdout_spent":
             raise ValueError("V5 Q3 immutable holdout result status is invalid")
-        payload = _mapping(root.get("result"), "V5 Q3 immutable holdout result payload")
-        unhashed = {key: value for key, value in payload.items() if key != "evidence_id"}
+        payload = _mapping(root.get("result"), "V5 Q3 immutable result payload")
+        unhashed = {
+            key: value
+            for key, value in payload.items()
+            if key != "evidence_id"
+        }
         if _sha(unhashed) != str(payload.get("evidence_id", "")):
             raise ValueError("V5 Q3 immutable holdout result hash mismatch")
         existing = _result_from_payload(payload)
@@ -480,51 +664,8 @@ def score_v5_q3_holdout_once(
         if existing.source_bundle_evidence_id != source.evidence_id:
             raise ValueError("V5 Q3 holdout source bundle changed after first score")
         return existing, True
-    delta_krw = int(
-        round((source.product_total_revenue_krw_million - source.company_revenue_krw_million) * 1_000_000.0)
-    )
-    reconciled = abs(delta_krw) <= protocol.company_revenue_reconciliation_tolerance_krw
-    if not reconciled:
-        raise ValueError("V5 Q3 holdout company/product revenue reconciliation failed")
-    model_prediction = float(
-        np.dot(np.asarray(source.design_terms, dtype=float), np.asarray(binding.coefficients, dtype=float))
-    )
-    benchmark_prediction = (
-        binding.training_mean_company_gross_margin * source.company_revenue_krw_million
-    )
-    model_error = abs(source.actual_gross_profit_krw_million - model_prediction)
-    benchmark_error = abs(source.actual_gross_profit_krw_million - benchmark_prediction)
-    better = model_error < benchmark_error
-    stable: dict[str, object] = {
-        "protocol_evidence_id": protocol.evidence_id,
-        "validation_binding_evidence_id": binding.evidence_id,
-        "method_evidence_id": binding.method_evidence_id,
-        "fit_evidence_id": binding.fit_evidence_id,
-        "source_bundle_evidence_id": source.evidence_id,
-        "holdout_period": source.period_id,
-        "source_evaluation_date": source.source_evaluation_date.isoformat(),
-        "company_revenue_reconciled": reconciled,
-        "company_revenue_krw_million": source.company_revenue_krw_million,
-        "actual_gross_profit_krw_million": source.actual_gross_profit_krw_million,
-        "model_prediction_krw_million": model_prediction,
-        "model_absolute_error_krw_million": model_error,
-        "benchmark_prediction_krw_million": benchmark_prediction,
-        "benchmark_absolute_error_krw_million": benchmark_error,
-        "model_beats_benchmark": better,
-        "holdout_validation_passed": better and reconciled,
-        "validation_scope": "out_of_sample_contemporaneous_company_gp_relationship_only",
-        "validates_pre_earnings_forecastability": False,
-        "holdout_spent": True,
-        "immutable_result": True,
-        "refit_after_holdout_allowed": False,
-        "product_margin_structural_interpretation_allowed": False,
-        "numeric_forward_forecast_enabled": False,
-        "fair_value_estimate_enabled": False,
-        "target_price_enabled": False,
-        "decision_score_enabled": False,
-        "investment_action_enabled": False,
-    }
-    result = V5Q3HoldoutResult(evidence_id=_sha(stable), **stable)  # type: ignore[arg-type]
+
+    result = _build_result(protocol, binding, source)
     wrapper: dict[str, object] = {
         "schema_version": 1,
         "status": "skhynix_v5_q3_holdout_spent",
