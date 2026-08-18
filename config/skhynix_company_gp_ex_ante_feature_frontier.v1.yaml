@@ -1,0 +1,213 @@
+schema_version: 1
+frontier:
+  frontier_id: skhynix_company_gp_ex_ante_pit_feature_frontier
+  frontier_version: 1.0-frozen-pre-pit-backtest
+  status: frozen_pre_pit_backtest
+  ticker: "000660"
+  protocol_path: config/skhynix_company_gp_ex_ante_forecast_protocol.v1.yaml
+
+  provenance_classes:
+    timestamped_immutable_filing:
+      description: >-
+        Issuer or regulator filing with a pinned receipt/publication identity. Later retrieval is
+        permitted only when the historical document identity and source bytes are pinned.
+      later_retrieval_can_support_historical_pit: true
+    historical_version_archive:
+      description: >-
+        Revision-prone series with an official historical version, archive, or equivalent
+        version identity proving the exact value available by the forecast origin.
+      later_retrieval_can_support_historical_pit: true
+    prospective_snapshot:
+      description: >-
+        Revision-prone source bytes captured and SHA-256 bound on or before the forecast origin.
+      later_retrieval_can_support_historical_pit: false
+    current_retrieval_only:
+      description: >-
+        Historical value retrieved now without a historical version identity. This is not
+        point-in-time backtest evidence.
+      later_retrieval_can_support_historical_pit: false
+
+  features:
+    - feature_id: lagged_company_revenue
+      family: lagged_issuer_fundamentals
+      transform: previous_reported_quarter_company_revenue_krw_million
+      source_kind: opendart_or_issuer_filing
+      source_authority: primary
+      source_mutability: immutable_receipt_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_receipt_certification_required
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: lagged_company_gross_profit
+      family: lagged_issuer_fundamentals
+      transform: previous_reported_quarter_company_gross_profit_krw_million
+      source_kind: opendart_or_issuer_filing
+      source_authority: primary
+      source_mutability: immutable_receipt_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_receipt_certification_required
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: lagged_company_gross_margin
+      family: lagged_issuer_fundamentals
+      transform: previous_reported_quarter_gross_profit_divided_by_revenue
+      source_kind: deterministic_transform_of_primary_filing
+      source_authority: primary_derived
+      source_mutability: immutable_receipt_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_receipt_certification_required
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: lagged_nand_revenue_share
+      family: lagged_product_mix
+      transform: previous_reported_quarter_nand_revenue_divided_by_company_revenue
+      source_kind: issuer_or_regulator_product_revenue_filing
+      source_authority: primary
+      source_mutability: immutable_receipt_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_receipt_certification_required
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: lagged_other_revenue_share
+      family: lagged_product_mix
+      transform: previous_reported_quarter_other_revenue_divided_by_company_revenue
+      source_kind: issuer_or_regulator_product_revenue_filing
+      source_authority: primary
+      source_mutability: immutable_receipt_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_receipt_certification_required
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: lagged_dram_asp_direction
+      family: lagged_cycle_regime
+      transform: previous_reported_quarter_direction_sign
+      source_kind: issuer_earnings_release
+      source_authority: primary
+      source_mutability: immutable_publication_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_publication_timestamp_certification_required
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: lagged_dram_bit_volume_direction
+      family: lagged_cycle_regime
+      transform: previous_reported_quarter_direction_sign
+      source_kind: issuer_earnings_release
+      source_authority: primary
+      source_mutability: immutable_publication_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_publication_timestamp_certification_required
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: lagged_nand_asp_direction
+      family: lagged_cycle_regime
+      transform: previous_reported_quarter_direction_sign
+      source_kind: issuer_earnings_release
+      source_authority: primary
+      source_mutability: immutable_publication_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_publication_timestamp_certification_required
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: lagged_nand_bit_volume_direction
+      family: lagged_cycle_regime
+      transform: previous_reported_quarter_direction_sign
+      source_kind: issuer_earnings_release
+      source_authority: primary
+      source_mutability: immutable_publication_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_publication_timestamp_certification_required
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: usdkrw_partial_quarter
+      family: macro_fx
+      transform: as_of_cutoff_partial_quarter_level_and_change
+      source_kind: bank_of_korea_ecos
+      source_authority: primary
+      source_mutability: revision_prone_time_series
+      acceptable_provenance_classes:
+        - historical_version_archive
+        - prospective_snapshot
+      current_source_identity_status: exact_stat_and_item_codes_not_pinned_for_this_model
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+      note: >-
+        The existing ECOS adapter conservatively stamps available_date at current retrieval;
+        current retrieval of old observations therefore does not certify historical PIT use.
+
+    - feature_id: kosis_semiconductor_cycle_partial_quarter
+      family: industry_cycle
+      transform: as_of_cutoff_production_shipment_inventory_export_state
+      source_kind: kosis
+      source_authority: primary
+      source_mutability: revision_prone_time_series
+      acceptable_provenance_classes:
+        - historical_version_archive
+        - prospective_snapshot
+      current_source_identity_status: exact_semiconductor_classification_and_historical_version_not_pinned
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+      known_table_contract:
+        org_id: "101"
+        table_id: DT_1F02012
+        table_title: 품목별 광공업 생산·출하·재고·내수·수출량
+
+    - feature_id: issuer_prior_quarter_outlook_language
+      family: issuer_guidance
+      transform: frozen_text_extraction_not_yet_registered
+      source_kind: sk_hynix_ir_document
+      source_authority: primary
+      source_mutability: immutable_publication_document
+      acceptable_provenance_classes:
+        - timestamped_immutable_filing
+      current_source_identity_status: historical_document_registry_exists_but_feature_extractor_not_frozen
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: true
+
+    - feature_id: memory_price_proxy
+      family: memory_market_price
+      transform: unresolved
+      source_kind: unresolved
+      source_authority: unresolved
+      source_mutability: unknown
+      acceptable_provenance_classes: []
+      current_source_identity_status: no_primary_open_source_pinned
+      historical_pit_fit_eligible_now: false
+      prospective_capture_eligible: false
+
+  forbidden_features:
+    - current_quarter_company_gross_profit_actual
+    - current_quarter_company_revenue_actual_from_earnings_release
+    - current_quarter_product_revenue_actual_from_earnings_release
+    - current_quarter_dram_asp_actual_direction_from_earnings_release
+    - current_quarter_dram_bit_volume_actual_direction_from_earnings_release
+    - current_quarter_nand_asp_actual_direction_from_earnings_release
+    - current_quarter_nand_bit_volume_actual_direction_from_earnings_release
+    - any_value_with_available_at_after_forecast_origin
+    - any_current_retrieval_only_historical_value_from_revision_prone_series
+
+  trust_boundary:
+    first_pit_backtest_run: false
+    estimator_fit_allowed: false
+    2026q3_target_read: false
+    2026q3_source_outcome_loaded: false
+    numeric_forward_forecast_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
