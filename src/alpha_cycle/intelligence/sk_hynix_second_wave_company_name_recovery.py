@@ -37,6 +37,20 @@ def _norm(value: object) -> str:
     return " ".join(str(value).replace("\u00a0", " ").split()).casefold()
 
 
+def _canonical_payload_sha256(payload: object) -> str:
+    """Match ``SecondWaveCompanyObservation.raw_payload_sha256`` probe semantics."""
+
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def _object(path: Path) -> dict[str, object]:
     try:
         raw: object = json.loads(path.read_text(encoding="utf-8"))
@@ -230,6 +244,7 @@ def recover_second_wave_company_by_exact_names(
         raise ValueError("Second-wave company exact-name accounting identity failed")
     raw_bytes = path.read_bytes()
     raw_hash = hashlib.sha256(raw_bytes).hexdigest()
+    observation_payload_hash = _canonical_payload_sha256(payload)
     observation = SecondWaveCompanyObservation(
         period_id=candidate.period_id,
         rcept_no=revenue.rcept_no,
@@ -238,7 +253,7 @@ def recover_second_wave_company_by_exact_names(
         cost_of_sales_krw=cost.amount_krw,
         gross_profit_krw=gross.amount_krw,
         gross_margin_percent=gross.amount_krw / revenue.amount_krw * 100.0,
-        raw_payload_sha256=raw_hash,
+        raw_payload_sha256=observation_payload_hash,
     )
     return SecondWaveCompanyNameRecovery(
         period_id=candidate.period_id,
