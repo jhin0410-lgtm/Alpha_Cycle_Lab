@@ -19,22 +19,9 @@ DEFAULT_LOGIT_MARGIN_METHOD = Path(
     "config/skhynix_product_profitability_logit_margin_method.v2.yaml"
 )
 _EXPECTED_TRAINING_PERIODS = (
-    "2019Q1",
-    "2019Q2",
-    "2019Q3",
-    "2020Q1",
-    "2020Q2",
-    "2020Q3",
-    "2023Q1",
-    "2023Q2",
-    "2023Q3",
-    "2024Q1",
-    "2024Q2",
-    "2024Q3",
-    "2025Q1",
-    "2025Q2",
-    "2025Q3",
-    "2026Q1",
+    "2019Q1", "2019Q2", "2019Q3", "2020Q1", "2020Q2", "2020Q3",
+    "2023Q1", "2023Q2", "2023Q3", "2024Q1", "2024Q2", "2024Q3",
+    "2025Q1", "2025Q2", "2025Q3", "2026Q1",
 )
 _EXPECTED_PARAMETERS = (
     "dram_logit_intercept",
@@ -64,19 +51,15 @@ def _strings(value: object, label: str) -> tuple[str, ...]:
 
 def _sha(payload: object) -> str:
     return hashlib.sha256(
-        json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            default=str,
-        ).encode("utf-8")
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode()
     ).hexdigest()
 
 
 @dataclass(frozen=True)
 class LogitMarginSolverContract:
     solver_id: str
+    optimization_scale: str
+    metrics_reported_in_original_krw_million: bool
     initial_damping: float
     damping_increase_factor: float
     damping_decrease_factor: float
@@ -90,6 +73,10 @@ class LogitMarginSolverContract:
     def __post_init__(self) -> None:
         if self.solver_id != "deterministic_damped_gauss_newton_v1":
             raise ValueError("Logit-margin solver id drifted")
+        if self.optimization_scale != "mean_training_company_revenue_krw_million":
+            raise ValueError("Logit-margin optimization scale drifted")
+        if not self.metrics_reported_in_original_krw_million:
+            raise ValueError("Logit-margin metrics unit contract drifted")
         if self.initial_damping != 0.001:
             raise ValueError("Logit-margin initial damping drifted")
         if (self.damping_increase_factor, self.damping_decrease_factor) != (10.0, 10.0):
@@ -180,10 +167,8 @@ class FrozenLogitMarginMethod:
             raise ValueError("Logit-margin training periods drifted")
         if self.contaminated_development_periods != ("2026Q1",):
             raise ValueError("Logit-margin contaminated development binding drifted")
-        if self.untouched_holdout_period != "2026Q3":
-            raise ValueError("Logit-margin future holdout drifted")
-        if self.parameters != _EXPECTED_PARAMETERS:
-            raise ValueError("Logit-margin parameter order drifted")
+        if self.untouched_holdout_period != "2026Q3" or self.parameters != _EXPECTED_PARAMETERS:
+            raise ValueError("Logit-margin holdout/parameter contract drifted")
         if not self.v1_training_results_seen_before_v2_freeze:
             raise ValueError("Logit-margin freeze provenance must disclose v1 training exposure")
         if not self.v1_2026q1_holdout_seen_before_v2_freeze:
@@ -198,14 +183,8 @@ class FrozenLogitMarginMethod:
             and self.q3_reserved_future_holdout
         ):
             raise ValueError("Logit-margin temporal trust boundary drifted")
-        if any(
-            (
-                self.numeric_forward_forecast_enabled,
-                self.fair_value_estimate_enabled,
-                self.target_price_enabled,
-                self.decision_score_enabled,
-            )
-        ):
+        if any((self.numeric_forward_forecast_enabled, self.fair_value_estimate_enabled,
+                self.target_price_enabled, self.decision_score_enabled)):
             raise ValueError("Logit-margin method opened downstream outputs")
         if len(self.evidence_id) != 64:
             raise ValueError("Logit-margin method evidence id must be SHA-256")
@@ -230,7 +209,6 @@ def load_frozen_logit_margin_method(
     gate = _mapping(method.get("validation_gate"), "validation_gate")
     freeze = _mapping(method.get("freeze_provenance"), "freeze_provenance")
     trust = _mapping(method.get("trust_boundary"), "trust_boundary")
-
     if str(structural.get("link", "")) != "logistic_sigmoid":
         raise ValueError("Logit-margin link drifted")
     if structural.get("bounds_are_structural_by_link_function") is not True:
@@ -245,7 +223,6 @@ def load_frozen_logit_margin_method(
         raise ValueError("Logit-margin driver semantics drifted")
     if driver.get("exact_numeric_magnitude_used_for_fit") is True:
         raise ValueError("Logit-margin v2 cannot silently use numeric driver magnitude")
-
     return FrozenLogitMarginMethod(
         evidence_id=_sha(root),
         method_id=str(method.get("method_id", "")),
@@ -255,13 +232,16 @@ def load_frozen_logit_margin_method(
         target_metric=str(method.get("target_metric", "")),
         training_periods=_strings(method.get("training_periods"), "training_periods"),
         contaminated_development_periods=_strings(
-            method.get("contaminated_development_periods"),
-            "contaminated_development_periods",
+            method.get("contaminated_development_periods"), "contaminated_development_periods"
         ),
         untouched_holdout_period=str(method.get("untouched_holdout_period", "")),
         parameters=_strings(structural.get("parameters"), "parameters"),
         solver=LogitMarginSolverContract(
             solver_id=str(solver.get("solver_id", "")),
+            optimization_scale=str(solver.get("optimization_scale", "")),
+            metrics_reported_in_original_krw_million=(
+                solver.get("metrics_reported_in_original_krw_million") is True
+            ),
             initial_damping=float(str(solver.get("initial_damping", "nan"))),
             damping_increase_factor=float(str(solver.get("damping_increase_factor", "nan"))),
             damping_decrease_factor=float(str(solver.get("damping_decrease_factor", "nan"))),
@@ -284,9 +264,7 @@ def load_frozen_logit_margin_method(
             required_residual_degrees_of_freedom=int(
                 str(gate.get("required_residual_degrees_of_freedom", 0))
             ),
-            require_full_jacobian_column_rank=(
-                gate.get("require_full_jacobian_column_rank") is True
-            ),
+            require_full_jacobian_column_rank=gate.get("require_full_jacobian_column_rank") is True,
             require_optimizer_convergence=gate.get("require_optimizer_convergence") is True,
             require_all_leave_one_out_folds_converged=(
                 gate.get("require_all_leave_one_out_folds_converged") is True
@@ -327,9 +305,6 @@ def load_frozen_logit_margin_method(
 
 
 __all__ = [
-    "DEFAULT_LOGIT_MARGIN_METHOD",
-    "FrozenLogitMarginMethod",
-    "LogitMarginSolverContract",
-    "LogitMarginValidationGate",
-    "load_frozen_logit_margin_method",
+    "DEFAULT_LOGIT_MARGIN_METHOD", "FrozenLogitMarginMethod", "LogitMarginSolverContract",
+    "LogitMarginValidationGate", "load_frozen_logit_margin_method",
 ]
