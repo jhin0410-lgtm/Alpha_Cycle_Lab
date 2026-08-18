@@ -21,6 +21,7 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_contract import (
     load_bound_periodic_product_revenue_parser_contract,
 )
+from alpha_cycle.intelligence.source_snapshot_asof import source_snapshot_date_as_of
 from alpha_cycle.providers.opendart import CorpCode
 from alpha_cycle.providers.opendart_documents import _parse_document_archive
 
@@ -99,9 +100,11 @@ def load_periodic_product_revenue_certification(
     pointer = _object(Path(pointer_path), "Periodic product revenue pointer")
     if pointer.get("status") != "skhynix_opendart_q2_product_revenue_certified":
         raise ValueError("Periodic product revenue pointer status is invalid")
-    source_evaluation_date = date.fromisoformat(str(pointer.get("evaluation_date", "")))
-    if source_evaluation_date > evaluation_date:
-        raise ValueError("Periodic product revenue evidence was not yet observable")
+    source_evaluation_date = source_snapshot_date_as_of(
+        pointer.get("evaluation_date"),
+        as_of_date=evaluation_date,
+        label="Periodic product revenue evidence",
+    )
     spec, _contract_hash = load_bound_periodic_product_revenue_parser_contract(pointer)
 
     certification = _certification(Path(str(pointer.get("certification_path", ""))))
