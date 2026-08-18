@@ -10,6 +10,9 @@ from pathlib import Path
 from .intelligence.sec_product_cycle_driver_support import (
     DEFAULT_SEC_PRODUCT_CYCLE_DRIVER_POINTER,
 )
+from .intelligence.sk_hynix_historical_product_revenue_structure_diagnostic import (
+    diagnose_failed_historical_product_revenue_structure,
+)
 from .intelligence.sk_hynix_opendart_historical_product_revenue_panel import (
     DEFAULT_HISTORICAL_PRODUCT_REVENUE_POINTER,
 )
@@ -49,8 +52,10 @@ def _parser() -> argparse.ArgumentParser:
         description=(
             "Acquire the SK hynix 2017Q1-2018Q3 exact-driver source frontier and, only when "
             "all six source layers are certified, run a 21-row clean / 22-row contaminated "
-            "direction-design identification preflight. This command never fits a replacement "
-            "estimator and never loads the reserved 2026Q3 holdout."
+            "direction-design identification preflight. Failed product-revenue recovery is "
+            "diagnosed structurally from preserved source bytes without promoting a source "
+            "fact. This command never fits a replacement estimator and never loads the "
+            "reserved 2026Q3 holdout."
         )
     )
     parser.add_argument("--evaluation-date", required=True, type=date.fromisoformat)
@@ -75,6 +80,39 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _product_structure_diagnostics(
+    closeout: object,
+    product_output: Path,
+) -> tuple[list[dict[str, object]], dict[str, int]]:
+    source = getattr(closeout, "source")
+    diagnostics: list[dict[str, object]] = []
+    reason_counts: dict[str, int] = {}
+    for item in source.periods:
+        if item.product_revenue_certified:
+            continue
+        try:
+            diagnostic = diagnose_failed_historical_product_revenue_structure(
+                item.period_id,
+                product_output / item.period_id,
+            )
+            diagnostics.append(asdict(diagnostic))
+            for review in diagnostic.reviews:
+                for reason in review.structural_rejection_reasons:
+                    reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        except ValueError as exc:
+            diagnostics.append(
+                {
+                    "period_id": item.period_id,
+                    "diagnostic_error": str(exc),
+                    "source_certification_promoted": False,
+                    "residual_other_derivation_allowed": False,
+                    "fit_enabled": False,
+                    "future_holdout_loaded": False,
+                }
+            )
+    return diagnostics, dict(sorted(reason_counts.items()))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     evaluation_date = args.evaluation_date
@@ -88,6 +126,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         product_output=product_output,
         company_output=company_output,
     )
+
+    structure_diagnostics: list[dict[str, object]] = []
+    structure_reason_counts: dict[str, int] = {}
+    if not closeout.all_six_source_layers_complete:
+        structure_diagnostics, structure_reason_counts = _product_structure_diagnostics(
+            closeout,
+            product_output,
+        )
 
     preflight = None
     preflight_error = None
@@ -130,7 +176,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
 
     if not closeout.all_six_source_layers_complete:
-        next_action = "resolve_only_failed_2017_2018_source_layers_then_replay_same_command"
+        next_action = (
+            "inspect_2017_2018_product_structure_diagnostics_and_register_only_"
+            "source_supported_recovery_semantics_then_replay_same_command"
+        )
     elif preflight_error is not None:
         next_action = "repair_identification_preflight_integrity_without_fitting_a_model"
     elif preflight is None:
@@ -162,6 +211,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             "all_six_source_layers_complete": closeout.all_six_source_layers_complete,
             "periods": periods,
         },
+        "product_structure_diagnostic_count": len(structure_diagnostics),
+        "product_structure_rejection_reason_counts": structure_reason_counts,
+        "product_structure_diagnostics": structure_diagnostics,
+        "product_structure_diagnostics_are_source_facts_only": True,
+        "residual_other_derivation_allowed": False,
         "identification_preflight_error": preflight_error,
         "identification_preflight": None if preflight is None else asdict(preflight),
         "replacement_fit_enabled": False,
