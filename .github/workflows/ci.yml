@@ -44,7 +44,7 @@ jobs:
           .venv-ci/bin/python -m pip install -e ".[dev]"
 
       - name: Ruff
-        run: .venv-ci/bin/ruff check . --fix --diff
+        run: .venv-ci/bin/ruff check .
 
       - name: Mypy
         run: .venv-ci/bin/mypy
