@@ -51,9 +51,11 @@ from alpha_cycle.intelligence.sk_hynix_opendart_quarterly_company_profitability 
 from alpha_cycle.intelligence.sk_hynix_opendart_quarterly_company_profitability_verifier import (
     load_quarterly_company_profitability_evidence,
 )
-from alpha_cycle.intelligence.sk_hynix_product_profitability_second_wave_closeout import (
+from alpha_cycle.intelligence.sk_hynix_product_profitability_second_wave_acquisition import (
     DEFAULT_SECOND_WAVE_COMPANY_OUTPUT,
     DEFAULT_SECOND_WAVE_PRODUCT_OUTPUT,
+)
+from alpha_cycle.intelligence.sk_hynix_product_profitability_second_wave_closeout import (
     SecondWaveCloseout,
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_structural_method import (
@@ -654,33 +656,33 @@ def _record_from_legacy_closeout_period(
         raise ValueError(f"Lagged filing legacy company raw path missing: {source_period}")
     direct_pointer = product_root / source_period / "latest_certification.json"
     if direct_pointer.is_file():
-        product = load_periodic_product_revenue_certification(
+        direct_product = load_periodic_product_revenue_certification(
             direct_pointer,
             evaluation_date=evaluation_date,
         )
         pointer = _json_object(direct_pointer, "Lagged filing direct product pointer")
         archive_path = Path(str(pointer.get("archive_path", "")))
-        archive_sha = product.archive_sha256
-        product_evidence_id = product.evidence_id
-        product_rcept_no = product.rcept_no
-        nand = float(product.metrics.nand_and_solutions)
-        other = float(product.metrics.other_products_services)
-        total = float(product.metrics.reported_company_revenue)
+        archive_sha = direct_product.archive_sha256
+        product_evidence_id = direct_product.evidence_id
+        product_rcept_no = direct_product.rcept_no
+        nand = float(direct_product.metrics.nand_and_solutions)
+        other = float(direct_product.metrics.other_products_services)
+        total = float(direct_product.metrics.reported_company_revenue)
     else:
         if period.product_recovery is None or period.product_recovery.observation is None:
             raise ValueError(f"Lagged filing legacy product recovery missing: {source_period}")
-        product = period.product_recovery.observation
+        recovered_product = period.product_recovery.observation
         diagnostic = load_failure_diagnostic(
             source_period,
             _latest_failure_diagnostic(product_root / source_period),
         )
         archive_path = Path(diagnostic.archive_path)
-        archive_sha = product.source_archive_sha256
-        product_evidence_id = product.evidence_id
-        product_rcept_no = product.rcept_no
-        nand = float(product.nand_revenue_million_krw)
-        other = float(product.other_revenue_million_krw)
-        total = float(product.total_revenue_million_krw)
+        archive_sha = recovered_product.source_archive_sha256
+        product_evidence_id = recovered_product.evidence_id
+        product_rcept_no = recovered_product.rcept_no
+        nand = float(recovered_product.nand_revenue_million_krw)
+        other = float(recovered_product.other_revenue_million_krw)
+        total = float(recovered_product.total_revenue_million_krw)
     if company.rcept_no != product_rcept_no:
         raise ValueError(f"Lagged filing company/product receipt mismatch: {source_period}")
     if company.available_date != _receipt_date(company.rcept_no):
@@ -740,7 +742,7 @@ def build_lagged_filing_source_records(
     second_product_root = Path(second_product_output)
     third_company_paths = _company_probe_raw_paths(Path(third_company_output))
     second_company_paths = _company_probe_raw_paths(Path(second_company_output))
-    third_source = cast(SecondWaveCloseout, third_wave_closeout.source)
+    third_source = third_wave_closeout.source
 
     records: list[LaggedFilingSourceRecord] = []
     for source_period in _EXPECTED_SOURCE_PERIODS[:8]:
