@@ -52,6 +52,8 @@ method:
   solver:
     solver_id: deterministic_damped_gauss_newton_v1
     initialization: all_product_logit_intercepts_equal_logit_training_mean_gross_margin_effects_zero
+    optimization_scale: mean_training_company_revenue_krw_million
+    metrics_reported_in_original_krw_million: true
     initial_damping: 0.001
     damping_increase_factor: 10.0
     damping_decrease_factor: 10.0
