@@ -1,0 +1,137 @@
+schema_version: 1
+freeze:
+  freeze_id: skhynix_company_gp_ex_ante_estimator_selection
+  freeze_version: 1.0-frozen-pre-target-join
+  status: frozen_pre_target_join
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+  scientific_scope: target_blind_ex_ante_estimator_selection
+  protocol_path: config/skhynix_company_gp_ex_ante_forecast_protocol.v1.yaml
+  pit_certification_contract_path: config/skhynix_company_gp_ex_ante_lagged_filing_certification.v1.yaml
+
+  freeze_state:
+    historical_target_values_read_for_this_freeze: false
+    historical_target_join_run: false
+    historical_backtest_run: false
+    2026q1_used_for_selection: false
+    2026q3_target_read: false
+    2026q3_source_outcome_loaded: false
+    2026q3_evaluated: false
+
+  certified_base_panel:
+    target_row_count: 14
+    feature_observation_count: 70
+    target_values_included: false
+    feature_ids:
+      - lagged_company_revenue
+      - lagged_company_gross_profit
+      - lagged_company_gross_margin
+      - lagged_nand_revenue_share
+      - lagged_other_revenue_share
+
+  benchmark:
+    benchmark_id: previous_reported_quarter_gross_profit_persistence
+    prediction_rule: lagged_company_gross_profit
+    fitted_parameter_count: 0
+
+  sample_adequacy:
+    parameter_count_includes_intercept: true
+    heuristic_rule: max_2p_and_p_plus_8
+    heuristic_is_statistical_theorem: false
+    protocol_minimum_training_rows_per_fold: 6
+    minimum_scored_folds: 8
+    use_one_shared_scored_fold_set_for_all_candidates_and_benchmark: true
+    shared_initial_training_rows: 12
+    required_complete_target_rows_before_first_target_join: 20
+    require_every_frozen_candidate_sample_eligible_before_first_target_join: true
+
+  preprocessing:
+    fit_predictor_center_and_scale_from_training_fold_only: true
+    target_is_not_standardized: true
+    zero_variance_predictor_fails_candidate_fold: true
+    future_fold_statistics_prohibited: true
+
+  candidates:
+    - candidate_id: lagged_gp_affine_ols
+      architecture: direct_company_gp_from_pit_features
+      estimator: ordinary_least_squares
+      parameter_count: 2
+      predictors:
+        - lagged_company_gross_profit
+      candidate_minimum_training_rows_from_heuristic: 10
+      required_total_rows_for_eight_folds_if_scored_alone: 18
+      coefficient_interpretation: empirical_prediction_weights_only
+
+    - candidate_id: lagged_gp_nand_mix_ols
+      architecture: direct_company_gp_from_pit_features
+      estimator: ordinary_least_squares
+      parameter_count: 3
+      predictors:
+        - lagged_company_gross_profit
+        - lagged_nand_revenue_share
+      candidate_minimum_training_rows_from_heuristic: 11
+      required_total_rows_for_eight_folds_if_scored_alone: 19
+      coefficient_interpretation: empirical_prediction_weights_only
+
+    - candidate_id: lagged_gp_full_mix_ols
+      architecture: direct_company_gp_from_pit_features
+      estimator: ordinary_least_squares
+      parameter_count: 4
+      predictors:
+        - lagged_company_gross_profit
+        - lagged_nand_revenue_share
+        - lagged_other_revenue_share
+      candidate_minimum_training_rows_from_heuristic: 12
+      required_total_rows_for_eight_folds_if_scored_alone: 20
+      coefficient_interpretation: empirical_prediction_weights_only
+
+  excluded_from_first_selection_round:
+    - architecture: pit_input_bridge_into_frozen_v5_company_gp_relation
+      reason: frozen_five_feature_pit_bundle_does_not_supply_the_same_quarter_cycle_direction_inputs_required_by_v5
+      exclusion_is_not_performance_based: true
+    - feature_family: lagged_company_revenue
+      reason: redundant_scale_candidate_not_added_to_first_low_dimensional_nested_sequence
+      exclusion_is_not_performance_based: true
+    - feature_family: lagged_company_gross_margin
+      reason: excluded_to_avoid_expanding_parameter_count_before_first_target_join
+      exclusion_is_not_performance_based: true
+
+  chronological_selection:
+    scheme: chronological_expanding_window
+    random_cross_validation_allowed: false
+    shared_initial_training_rows: 12
+    scored_fold_count: 8
+    primary_metric: mae_krw_million
+    benchmark_id: previous_reported_quarter_gross_profit_persistence
+    candidate_must_strictly_beat_benchmark: true
+    every_scored_fold_design_must_have_full_column_rank: true
+    every_scored_fold_residual_dof_must_be_positive: true
+    condition_number_threshold: null
+    coefficient_stability_threshold: null
+    condition_number_report_only: true
+    coefficient_stability_report_only: true
+    selection_order:
+      - lowest_aggregate_chronological_mae
+      - lower_parameter_count_on_exact_mae_tie
+      - earlier_manifest_order_on_remaining_exact_tie
+    no_candidate_pass_action: select_no_estimator_and_keep_forward_forecast_disabled
+    hyperparameter_tuning_allowed: false
+    candidate_addition_after_first_target_join_allowed: false
+    feature_subset_change_after_first_target_join_allowed: false
+    scored_fold_change_after_first_target_join_allowed: false
+
+  contaminated_2026q1_policy:
+    role: report_only_after_historical_selection
+    may_change_candidate_selection: false
+    may_change_historical_gate: false
+
+  trust_boundary:
+    target_join_allowed_now: false
+    estimator_fit_allowed_now: false
+    first_pit_backtest_run: false
+    final_estimator_selected: false
+    numeric_forward_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    investment_action_enabled: false
