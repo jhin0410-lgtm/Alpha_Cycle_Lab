@@ -1,0 +1,109 @@
+schema_version: 1
+method:
+  method_id: skhynix_company_gross_profit_empirical_regime_ols
+  method_version: 5.0-frozen-pre-fit
+  status: frozen_pre_fit
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+  temporal_alignment: contemporaneous_same_quarter
+  training_periods:
+    - 2017Q1
+    - 2017Q2
+    - 2017Q3
+    - 2018Q1
+    - 2018Q2
+    - 2018Q3
+    - 2019Q1
+    - 2019Q2
+    - 2019Q3
+    - 2020Q1
+    - 2020Q2
+    - 2020Q3
+    - 2023Q1
+    - 2023Q2
+    - 2023Q3
+    - 2024Q1
+    - 2024Q2
+    - 2024Q3
+    - 2025Q1
+    - 2025Q2
+    - 2025Q3
+  contaminated_stress_periods:
+    - 2026Q1
+  untouched_future_holdout_period: 2026Q3
+  parameter_count: 7
+  parameters:
+    - company_revenue_baseline_weight
+    - dram_asp_direction_regime_weight
+    - dram_bit_volume_direction_regime_weight
+    - nand_asp_direction_regime_weight
+    - nand_bit_volume_direction_regime_weight
+    - nand_revenue_mix_weight
+    - other_revenue_mix_weight
+  design_terms:
+    - company_revenue
+    - company_revenue_x_dram_asp_direction
+    - company_revenue_x_dram_bit_volume_direction
+    - company_revenue_x_nand_asp_direction
+    - company_revenue_x_nand_bit_volume_direction
+    - nand_revenue
+    - other_revenue
+  estimator:
+    family: ordinary_least_squares
+    implementation: numpy_lstsq
+    rcond: null
+    intercept: false
+    target_units: KRW_million
+  semantics:
+    direction_transform: sign_only_minus_one_zero_plus_one
+    exact_numeric_driver_magnitudes_used_in_fit: false
+    coefficients_are_empirical_company_gp_weights: true
+    coefficients_are_literal_product_margins: false
+    coefficients_are_literal_asp_or_bit_sensitivities: false
+    product_margin_structural_interpretation_allowed: false
+    product_profitability_decomposition_allowed: false
+    company_gp_empirical_prediction_scope_only: true
+    nand_and_other_are_not_combined_into_a_source_fact: true
+  scientific_transition:
+    v1_outcome_seen_before_freeze: true
+    v2_outcome_seen_before_freeze: true
+    v3_outcome_seen_before_freeze: true
+    v4_outcome_seen_before_freeze: true
+    repeated_product_margin_nonlinear_rank_loss_seen_before_freeze: true
+    v5_coefficients_seen_before_freeze: false
+    v5_fit_metrics_seen_before_freeze: false
+    reason_for_transition: >-
+      Product-margin bounded-logit development repeatedly retained full-rank source designs
+      while losing fitted nonlinear rank through boundary saturation. V5 therefore stops
+      attempting literal product-margin decomposition and directly models company gross
+      profit with empirical regime and mix terms on the same clean 21-row panel.
+  prefit_identification_gate:
+    required_row_count: 21
+    required_parameter_count: 7
+    required_residual_degrees_of_freedom: 14
+    require_full_design_column_rank: true
+    require_all_leave_one_out_designs_full_rank: true
+    normalized_condition_number_threshold: null
+  development_gate:
+    require_full_fit_design_rank: true
+    require_all_leave_one_out_fit_designs_full_rank: true
+    require_loocv_mae_better_than_benchmark: true
+    benchmark: leave_one_out_mean_company_gross_margin_scaled_by_held_out_company_revenue
+    parameter_jackknife_threshold: null
+    condition_number_threshold: null
+  contaminated_stress_policy:
+    used_for_fit: false
+    used_for_model_selection_gate: false
+    claimed_as_independent_holdout: false
+    report_only: true
+  future_holdout_policy:
+    period: 2026Q3
+    loaded_by_v5_fit: false
+    evaluated_by_v5_fit: false
+    evaluation_authorized_by_development_gate: false
+    separately_frozen_future_protocol_required: true
+  trust_boundary:
+    numeric_forward_forecast_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    product_margin_output_enabled: false
