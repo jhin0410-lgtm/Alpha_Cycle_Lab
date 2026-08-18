@@ -9,9 +9,6 @@ import pytest
 from alpha_cycle.intelligence.sk_hynix_product_profitability_logit_margin_fit import (
     LogitMarginTrainingRow,
 )
-from alpha_cycle.intelligence.sk_hynix_second_wave_product_revenue_recovery import (
-    SecondWaveRecoveredProductRevenue,
-)
 from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_closeout import (
     ThirdWaveCloseout,
 )
@@ -20,6 +17,9 @@ from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_frontier
 )
 from alpha_cycle.intelligence.sk_hynix_product_profitability_third_wave_identification import (
     build_third_wave_identification_preflight,
+)
+from alpha_cycle.intelligence.sk_hynix_second_wave_product_revenue_recovery import (
+    SecondWaveRecoveredProductRevenue,
 )
 
 
