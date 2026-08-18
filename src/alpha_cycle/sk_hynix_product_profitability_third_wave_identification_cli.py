@@ -35,6 +35,7 @@ from .intelligence.sk_hynix_product_profitability_regime_holdout import (
 from .intelligence.sk_hynix_product_profitability_third_wave_closeout import (
     DEFAULT_THIRD_WAVE_COMPANY_OUTPUT,
     DEFAULT_THIRD_WAVE_PRODUCT_OUTPUT,
+    ThirdWaveCloseout,
     run_third_wave_closeout,
 )
 from .intelligence.sk_hynix_product_profitability_third_wave_frontier import (
@@ -81,13 +82,12 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _product_structure_diagnostics(
-    closeout: object,
+    closeout: ThirdWaveCloseout,
     product_output: Path,
 ) -> tuple[list[dict[str, object]], dict[str, int]]:
-    source = getattr(closeout, "source")
     diagnostics: list[dict[str, object]] = []
     reason_counts: dict[str, int] = {}
-    for item in source.periods:
+    for item in closeout.source.periods:
         if item.product_revenue_certified:
             continue
         try:
