@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date
 
@@ -46,10 +47,23 @@ def _payload(revenue_name: str = "매출액") -> dict[str, object]:
     }
 
 
+def _canonical_sha(payload: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def test_exact_name_recovery_accepts_legacy_account_ids(tmp_path) -> None:
     candidate = load_second_wave_frontier().candidates[0]
     path = tmp_path / "raw.json"
-    path.write_text(json.dumps(_payload(), ensure_ascii=False), encoding="utf-8")
+    payload = _payload()
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     recovery = recover_second_wave_company_by_exact_names(
         candidate,
@@ -64,6 +78,12 @@ def test_exact_name_recovery_accepts_legacy_account_ids(tmp_path) -> None:
     assert recovery.accounting_identity_verified is True
     assert recovery.training_row_promoted is False
     assert recovery.fit_enabled is False
+
+    raw_byte_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    canonical_payload_sha = _canonical_sha(payload)
+    assert raw_byte_sha != canonical_payload_sha
+    assert recovery.raw_payload_sha256 == raw_byte_sha
+    assert recovery.observation.raw_payload_sha256 == canonical_payload_sha
 
 
 def test_exact_name_recovery_rejects_fuzzy_revenue_name(tmp_path) -> None:
