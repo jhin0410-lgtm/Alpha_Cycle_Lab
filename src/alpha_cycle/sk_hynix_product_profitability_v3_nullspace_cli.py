@@ -13,7 +13,9 @@ from .intelligence.sk_hynix_product_profitability_v3_nullspace_report import (
     diagnose_v3_fit_report,
 )
 
-DEFAULT_V3_FIT_REPORT = DEFAULT_REGIME_VALIDATION_OUTPUT / "latest_v3_expanded_logit_margin_fit.json"
+DEFAULT_V3_FIT_REPORT = (
+    DEFAULT_REGIME_VALIDATION_OUTPUT / "latest_v3_expanded_logit_margin_fit.json"
+)
 DEFAULT_V3_NULLSPACE_REPORT = (
     DEFAULT_REGIME_VALIDATION_OUTPUT / "latest_v3_nonlinear_nullspace_diagnostic.json"
 )
