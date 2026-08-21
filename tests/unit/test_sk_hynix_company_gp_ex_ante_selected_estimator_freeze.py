@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -40,7 +40,7 @@ _FEATURES = (
 def _scope(estimator_evidence_id: str) -> FrozenExactTwentyPeriodExAnteScope:
     return FrozenExactTwentyPeriodExAnteScope(
         evidence_id="c" * 64,
-        frozen_at=date(2026, 8, 21),
+        frozen_at=datetime(2026, 8, 21, tzinfo=UTC),
         status="skhynix_ex_ante_exact_twenty_period_scope_frozen_target_blind",
         ticker="000660",
         target_metric="company_gross_profit_krw_million",
