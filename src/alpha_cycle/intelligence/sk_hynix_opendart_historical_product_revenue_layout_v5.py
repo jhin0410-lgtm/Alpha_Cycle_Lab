@@ -1,21 +1,24 @@
 """Strict archive parser for the observed 2016 SK hynix product-revenue note layout.
 
-The 2016 filings use a plain numbered ``매출액`` note heading instead of the later
-``매출액 (연결)`` heading.  This parser is deliberately period-scoped and does not loosen
-the generic historical parser.  A table is eligible only when the nearest numbered note
-heading is the plain revenue heading, the immediately preceding context identifies the
-product-detail disclosure, DRAM/NAND/Other/Total are direct rows in canonical order, and
-one supported KRW unit is present.
+The 2016 filings place the direct product table immediately after a local product-detail
+sentence rather than requiring a numbered ``매출액`` note heading to remain within the
+parser prefix window. This parser is deliberately period-scoped and does not loosen the
+generic historical parser. A table is eligible only when nearby source context identifies
+the applicable Q1/Q2 product-detail disclosure, DRAM/NAND/Other/Total are direct rows in
+canonical order, and one supported KRW unit is present.
+
+The observed source also spaces Korean row labels (for example ``기 타`` and ``합 계``).
+Only this 2016 parser compares direct row labels after removing whitespace; it does not
+apply fuzzy matching or derive values by subtraction.
 
 Q1 accepts the unique direct ``당분기`` column because the reporting period itself is
-exactly three months.  Q2 accepts only the unique ``당반기 3개월`` column and requires
-both current/prior cumulative structure.  No value is derived by subtraction.
+exactly three months. Q2 accepts only the unique ``당반기 3개월`` column and requires
+both current/prior cumulative structure. No value is derived by subtraction.
 """
 
 from __future__ import annotations
 
 import io
-import re
 import zipfile
 from datetime import date
 from pathlib import PurePosixPath
@@ -27,7 +30,6 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_table import (
     _grid,
-    _normalized,
     _RawTable,
     _TableExtractor,
 )
@@ -38,9 +40,14 @@ from alpha_cycle.providers.opendart_documents import _decode_text, _safe_member_
 
 _HISTORICAL_PARSER_ID = "skhynix_opendart_periodic_product_revenue_v1"
 _TEXT_SUFFIXES = frozenset({".xml", ".html", ".htm", ".xhtml"})
-_ANY_NOTE_HEADING = re.compile(r"^\s*\d+\.\s*.+$")
-_PLAIN_REVENUE_HEADING = re.compile(r"^\s*\d+\.\s*매출액\s*$")
-_PRODUCT_DETAIL_MARKER = "매출액의품목별세부내역"
+_Q1_PRODUCT_DETAIL_MARKERS = (
+    "당분기와전분기중매출액의품목별세부내역",
+    "당분기및전분기중매출액의품목별세부내역",
+)
+_Q2_PRODUCT_DETAIL_MARKERS = (
+    "당반기와전반기중매출액의품목별세부내역",
+    "당반기및전반기중매출액의품목별세부내역",
+)
 _CURRENT_MARKERS = ("당반기", "당분기", "당기")
 _PRIOR_MARKERS = ("전반기", "전분기", "전기")
 _THREE_MONTH = "3개월"
@@ -63,21 +70,14 @@ def _compact(value: str) -> str:
     return "".join(value.replace("\u00a0", " ").split()).casefold()
 
 
-def _has_strict_plain_revenue_context(table: _RawTable) -> bool:
-    nearest_heading: str | None = None
-    for value in reversed(table.prefix_text):
-        normalized = " ".join(value.replace("\u00a0", " ").split())
-        if _ANY_NOTE_HEADING.fullmatch(normalized) is not None:
-            nearest_heading = normalized
-            break
-    if nearest_heading is None or _PLAIN_REVENUE_HEADING.fullmatch(nearest_heading) is None:
-        return False
-    nearby = "".join(_compact(value) for value in table.prefix_text[-24:])
-    return _PRODUCT_DETAIL_MARKER in nearby
+def _has_local_product_detail_context(table: _RawTable, *, period_kind: str) -> bool:
+    nearby = "".join(_compact(value) for value in table.prefix_text[-48:])
+    markers = _Q1_PRODUCT_DETAIL_MARKERS if period_kind == "q1" else _Q2_PRODUCT_DETAIL_MARKERS
+    return any(marker in nearby for marker in markers)
 
 
 def _accepted(labels: tuple[str, ...]) -> frozenset[str]:
-    return frozenset(_normalized(label) for label in labels)
+    return frozenset(_compact(label) for label in labels)
 
 
 def _unique_row_index(
@@ -92,7 +92,7 @@ def _unique_row_index(
         (row_index, column)
         for row_index in range(start, len(grid))
         for column, value in enumerate(grid[row_index])
-        if _normalized(value) in accepted
+        if _compact(value) in accepted
     ]
     if len(matches) != 1:
         raise ValueError(
@@ -115,12 +115,8 @@ def _header_tokens(
 
 
 def _contains_any(tokens: tuple[str, ...], markers: tuple[str, ...]) -> bool:
-    folded = tuple(_normalized(token) for token in tokens)
-    return any(
-        _normalized(marker) in token
-        for marker in markers
-        for token in folded
-    )
+    folded = tuple(_compact(token) for token in tokens)
+    return any(_compact(marker) in token for marker in markers for token in folded)
 
 
 def _q1_current_column(
@@ -213,8 +209,8 @@ def _table_metrics(
     *,
     period_kind: str,
 ) -> ProductRevenueMetrics:
-    if not _has_strict_plain_revenue_context(table):
-        raise ValueError("Historical layout-v5 table lacks strict plain-revenue product context")
+    if not _has_local_product_detail_context(table, period_kind=period_kind):
+        raise ValueError("Historical layout-v5 table lacks local product-detail context")
     grid = _grid(table)
     dram_row, label_column = _unique_row_index(
         grid,
