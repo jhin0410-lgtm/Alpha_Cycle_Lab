@@ -35,7 +35,7 @@ def _spec(*, year: int = 2016) -> PeriodicProductRevenueSpec:
         period_start=date(year, 1, 1),
         period_end=date(year, 3, 31),
         parser_id=HISTORICAL_PRODUCT_REVENUE_PARSER_ID,
-        expected_identity_anchors=("SK hynix",),
+        expected_identity_anchors=("SK hynix", "3개월", "백만원"),
         product_labels={
             "dram_total": ("DRAM",),
             "nand_and_solutions": ("NAND",),
@@ -68,10 +68,10 @@ def _witness_text(*, other: str = "4", unit: str = "백만원") -> str:
             "NAND",
             "20",
             "18",
-            "기타",
+            "기 타",
             other,
             "3",
-            "합계",
+            "합 계",
             "84",
             "71",
         )
@@ -104,6 +104,32 @@ def test_unanchored_historical_source_uses_archive_with_local_text_witness(
     )
 
     assert observed == metrics
+
+
+def test_exact_q1_witness_does_not_require_printed_three_month_header() -> None:
+    consensus.verify_historical_product_revenue_text_witness(
+        _spec(),
+        _witness_text(),
+        _metrics(),
+    )
+
+
+def test_non_q1_historical_witness_still_requires_three_month_anchor() -> None:
+    q2_spec = replace(
+        _spec(),
+        document_id="test-2016q2",
+        report_name_exact="반기보고서 (2016.06)",
+        discovery_begin_date=date(2016, 7, 1),
+        discovery_end_date=date(2016, 8, 31),
+        period_start=date(2016, 4, 1),
+        period_end=date(2016, 6, 30),
+    )
+    with pytest.raises(ValueError, match="anchor missing: 3개월"):
+        consensus.verify_historical_product_revenue_text_witness(
+            q2_spec,
+            _witness_text(),
+            _metrics(),
+        )
 
 
 def test_unanchored_historical_source_rejects_text_witness_value_drift(
