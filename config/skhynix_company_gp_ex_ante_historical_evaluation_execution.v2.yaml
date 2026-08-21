@@ -1,0 +1,135 @@
+schema_version: 1
+execution:
+  execution_id: skhynix_company_gp_ex_ante_first_historical_evaluation
+  execution_version: 1.1-frozen-after-schema-failure-before-target-resolution
+  status: frozen_after_schema_failure_before_target_resolution
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+  scientific_scope: exact_twenty_period_first_target_join_and_chronological_backtest
+
+  frozen_inputs:
+    scope_freeze_path: data/private/research/skhynix-company-gp-ex-ante-scope-freeze/latest_scope_freeze.json
+    combined_feature_bundle_path: data/private/research/skhynix-company-gp-ex-ante-pit-panel-expansion/latest_combined_feature_bundle.json
+    estimator_freeze_path: config/skhynix_company_gp_ex_ante_estimator_freeze.v1.yaml
+    prior_execution_path: config/skhynix_company_gp_ex_ante_historical_evaluation_execution.v1.yaml
+
+  prior_schema_failure:
+    attempt_date: 2026-08-21
+    attempted_git_commit: 13cd1a73ffed6f3927e3acaf9b2aa0d2db5cebb9
+    raw_opendart_payloads_retrieved_into_process_memory: true
+    target_observation_constructed: false
+    historical_target_join_persisted: false
+    estimator_fit_run: false
+    historical_backtest_run: false
+    observed_failure_signature: "2016 report_code=11012 label=revenue count=0"
+    repair_scope: xbrl_standard_account_namespace_alias_expansion_only
+    outcome_value_inspection_used_for_repair: false
+    model_scope_changed_after_failure: false
+    feature_scope_changed_after_failure: false
+    candidate_scope_changed_after_failure: false
+    fold_geometry_changed_after_failure: false
+    benchmark_or_metric_changed_after_failure: false
+
+  exact_target_periods:
+    - 2016Q2
+    - 2016Q3
+    - 2017Q2
+    - 2017Q3
+    - 2018Q2
+    - 2018Q3
+    - 2019Q2
+    - 2019Q3
+    - 2020Q2
+    - 2020Q3
+    - 2021Q2
+    - 2021Q3
+    - 2022Q2
+    - 2022Q3
+    - 2023Q2
+    - 2023Q3
+    - 2024Q2
+    - 2024Q3
+    - 2025Q2
+    - 2025Q3
+
+  target_source_policy:
+    provider: opendart
+    endpoint: fnlttSinglAcntAll
+    fs_div: CFS
+    q2_report_code: "11012"
+    q3_report_code: "11014"
+    current_term_amount_field: thstrm_amount
+    allowed_statement_divisions:
+      - IS
+      - CIS
+    revenue_account_ids:
+      - ifrs_Revenue
+      - ifrs-full_Revenue
+      - ifrs-full_RevenueFromContractsWithCustomers
+    cost_of_sales_account_ids:
+      - ifrs_CostOfSales
+      - ifrs-full_CostOfSales
+    gross_profit_account_ids:
+      - ifrs_GrossProfit
+      - ifrs-full_GrossProfit
+    legacy_alias_basis:
+      - legacy_ifrs_namespace_and_ifrs_full_namespace_are_semantic_taxonomy_generations
+      - aliases_are_fixed_before_v2_target_resolution
+      - account_name_fuzzy_matching_is_not_allowed
+      - arithmetic_derivation_of_missing_source_accounts_is_not_allowed
+    require_revenue_minus_cost_equals_gross_profit: true
+    require_same_receipt_for_selected_accounts: true
+    require_receipt_date_not_after_evaluation_date: true
+    raw_payload_capture_before_target_extraction: true
+    raw_payload_capture_reused_after_parser_failure: true
+    first_successful_join_value_definition: current_official_opendart_response_captured_and_locked_before_target_extraction
+    post_join_target_refresh_allowed: false
+    correction_search_or_selection_allowed: false
+    source_fallback_allowed: false
+    partial_target_join_allowed: false
+
+  preprocessing:
+    fit_predictor_center_and_scale_from_training_fold_only: true
+    scaling_standard_deviation_ddof: 0
+    target_standardization_allowed: false
+    zero_variance_predictor_action: fail_candidate_fold
+    future_fold_statistics_allowed: false
+
+  chronological_evaluation:
+    scheme: chronological_expanding_window
+    shared_initial_training_rows: 12
+    scored_fold_count: 8
+    primary_metric: mae_krw_million
+    benchmark_id: previous_reported_quarter_gross_profit_persistence
+    benchmark_prediction_feature: lagged_company_gross_profit
+    candidate_must_strictly_beat_benchmark: true
+    every_scored_fold_design_must_have_full_column_rank: true
+    every_scored_fold_residual_dof_must_be_positive: true
+    condition_number_report_only: true
+    coefficient_stability_report_only: true
+    selection_order:
+      - lowest_aggregate_chronological_mae
+      - lower_parameter_count_on_exact_mae_tie
+      - earlier_estimator_freeze_manifest_order_on_remaining_exact_tie
+    no_candidate_pass_action: select_no_estimator_and_keep_forward_forecast_disabled
+
+  protected_outcomes:
+    2026Q1_role: report_only_after_historical_selection
+    2026Q1_may_change_candidate_selection: false
+    2026Q3_target_read: false
+    2026Q3_source_outcome_loaded: false
+    2026Q3_evaluated: false
+    2026Q4_target_read: false
+
+  trust_boundary_before_v2_resolution:
+    v1_raw_payload_retrieval_occurred: true
+    v1_target_observation_constructed: false
+    historical_target_join_persisted: false
+    estimator_fit_run: false
+    historical_backtest_run: false
+    final_estimator_selected: false
+    numeric_forward_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    investment_action_enabled: false
