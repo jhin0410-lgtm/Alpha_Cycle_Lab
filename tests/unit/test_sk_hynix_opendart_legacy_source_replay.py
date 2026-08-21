@@ -3,16 +3,15 @@ from __future__ import annotations
 import hashlib
 import io
 import zipfile
+from dataclasses import replace
 from datetime import date
 
 import pytest
 
 import alpha_cycle.intelligence.sk_hynix_opendart_pre2023_certified_replay as replay
+import alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_parser_dispatch as dispatch
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_fallback import (
     HISTORICAL_PRODUCT_REVENUE_PARSER_ID,
-)
-from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_parser_dispatch import (
-    _legacy_root_receipt_archive_parse_view,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     PeriodicProductRevenueSpec,
@@ -89,6 +88,14 @@ def _anchor(archive_bytes: bytes) -> CertifiedPre2023ProductRevenue:
     )
 
 
+def _raise_current_parser_error(*_args: object, **_kwargs: object) -> None:
+    raise ValueError("current parser rejected historical contract")
+
+
+def _unexpected_fallback(*_args: object, **_kwargs: object) -> None:
+    raise AssertionError("unanchored historical fallback must not run")
+
+
 def test_safe_member_name_allows_only_exact_expected_root_receipt() -> None:
     receipt = "20160516001896"
     assert _safe_member_name(f"/{receipt}.xml", expected_receipt=receipt) == f"{receipt}.xml"
@@ -106,7 +113,7 @@ def test_parser_only_legacy_root_receipt_view_preserves_payload() -> None:
     payload = b"<html><body>legacy filing</body></html>"
     raw = _zip(f"/{receipt}.xml", payload)
 
-    parse_view = _legacy_root_receipt_archive_parse_view(raw)
+    parse_view = dispatch._legacy_root_receipt_archive_parse_view(raw)
 
     assert parse_view != raw
     with zipfile.ZipFile(io.BytesIO(parse_view)) as archive:
@@ -120,9 +127,20 @@ def test_parser_only_legacy_root_receipt_view_does_not_sanitize_broadly() -> Non
     arbitrary_absolute = _zip("/not-a-receipt.xml", payload)
     traversal = _zip("../20160516001896.xml", payload)
 
-    assert _legacy_root_receipt_archive_parse_view(multiple) == multiple
-    assert _legacy_root_receipt_archive_parse_view(arbitrary_absolute) == arbitrary_absolute
-    assert _legacy_root_receipt_archive_parse_view(traversal) == traversal
+    assert dispatch._legacy_root_receipt_archive_parse_view(multiple) == multiple
+    assert dispatch._legacy_root_receipt_archive_parse_view(arbitrary_absolute) == arbitrary_absolute
+    assert dispatch._legacy_root_receipt_archive_parse_view(traversal) == traversal
+
+
+def test_parser_only_legacy_root_receipt_view_enforces_uncompressed_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = "20160516001896"
+    raw = _zip(f"/{receipt}.xml", b"123456789")
+    monkeypatch.setattr(dispatch, "MAX_DOCUMENT_UNCOMPRESSED_BYTES", 8)
+
+    with pytest.raises(ValueError, match="uncompressed-size limit"):
+        dispatch._legacy_root_receipt_archive_parse_view(raw)
 
 
 def test_exact_pre2023_archive_replays_registered_table(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -153,6 +171,25 @@ def test_exact_pre2023_archive_fails_on_byte_identity_drift(
         replay.parse_pre2023_certified_product_revenue_archive(_spec(), changed)
 
 
+def test_dispatch_fails_closed_on_certified_archive_identity_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = "20210517000667"
+    raw = _zip(f"{receipt}.xml", _legacy_table())
+    anchor = _anchor(raw)
+    changed = _zip(f"{receipt}.xml", _legacy_table() + b"\n")
+    monkeypatch.setattr(replay, "_anchor", lambda _spec_value: anchor)
+    monkeypatch.setattr(dispatch, "_current_archive_parser", _raise_current_parser_error)
+    monkeypatch.setattr(
+        dispatch,
+        "parse_historical_product_revenue_archive_fallback",
+        _unexpected_fallback,
+    )
+
+    with pytest.raises(ValueError, match="archive SHA-256"):
+        dispatch.parse_periodic_product_revenue_archive(_spec(), changed)
+
+
 def test_exact_pre2023_text_is_secondary_exact_value_witness(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -172,3 +209,49 @@ def test_exact_pre2023_text_is_secondary_exact_value_witness(
             _spec(),
             "DRAM 60 / NAND 20 / 기타 5 / 합계 85",
         )
+
+
+def test_dispatch_fails_closed_on_certified_text_witness_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    receipt = "20210517000667"
+    raw = _zip(f"{receipt}.xml", _legacy_table())
+    anchor = _anchor(raw)
+    monkeypatch.setattr(replay, "_anchor", lambda _spec_value: anchor)
+    monkeypatch.setattr(dispatch, "_current_text_parser", _raise_current_parser_error)
+    monkeypatch.setattr(
+        dispatch,
+        "parse_historical_product_revenue_text_prioritized",
+        _unexpected_fallback,
+    )
+
+    with pytest.raises(ValueError, match="exact anchored amounts"):
+        dispatch.parse_periodic_product_revenue_text(
+            _spec(),
+            "DRAM 60 / NAND 20 / 기타 5 / 합계 85",
+        )
+
+
+def test_unsupported_period_rejects_before_registry_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_spec = replace(
+        _spec(),
+        document_id="test-2016q1",
+        discovery_begin_date=date(2016, 4, 1),
+        discovery_end_date=date(2016, 5, 31),
+        period_start=date(2016, 1, 1),
+        period_end=date(2016, 3, 31),
+    )
+
+    def _unexpected_registry_load() -> None:
+        raise AssertionError("unsupported periods must not load the certified registry")
+
+    monkeypatch.setattr(
+        replay,
+        "load_certified_pre2023_product_revenue_registry",
+        _unexpected_registry_load,
+    )
+
+    with pytest.raises(ValueError, match="limited to 2021Q1-2022Q3"):
+        replay.parse_pre2023_certified_product_revenue_text(legacy_spec, "legacy")

@@ -25,6 +25,7 @@ from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_text_
     parse_historical_product_revenue_text_prioritized,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_pre2023_certified_replay import (
+    is_pre2023_certified_product_revenue_period,
     parse_pre2023_certified_product_revenue_archive,
     parse_pre2023_certified_product_revenue_text,
 )
@@ -38,6 +39,7 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_expected_repl
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
     parse_periodic_product_revenue_text as _current_text_parser,
 )
+from alpha_cycle.providers.opendart_documents import MAX_DOCUMENT_UNCOMPRESSED_BYTES
 
 _LEGACY_ROOT_RECEIPT_MEMBER = re.compile(r"^/([0-9]{14}\.xml)$", re.IGNORECASE)
 
@@ -63,7 +65,13 @@ def _legacy_root_receipt_archive_parse_view(archive_bytes: bytes) -> bytes:
         match = _LEGACY_ROOT_RECEIPT_MEMBER.fullmatch(info.filename.replace("\\", "/"))
         if match is None:
             return archive_bytes
+        if info.file_size < 0 or info.compress_size < 0:
+            raise ValueError("OpenDART document archive has invalid member sizes")
+        if info.file_size > MAX_DOCUMENT_UNCOMPRESSED_BYTES:
+            raise ValueError("OpenDART document archive exceeds the uncompressed-size limit")
         payload = source.read(info)
+        if len(payload) != info.file_size:
+            raise ValueError("OpenDART document member size changed while reading")
 
     output = io.BytesIO()
     with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED) as target:
@@ -85,6 +93,8 @@ def parse_periodic_product_revenue_text(
         try:
             return parse_pre2023_certified_product_revenue_text(spec, text)
         except ValueError as anchored_error:
+            if is_pre2023_certified_product_revenue_period(spec):
+                raise
             try:
                 return parse_historical_product_revenue_text_prioritized(spec, text)
             except ValueError as historical_error:
@@ -115,6 +125,8 @@ def parse_periodic_product_revenue_archive(
         try:
             return parse_pre2023_certified_product_revenue_archive(spec, archive_bytes)
         except ValueError as anchored_error:
+            if is_pre2023_certified_product_revenue_period(spec):
+                raise
             parse_archive = _legacy_root_receipt_archive_parse_view(archive_bytes)
             try:
                 return parse_historical_product_revenue_archive_fallback(spec, parse_archive)

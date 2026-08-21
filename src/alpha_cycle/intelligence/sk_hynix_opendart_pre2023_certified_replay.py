@@ -60,6 +60,19 @@ def _normalized(value: str) -> str:
     return " ".join(value.replace("\u00a0", " ").split()).casefold()
 
 
+def is_pre2023_certified_product_revenue_period(
+    spec: PeriodicProductRevenueSpec,
+) -> bool:
+    """Return whether the historical spec is governed by the frozen 2021-2022 registry."""
+
+    if spec.parser_id != HISTORICAL_PRODUCT_REVENUE_PARSER_ID:
+        return False
+    return (
+        spec.period_end.year in _SUPPORTED_YEARS
+        and spec.period_end.month in _QUARTER_BY_END_MONTH
+    )
+
+
 def _period_id(spec: PeriodicProductRevenueSpec) -> str:
     if spec.parser_id != HISTORICAL_PRODUCT_REVENUE_PARSER_ID:
         raise ValueError("Pre-2023 certified replay requires the historical parser contract")
@@ -71,10 +84,10 @@ def _period_id(spec: PeriodicProductRevenueSpec) -> str:
 
 
 def _anchor(spec: PeriodicProductRevenueSpec) -> CertifiedPre2023ProductRevenue:
+    period_id = _period_id(spec)
     registry = load_certified_pre2023_product_revenue_registry()
     if registry.ticker != spec.ticker:
         raise ValueError("Pre-2023 certified replay ticker does not match registry")
-    period_id = _period_id(spec)
     matches = [item for item in registry.periods if item.period_id == period_id]
     if len(matches) != 1:
         raise ValueError(f"Pre-2023 certified replay anchor must be unique: {period_id}")
@@ -249,6 +262,7 @@ def parse_pre2023_certified_product_revenue_archive(
 
 
 __all__ = [
+    "is_pre2023_certified_product_revenue_period",
     "parse_pre2023_certified_product_revenue_archive",
     "parse_pre2023_certified_product_revenue_text",
 ]
