@@ -150,8 +150,8 @@ def parse_periodic_product_revenue_archive(
                                 )
                             except ValueError as v4_error:
                                 raise ValueError(
-                                    "OpenDART product revenue archive failed current and historical "
-                                    "parsers: "
+                                    "OpenDART product revenue archive failed current "
+                                    "and historical parsers: "
                                     f"current={current_error}; anchored={anchored_error}; "
                                     f"historical={historical_error}; v5={v5_error}; "
                                     f"v2={v2_error}; v3={v3_error}; v4={v4_error}"
