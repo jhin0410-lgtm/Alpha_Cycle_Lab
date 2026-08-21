@@ -9,9 +9,9 @@ from dataclasses import asdict
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_parser_dispatch import (
-    parse_periodic_product_revenue_archive,
-    parse_periodic_product_revenue_text,
+from alpha_cycle.intelligence import sk_hynix_opendart_product_revenue_parser_dispatch as _dispatch
+from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_source_consensus import (
+    parse_periodic_product_revenue_source_consensus,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     DEFAULT_PERIODIC_PRODUCT_REVENUE_OUTPUT,
@@ -26,6 +26,9 @@ from alpha_cycle.providers.opendart_documents import (
     DisclosureDocumentArchive,
     OpenDartDisclosureDocumentClient,
 )
+
+parse_periodic_product_revenue_archive = _dispatch.parse_periodic_product_revenue_archive
+parse_periodic_product_revenue_text = _dispatch.parse_periodic_product_revenue_text
 
 
 def _certification_dict(
@@ -53,7 +56,7 @@ def build_periodic_product_revenue_certification(
     *,
     evaluation_date: date,
 ) -> OpenDartPeriodicProductRevenueCertification:
-    """Certify direct product revenue when normalized facts and source structure agree."""
+    """Certify direct product revenue under the applicable text/archive source contract."""
 
     document = archive.evidence
     if document.rcept_no != discovery.rcept_no:
@@ -67,20 +70,15 @@ def build_periodic_product_revenue_certification(
     if document.retrieved_at.date() > evaluation_date:
         raise ValueError("OpenDART product revenue retrieval is after evaluation date")
 
-    text_metrics = parse_periodic_product_revenue_text(discovery.spec, document.text)
-    structured_metrics = parse_periodic_product_revenue_archive(
+    metrics = parse_periodic_product_revenue_source_consensus(
         discovery.spec,
+        document.text,
         archive.archive_bytes,
     )
-    if structured_metrics != text_metrics:
-        raise ValueError(
-            "OpenDART normalized text and certified product structure disagree: "
-            f"text={text_metrics} structured={structured_metrics}"
-        )
     payload = _payload(
         discovery,
         document,
-        text_metrics,
+        metrics,
         evaluation_date=evaluation_date,
     )
     evidence_id = hashlib.sha256(
@@ -99,7 +97,7 @@ def build_periodic_product_revenue_certification(
         receipt_date=discovery.receipt_date,
         period_start=discovery.spec.period_start,
         period_end=discovery.spec.period_end,
-        metrics=text_metrics,
+        metrics=metrics,
         archive_sha256=document.archive_sha256,
         archive_bytes=document.archive_bytes,
         text_sha256=document.text_sha256,

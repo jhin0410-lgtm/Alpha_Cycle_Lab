@@ -103,8 +103,10 @@ def _validate_receipt_no(value: object) -> str:
     return text
 
 
-def _safe_member_name(value: str) -> str:
+def _safe_member_name(value: str, *, expected_receipt: str | None = None) -> str:
     normalized = value.replace("\\", "/")
+    if expected_receipt is not None and normalized == f"/{expected_receipt}.xml":
+        normalized = f"{expected_receipt}.xml"
     path = PurePosixPath(normalized)
     if path.is_absolute() or not path.parts or any(part in {"", ".", ".."} for part in path.parts):
         raise ValueError(f"OpenDART document archive has unsafe member path: {value!r}")
@@ -178,7 +180,12 @@ def _parse_document_archive(
         if len(infos) > MAX_DOCUMENT_MEMBER_COUNT:
             raise ValueError("OpenDART document archive contains too many members")
         for info in infos:
-            safe_name = _safe_member_name(info.filename)
+            original_name = info.filename.replace("\\", "/")
+            safe_name = _safe_member_name(info.filename, expected_receipt=receipt)
+            if safe_name != original_name:
+                warnings.append(
+                    f"legacy_exact_receipt_root_member_normalized:{original_name}->{safe_name}"
+                )
             if info.flag_bits & 0x1:
                 raise ValueError("OpenDART document archive contains an encrypted member")
             if info.file_size < 0 or info.compress_size < 0:

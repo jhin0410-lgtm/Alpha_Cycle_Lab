@@ -163,8 +163,23 @@ def test_immutable_receipt_replay_allows_later_retrieval_without_changing_availa
         "OpenDartDisclosureDocumentClient",
         lambda _client: SimpleNamespace(document_with_archive=lambda _receipt: archive),
     )
-    monkeypatch.setattr(replay, "parse_periodic_product_revenue_text", lambda *_args: metrics)
-    monkeypatch.setattr(replay, "parse_periodic_product_revenue_archive", lambda *_args: metrics)
+
+    def _source_consensus(
+        *,
+        spec: PeriodicProductRevenueSpec,
+        text: str,
+        archive_bytes: bytes,
+    ) -> ProductRevenueMetrics:
+        assert spec.document_id == "skhynix_000660_2021q1_ex_ante_pit_expansion"
+        assert text == "immutable normalized text"
+        assert archive_bytes == b"immutable-opendart-zip"
+        return metrics
+
+    monkeypatch.setattr(
+        replay,
+        "parse_periodic_product_revenue_source_consensus",
+        _source_consensus,
+    )
     monkeypatch.setattr(
         replay,
         "bind_periodic_product_revenue_parser_contract",

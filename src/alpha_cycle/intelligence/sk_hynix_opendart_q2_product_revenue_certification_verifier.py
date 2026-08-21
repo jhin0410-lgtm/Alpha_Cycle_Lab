@@ -8,9 +8,9 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
-from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_parser_dispatch import (
-    parse_periodic_product_revenue_archive,
-    parse_periodic_product_revenue_text,
+from alpha_cycle.intelligence import sk_hynix_opendart_product_revenue_parser_dispatch as _dispatch
+from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_source_consensus import (
+    parse_periodic_product_revenue_source_consensus,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     DiscoveredPeriodicProductRevenue,
@@ -24,6 +24,9 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_contract impo
 from alpha_cycle.intelligence.source_snapshot_asof import source_snapshot_date_as_of
 from alpha_cycle.providers.opendart import CorpCode
 from alpha_cycle.providers.opendart_documents import _parse_document_archive
+
+parse_periodic_product_revenue_archive = _dispatch.parse_periodic_product_revenue_archive
+parse_periodic_product_revenue_text = _dispatch.parse_periodic_product_revenue_text
 
 
 def _object(path: Path, label: str) -> dict[str, object]:
@@ -152,9 +155,13 @@ def load_periodic_product_revenue_certification(
     if persisted_text != document.text:
         raise ValueError("Periodic product revenue normalized text does not reproduce from ZIP")
 
-    metrics = parse_periodic_product_revenue_text(spec, document.text)
+    metrics = parse_periodic_product_revenue_source_consensus(
+        spec,
+        document.text,
+        archive_bytes,
+    )
     if metrics != certification.metrics:
-        raise ValueError("Periodic product revenue text parser output does not reproduce")
+        raise ValueError("Periodic product revenue source consensus output does not reproduce")
     structured_metrics = parse_periodic_product_revenue_archive(spec, archive_bytes)
     if structured_metrics != certification.metrics:
         raise ValueError(

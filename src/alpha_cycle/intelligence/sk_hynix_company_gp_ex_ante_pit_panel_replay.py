@@ -11,8 +11,8 @@ opening historical targets or changing the frozen row-selection rule:
 
 The original expansion contract, feature set, legacy-year priority, and 20-row completion
 gate remain unchanged. Product evidence still requires exact receipt identity, archived
-ZIP bytes, direct DRAM/NAND/Other/Total rows, text/structured parser agreement, parser-
-contract binding, and company/product revenue reconciliation.
+ZIP bytes, direct DRAM/NAND/Other/Total rows, source-consensus validation, parser-contract
+binding, and company/product revenue reconciliation.
 """
 
 from __future__ import annotations
@@ -54,9 +54,8 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_protocol import (
     FrozenCompanyGPExAnteProtocol,
     load_frozen_company_gp_ex_ante_protocol,
 )
-from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_parser_dispatch import (
-    parse_periodic_product_revenue_archive,
-    parse_periodic_product_revenue_text,
+from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_source_consensus import (
+    parse_periodic_product_revenue_source_consensus,
 )
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_certification import (
     OpenDartPeriodicProductRevenueCertification,
@@ -445,20 +444,15 @@ def _capture_product_source_for_replay(
             raise ValueError("PIT replay product raw archive hash mismatch")
         if document.text_truncated:
             raise ValueError("PIT replay product normalized text is truncated")
-        text_metrics = parse_periodic_product_revenue_text(spec, document.text)
-        structured_metrics = parse_periodic_product_revenue_archive(
-            spec,
-            archive.archive_bytes,
+        product_metrics = parse_periodic_product_revenue_source_consensus(
+            spec=spec,
+            text=document.text,
+            archive_bytes=archive.archive_bytes,
         )
-        if text_metrics != structured_metrics:
-            raise ValueError(
-                "PIT replay product normalized/structured parsers disagree: "
-                f"text={text_metrics} structured={structured_metrics}"
-            )
         payload = _payload(
             discovery,
             document,
-            text_metrics,
+            product_metrics,
             evaluation_date=evaluation_date,
         )
         evidence_id = _sha(payload)
@@ -473,7 +467,7 @@ def _capture_product_source_for_replay(
             receipt_date=discovery.receipt_date,
             period_start=spec.period_start,
             period_end=spec.period_end,
-            metrics=text_metrics,
+            metrics=product_metrics,
             archive_sha256=document.archive_sha256,
             archive_bytes=document.archive_bytes,
             text_sha256=document.text_sha256,
