@@ -38,13 +38,13 @@ from alpha_cycle.intelligence.sk_hynix_pre2023_certified_product_revenue_registr
     load_certified_pre2023_product_revenue_registry,
 )
 from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_certification import (
-    _amount_at,
-    _direct_quarter_column,
     _DRAM_LABELS,
     _NAND_LABELS,
     _OTHER_LABELS,
-    _row_for_label,
     _TOTAL_LABELS,
+    _amount_at,
+    _direct_quarter_column,
+    _row_for_label,
 )
 from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_source_closure import (
     ProductRevenueTableWitness,
