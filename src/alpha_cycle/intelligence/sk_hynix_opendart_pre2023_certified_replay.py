@@ -161,10 +161,6 @@ def _witness_for_anchor(
         raise ValueError("Pre-2023 certified replay anchored table is empty")
     context = "\n".join((*table.prefix_text, *(cell for row in rows for cell in row if cell)))
     unit_markers = tuple(marker for marker in ("백만원", "억원") if marker in context)
-    if unit_markers != ("백만원",):
-        raise ValueError(
-            "Pre-2023 certified replay anchored table must retain the original million-KRW unit"
-        )
     dram_rows = _label_positions(rows, _DRAM_LABELS)
     nand_rows = _label_positions(rows, _NAND_LABELS)
     if not dram_rows or not nand_rows:
