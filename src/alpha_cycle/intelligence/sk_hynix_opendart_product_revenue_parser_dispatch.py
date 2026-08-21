@@ -21,6 +21,9 @@ from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_layou
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_layout_v4 import (
     parse_historical_product_revenue_archive_v4,
 )
+from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_layout_v5 import (
+    parse_historical_product_revenue_archive_v5,
+)
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_text_policy import (
     parse_historical_product_revenue_text_prioritized,
 )
@@ -132,24 +135,27 @@ def parse_periodic_product_revenue_archive(
                 return parse_historical_product_revenue_archive_fallback(spec, parse_archive)
             except ValueError as historical_error:
                 try:
-                    return parse_historical_product_revenue_archive_v2(spec, parse_archive)
-                except ValueError as v2_error:
+                    return parse_historical_product_revenue_archive_v5(spec, parse_archive)
+                except ValueError as v5_error:
                     try:
-                        return parse_historical_product_revenue_archive_v3(spec, parse_archive)
-                    except ValueError as v3_error:
+                        return parse_historical_product_revenue_archive_v2(spec, parse_archive)
+                    except ValueError as v2_error:
                         try:
-                            return parse_historical_product_revenue_archive_v4(
-                                spec,
-                                parse_archive,
-                            )
-                        except ValueError as v4_error:
-                            raise ValueError(
-                                "OpenDART product revenue archive failed current and historical "
-                                "parsers: "
-                                f"current={current_error}; anchored={anchored_error}; "
-                                f"historical={historical_error}; v2={v2_error}; "
-                                f"v3={v3_error}; v4={v4_error}"
-                            ) from v4_error
+                            return parse_historical_product_revenue_archive_v3(spec, parse_archive)
+                        except ValueError as v3_error:
+                            try:
+                                return parse_historical_product_revenue_archive_v4(
+                                    spec,
+                                    parse_archive,
+                                )
+                            except ValueError as v4_error:
+                                raise ValueError(
+                                    "OpenDART product revenue archive failed current and historical "
+                                    "parsers: "
+                                    f"current={current_error}; anchored={anchored_error}; "
+                                    f"historical={historical_error}; v5={v5_error}; "
+                                    f"v2={v2_error}; v3={v3_error}; v4={v4_error}"
+                                ) from v4_error
 
 
 __all__ = [
