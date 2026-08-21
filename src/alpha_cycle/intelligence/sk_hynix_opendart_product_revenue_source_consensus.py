@@ -38,6 +38,10 @@ def _normalized(value: str) -> str:
     return " ".join(value.replace("\u00a0", " ").split()).casefold()
 
 
+def _compact(value: str) -> str:
+    return "".join(value.replace("\u00a0", " ").split()).casefold()
+
+
 def _lines(text: str) -> tuple[str, ...]:
     return tuple(
         " ".join(line.replace("\u00a0", " ").split())
@@ -47,8 +51,18 @@ def _lines(text: str) -> tuple[str, ...]:
 
 
 def _label_matches(value: str, labels: tuple[str, ...]) -> bool:
-    normalized = _normalized(value)
-    return normalized in {_normalized(label) for label in labels}
+    compact = _compact(value)
+    return compact in {_compact(label) for label in labels}
+
+
+def _is_exact_q1(spec: PeriodicProductRevenueSpec) -> bool:
+    return (
+        spec.period_start.month == 1
+        and spec.period_start.day == 1
+        and spec.period_end.month == 3
+        and spec.period_end.day == 31
+        and spec.period_start.year == spec.period_end.year
+    )
 
 
 def _next_label(
@@ -97,6 +111,12 @@ def verify_historical_product_revenue_text_witness(
         raise ValueError("Historical product revenue normalized-text witness is empty")
     folded = "\n".join(lines).casefold()
     for anchor in spec.expected_identity_anchors:
+        if _compact(anchor) == "3개월" and _is_exact_q1(spec):
+            # A Q1 accounting period is itself exactly three months. Older SK hynix Q1
+            # filings label the source columns directly as 당분기/전분기 without printing
+            # a separate 3개월 header. Archive structure still chooses the direct current
+            # column; this witness remains responsible for identity, unit, labels, values.
+            continue
         if _normalized(anchor) not in folded:
             raise ValueError(
                 f"Historical product revenue normalized-text anchor missing: {anchor}"
