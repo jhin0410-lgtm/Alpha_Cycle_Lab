@@ -128,7 +128,10 @@ def test_parser_only_legacy_root_receipt_view_does_not_sanitize_broadly() -> Non
     traversal = _zip("../20160516001896.xml", payload)
 
     assert dispatch._legacy_root_receipt_archive_parse_view(multiple) == multiple
-    assert dispatch._legacy_root_receipt_archive_parse_view(arbitrary_absolute) == arbitrary_absolute
+    assert (
+        dispatch._legacy_root_receipt_archive_parse_view(arbitrary_absolute)
+        == arbitrary_absolute
+    )
     assert dispatch._legacy_root_receipt_archive_parse_view(traversal) == traversal
 
 
