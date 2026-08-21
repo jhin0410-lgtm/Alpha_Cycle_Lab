@@ -70,15 +70,15 @@ def _q1_html(*, marker: bool = True, ambiguous_current: bool = False) -> str:
     extra_total = "<td>3,655,717</td>" if ambiguous_current else ""
     return f"""
     <html><body>
-      <p>18. 매출액</p>
+      <p>연결재무제표 주석</p>
       {context}
       <p>(단위: 백만원)</p>
       <table>
         <tr><th>구 분</th><th>당분기</th>{extra}<th>전분기</th></tr>
         <tr><td>DRAM</td><td>2,766,614</td>{extra_values}<td>3,632,987</td></tr>
         <tr><td>NAND Flash</td><td>778,961</td>{extra_nand}<td>1,044,841</td></tr>
-        <tr><td>기타</td><td>110,142</td>{extra_other}<td>140,513</td></tr>
-        <tr><td>합계</td><td>3,655,717</td>{extra_total}<td>4,818,341</td></tr>
+        <tr><td>기 타</td><td>110,142</td>{extra_other}<td>140,513</td></tr>
+        <tr><td>합 계</td><td>3,655,717</td>{extra_total}<td>4,818,341</td></tr>
       </table>
     </body></html>
     """
@@ -87,7 +87,7 @@ def _q1_html(*, marker: bool = True, ambiguous_current: bool = False) -> str:
 def _q2_html() -> str:
     return """
     <html><body>
-      <p>18. 매출액</p>
+      <p>연결재무제표 주석</p>
       <p>(2) 당반기와 전반기 중 매출액의 품목별 세부내역은 다음과 같습니다.</p>
       <p>(단위: 백만원)</p>
       <table>
@@ -98,14 +98,14 @@ def _q2_html() -> str:
         </tr>
         <tr><td>DRAM</td><td>60</td><td>120</td><td>55</td><td>110</td></tr>
         <tr><td>NAND Flash</td><td>30</td><td>60</td><td>25</td><td>50</td></tr>
-        <tr><td>기타</td><td>10</td><td>20</td><td>10</td><td>20</td></tr>
-        <tr><td>합계</td><td>100</td><td>200</td><td>90</td><td>180</td></tr>
+        <tr><td>기 타</td><td>10</td><td>20</td><td>10</td><td>20</td></tr>
+        <tr><td>합 계</td><td>100</td><td>200</td><td>90</td><td>180</td></tr>
       </table>
     </body></html>
     """
 
 
-def test_2016_q1_plain_revenue_note_uses_direct_current_period_rows() -> None:
+def test_2016_q1_local_detail_context_uses_direct_current_period_rows() -> None:
     metrics = parse_historical_product_revenue_archive_v5(_spec("2016Q1"), _zip(_q1_html()))
 
     assert metrics.dram_total == 2_766_614.0
@@ -133,7 +133,7 @@ def test_2016_q2_reads_only_unique_current_three_month_column() -> None:
     assert metrics.reported_company_revenue == 100.0
 
 
-def test_plain_revenue_heading_without_product_detail_context_is_rejected() -> None:
+def test_product_rows_without_local_product_detail_context_are_rejected() -> None:
     with pytest.raises(ValueError, match="must resolve uniquely: candidates=0"):
         parse_historical_product_revenue_archive_v5(
             _spec("2016Q1"),
