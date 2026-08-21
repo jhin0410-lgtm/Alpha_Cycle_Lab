@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import io
+import subprocess
+import sys
 import zipfile
 from dataclasses import replace
 from datetime import date
@@ -94,6 +96,21 @@ def _raise_current_parser_error(*_args: object, **_kwargs: object) -> None:
 
 def _unexpected_fallback(*_args: object, **_kwargs: object) -> None:
     raise AssertionError("unanchored historical fallback must not run")
+
+
+def test_expansion_cli_imports_from_clean_interpreter() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import alpha_cycle.sk_hynix_company_gp_ex_ante_pit_panel_expansion_cli",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_safe_member_name_allows_only_exact_expected_root_receipt() -> None:
