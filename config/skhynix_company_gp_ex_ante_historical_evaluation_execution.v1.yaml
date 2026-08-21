@@ -55,7 +55,7 @@ execution:
     require_revenue_minus_cost_equals_gross_profit: true
     require_same_receipt_for_selected_accounts: true
     require_receipt_date_not_after_evaluation_date: true
-    first_join_value_definition: current_official_opendart_response_at_first_target_join_then_lock_exact_payload_bytes
+    first_join_value_definition: current_official_opendart_response_at_first_target_join_then_lock_canonical_captured_payload_bytes
     post_join_target_refresh_allowed: false
     correction_search_or_selection_allowed: false
     source_fallback_allowed: false
