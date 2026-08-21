@@ -9,10 +9,7 @@ from dataclasses import asdict
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_parser_dispatch import (
-    parse_periodic_product_revenue_archive as parse_periodic_product_revenue_archive,
-    parse_periodic_product_revenue_text as parse_periodic_product_revenue_text,
-)
+from alpha_cycle.intelligence import sk_hynix_opendart_product_revenue_parser_dispatch as _dispatch
 from alpha_cycle.intelligence.sk_hynix_opendart_product_revenue_source_consensus import (
     parse_periodic_product_revenue_source_consensus,
 )
@@ -29,6 +26,9 @@ from alpha_cycle.providers.opendart_documents import (
     DisclosureDocumentArchive,
     OpenDartDisclosureDocumentClient,
 )
+
+parse_periodic_product_revenue_archive = _dispatch.parse_periodic_product_revenue_archive
+parse_periodic_product_revenue_text = _dispatch.parse_periodic_product_revenue_text
 
 
 def _certification_dict(
