@@ -1,0 +1,52 @@
+schema_version: 1
+freeze:
+  freeze_id: skhynix_company_gp_ex_ante_selected_estimator_full_fit
+  freeze_version: 1.0-post-historical-selection-deterministic-full-fit
+  status: frozen_post_historical_selection_before_prospective_forecast
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+
+  locked_inputs:
+    historical_execution_v2_path: config/skhynix_company_gp_ex_ante_historical_evaluation_execution.v2.yaml
+    scope_freeze_path: data/private/research/skhynix-company-gp-ex-ante-scope-freeze/latest_scope_freeze.json
+    estimator_freeze_path: config/skhynix_company_gp_ex_ante_estimator_freeze.v1.yaml
+    historical_target_join_path: data/private/research/skhynix-company-gp-ex-ante-first-historical-evaluation/latest_historical_target_join.json
+    historical_backtest_path: data/private/research/skhynix-company-gp-ex-ante-first-historical-evaluation/latest_historical_backtest.json
+    historical_raw_target_capture_path: data/private/research/skhynix-company-gp-ex-ante-first-historical-evaluation/latest_historical_raw_target_capture.json
+
+  selected_estimator_inheritance:
+    selected_candidate_source: frozen_historical_backtest_selected_candidate_id
+    candidate_definition_source: pre_target_estimator_freeze
+    new_candidate_allowed: false
+    predictor_change_allowed: false
+    feature_addition_allowed: false
+    hyperparameter_tuning_allowed: false
+    benchmark_reselection_allowed: false
+    fold_reselection_allowed: false
+
+  deterministic_full_fit:
+    training_rows: 20
+    training_period_source: exact_frozen_historical_target_join_order
+    estimator: ordinary_least_squares
+    include_intercept: true
+    fit_predictor_center_and_scale_on_all_twenty_training_rows: true
+    scaling_standard_deviation_ddof: 0
+    target_standardization_allowed: false
+    require_full_column_rank: true
+    require_positive_residual_degrees_of_freedom: true
+    condition_number_role: report_only
+    training_error_metrics_role: report_only
+    coefficient_stability_role: historical_backtest_report_only
+
+  protected_prospective_boundary:
+    prospective_feature_vector_frozen: false
+    prospective_forecast_run: false
+    2026q1_used_for_selection: false
+    2026q3_target_read: false
+    2026q3_source_outcome_loaded: false
+    2026q3_evaluated: false
+    numeric_forward_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    investment_action_enabled: false
