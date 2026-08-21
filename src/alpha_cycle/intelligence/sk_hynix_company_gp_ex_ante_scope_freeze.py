@@ -1,17 +1,17 @@
 """Freeze the exact twenty-row SK hynix ex-ante development scope target-blind.
 
-This layer is the bridge between source-only PIT panel construction and the first historical
-target join. It consumes only the completed expansion report and locked PIT feature bundle,
-then binds their immutable evidence identities, the exact target-period set, feature schema,
-and the already-frozen estimator-selection geometry. It never loads historical target values,
-fits an estimator, runs a backtest, or opens the protected 2026Q3 outcome.
+This layer bridges source-only PIT panel construction and the first historical target join.
+It consumes only the completed expansion report and locked PIT feature bundle, then binds
+immutable evidence identities, the exact period set, feature schema, and preregistered
+estimator geometry. It never loads historical targets, fits a model, runs a backtest, or
+opens the protected 2026Q3 outcome.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -22,6 +22,7 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_estimator_freeze impor
 )
 from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_feature_frontier import (
     DEFAULT_COMPANY_GP_EX_ANTE_FEATURE_FRONTIER,
+    ExAnteFeatureFrontier,
     load_ex_ante_feature_frontier,
 )
 from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_pit import (
@@ -36,6 +37,7 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_pit_panel_expansion im
 )
 from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_protocol import (
     DEFAULT_COMPANY_GP_EX_ANTE_PROTOCOL,
+    FrozenCompanyGPExAnteProtocol,
     load_frozen_company_gp_ex_ante_protocol,
 )
 
@@ -67,7 +69,9 @@ _EXPECTED_FEATURE_IDS = (
 _STATUS = "skhynix_ex_ante_exact_twenty_period_scope_frozen_target_blind"
 _NEXT_ACTION = "perform_first_historical_target_join_against_exact_frozen_scope"
 _EXPANSION_STATUS = "skhynix_ex_ante_pit_panel_expansion_complete_target_blind"
-_EXPANSION_NEXT_ACTION = "refreeze_exact_twenty_period_ex_ante_scope_before_first_target_join"
+_EXPANSION_NEXT_ACTION = (
+    "refreeze_exact_twenty_period_ex_ante_scope_before_first_target_join"
+)
 
 
 def _sha(payload: object) -> str:
@@ -275,7 +279,8 @@ def _validate_expansion_report(
     combined_periods = tuple(
         str(item)
         for item in _array(
-            result.get("combined_target_periods"), "combined_target_periods"
+            result.get("combined_target_periods"),
+            "combined_target_periods",
         )
     )
     if added_periods != _EXPECTED_ADDED_TARGET_PERIODS:
@@ -324,34 +329,31 @@ def _validate_expansion_report(
 def _validate_bundle_scope(
     bundle: PointInTimeFeatureBundle,
     *,
-    protocol: object,
-    frontier: object,
+    protocol: FrozenCompanyGPExAnteProtocol,
+    frontier: ExAnteFeatureFrontier,
 ) -> None:
-    # Runtime attributes are intentionally consumed through the concrete frozen objects
-    # returned by their loaders; object annotations keep this helper local and cycle-free.
-    protocol_obj = cast(object, protocol)
-    frontier_obj = cast(object, frontier)
     if bundle.target_values_included:
         raise ValueError("Ex-ante scope freeze bundle unexpectedly contains target values")
     if len(bundle.observations) != 100:
         raise ValueError("Ex-ante scope freeze bundle must contain exactly 100 observations")
 
-    protocol_origin_for = getattr(protocol_obj, "origin_for")
-    frontier_by_id = getattr(frontier_obj, "by_id")
-    feature_map = frontier_by_id()
+    feature_map = frontier.by_id()
     by_period: dict[str, list[str]] = {}
     rejected: list[str] = []
     for observation in bundle.observations:
         by_period.setdefault(observation.period_id, []).append(observation.feature_id)
         feature = feature_map.get(observation.feature_id)
         if feature is None:
-            rejected.append(f"{observation.period_id}:{observation.feature_id}:unknown_feature")
+            rejected.append(
+                f"{observation.period_id}:{observation.feature_id}:unknown_feature"
+            )
             continue
         if observation.provenance_class not in feature.acceptable_provenance_classes:
             rejected.append(
                 f"{observation.period_id}:{observation.feature_id}:provenance_not_allowed"
             )
-        if observation.source_available_at > protocol_origin_for(observation.period_id):
+        origin = protocol.origin_for(observation.period_id)
+        if observation.source_available_at > origin:
             rejected.append(
                 f"{observation.period_id}:{observation.feature_id}:source_after_origin"
             )
@@ -369,7 +371,7 @@ def _validate_bundle_scope(
                     f"{observation.period_id}:{observation.feature_id}:missing_capture_time"
                 )
             else:
-                if observation.captured_at > protocol_origin_for(observation.period_id):
+                if observation.captured_at > origin:
                     rejected.append(
                         f"{observation.period_id}:{observation.feature_id}:capture_after_origin"
                     )
@@ -387,7 +389,9 @@ def _validate_bundle_scope(
             )
     if rejected:
         details = ", ".join(rejected[:5])
-        raise ValueError(f"Ex-ante scope freeze PIT audit rejected observations: {details}")
+        raise ValueError(
+            f"Ex-ante scope freeze PIT audit rejected observations: {details}"
+        )
 
 
 def build_exact_twenty_period_ex_ante_scope_freeze(
@@ -414,7 +418,8 @@ def build_exact_twenty_period_ex_ante_scope_freeze(
         raise ValueError("Ex-ante scope freeze estimator feature schema drifted")
 
     report_bytes, report = _json_object(
-        Path(expansion_report_path), "PIT expansion report"
+        Path(expansion_report_path),
+        "PIT expansion report",
     )
     bundle = load_point_in_time_feature_bundle(combined_bundle_path)
     _validate_expansion_report(
@@ -436,10 +441,9 @@ def build_exact_twenty_period_ex_ante_scope_freeze(
     if not all_candidates_ready:
         raise ValueError("Ex-ante scope freeze has a sample-ineligible frozen candidate")
 
-    timestamp = frozen_at or datetime.now(UTC)
     provisional = FrozenExactTwentyPeriodExAnteScope(
         evidence_id="0" * 64,
-        frozen_at=timestamp,
+        frozen_at=frozen_at or datetime.now(UTC),
         status=_STATUS,
         ticker=protocol.ticker,
         target_metric=protocol.target_metric,
@@ -461,10 +465,7 @@ def build_exact_twenty_period_ex_ante_scope_freeze(
         all_frozen_candidates_sample_eligible=all_candidates_ready,
         next_action=_NEXT_ACTION,
     )
-    evidence_id = _sha(_scope_payload(provisional))
-    return FrozenExactTwentyPeriodExAnteScope(
-        **{**provisional.__dict__, "evidence_id": evidence_id}
-    )
+    return replace(provisional, evidence_id=_sha(_scope_payload(provisional)))
 
 
 def persist_exact_twenty_period_ex_ante_scope_freeze(
@@ -531,21 +532,28 @@ def load_frozen_exact_twenty_period_ex_ante_scope(
         feature_frontier_evidence_id=str(
             body.get("feature_frontier_evidence_id", "")
         ),
-        estimator_freeze_evidence_id=str(body.get("estimator_freeze_evidence_id", "")),
+        estimator_freeze_evidence_id=str(
+            body.get("estimator_freeze_evidence_id", "")
+        ),
         expansion_contract_evidence_id=str(
             body.get("expansion_contract_evidence_id", "")
         ),
         expansion_report_sha256=str(body.get("expansion_report_sha256", "")),
         base_bundle_evidence_id=str(body.get("base_bundle_evidence_id", "")),
-        combined_bundle_evidence_id=str(body.get("combined_bundle_evidence_id", "")),
+        combined_bundle_evidence_id=str(
+            body.get("combined_bundle_evidence_id", "")
+        ),
         target_periods=tuple(
-            str(item) for item in _array(body.get("target_periods"), "target_periods")
+            str(item)
+            for item in _array(body.get("target_periods"), "target_periods")
         ),
         feature_ids=tuple(
             str(item) for item in _array(body.get("feature_ids"), "feature_ids")
         ),
         target_row_count=int(str(body.get("target_row_count", -1))),
-        feature_observation_count=int(str(body.get("feature_observation_count", -1))),
+        feature_observation_count=int(
+            str(body.get("feature_observation_count", -1))
+        ),
         selected_legacy_year=int(str(body.get("selected_legacy_year", -1))),
         shared_initial_training_rows=int(
             str(body.get("shared_initial_training_rows", -1))
