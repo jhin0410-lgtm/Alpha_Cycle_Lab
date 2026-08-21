@@ -10,7 +10,9 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_pit_panel_expansion im
     DEFAULT_EX_ANTE_PIT_PANEL_EXPANSION,
     DEFAULT_EX_ANTE_PIT_PANEL_EXPANSION_BUNDLE,
     DEFAULT_EX_ANTE_PIT_PANEL_EXPANSION_REPORT,
-    run_target_blind_pit_panel_expansion,
+)
+from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_pit_panel_replay import (
+    run_target_blind_pit_panel_expansion_replay,
 )
 from alpha_cycle.providers.opendart import OpenDartReadOnlyClient
 
@@ -40,7 +42,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    result = run_target_blind_pit_panel_expansion(
+    result = run_target_blind_pit_panel_expansion_replay(
         OpenDartReadOnlyClient.from_env(),
         evaluation_date=args.evaluation_date,
         manifest=Path(args.manifest),
