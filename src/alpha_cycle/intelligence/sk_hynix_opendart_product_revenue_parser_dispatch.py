@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import io
+import re
+import zipfile
+
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_fallback import (
     HISTORICAL_PRODUCT_REVENUE_PARSER_ID,
     parse_historical_product_revenue_archive_fallback,
@@ -34,6 +38,37 @@ from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_expected_repl
 from alpha_cycle.intelligence.sk_hynix_opendart_q2_product_revenue_layout import (
     parse_periodic_product_revenue_text as _current_text_parser,
 )
+
+_LEGACY_ROOT_RECEIPT_MEMBER = re.compile(r"^/([0-9]{14}\.xml)$", re.IGNORECASE)
+
+
+def _legacy_root_receipt_archive_parse_view(archive_bytes: bytes) -> bytes:
+    """Return a parser-only safe-name ZIP for one observed legacy OpenDART shape.
+
+    The source bytes are never replaced in provenance evidence.  A view is created only
+    when the archive has exactly one file and its member is `/14-digit-receipt.xml`.
+    All other archives are returned unchanged so the normal strict path checks remain in
+    force downstream.
+    """
+
+    try:
+        source = zipfile.ZipFile(io.BytesIO(archive_bytes))
+    except zipfile.BadZipFile:
+        return archive_bytes
+    with source:
+        infos = [info for info in source.infolist() if not info.is_dir()]
+        if len(infos) != 1:
+            return archive_bytes
+        info = infos[0]
+        match = _LEGACY_ROOT_RECEIPT_MEMBER.fullmatch(info.filename.replace("\\", "/"))
+        if match is None:
+            return archive_bytes
+        payload = source.read(info)
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, mode="w", compression=zipfile.ZIP_DEFLATED) as target:
+        target.writestr(match.group(1), payload)
+    return output.getvalue()
 
 
 def parse_periodic_product_revenue_text(
@@ -70,7 +105,7 @@ def parse_periodic_product_revenue_archive(
     spec: PeriodicProductRevenueSpec,
     archive_bytes: bytes,
 ) -> ProductRevenueMetrics:
-    """Preserve current parsing, then exact legacy anchors before observed raw fallbacks."""
+    """Preserve raw-source anchors, then use a narrow view for legacy parser compatibility."""
 
     try:
         return _current_archive_parser(spec, archive_bytes)
@@ -80,17 +115,21 @@ def parse_periodic_product_revenue_archive(
         try:
             return parse_pre2023_certified_product_revenue_archive(spec, archive_bytes)
         except ValueError as anchored_error:
+            parse_archive = _legacy_root_receipt_archive_parse_view(archive_bytes)
             try:
-                return parse_historical_product_revenue_archive_fallback(spec, archive_bytes)
+                return parse_historical_product_revenue_archive_fallback(spec, parse_archive)
             except ValueError as historical_error:
                 try:
-                    return parse_historical_product_revenue_archive_v2(spec, archive_bytes)
+                    return parse_historical_product_revenue_archive_v2(spec, parse_archive)
                 except ValueError as v2_error:
                     try:
-                        return parse_historical_product_revenue_archive_v3(spec, archive_bytes)
+                        return parse_historical_product_revenue_archive_v3(spec, parse_archive)
                     except ValueError as v3_error:
                         try:
-                            return parse_historical_product_revenue_archive_v4(spec, archive_bytes)
+                            return parse_historical_product_revenue_archive_v4(
+                                spec,
+                                parse_archive,
+                            )
                         except ValueError as v4_error:
                             raise ValueError(
                                 "OpenDART product revenue archive failed current and historical "
