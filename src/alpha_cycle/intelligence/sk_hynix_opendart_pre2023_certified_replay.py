@@ -20,6 +20,7 @@ import io
 import re
 import zipfile
 from pathlib import PurePosixPath
+from typing import TYPE_CHECKING
 
 from alpha_cycle.intelligence.sk_hynix_opendart_historical_product_revenue_fallback import (
     HISTORICAL_PRODUCT_REVENUE_PARSER_ID,
@@ -37,19 +38,12 @@ from alpha_cycle.intelligence.sk_hynix_pre2023_certified_product_revenue_registr
     CertifiedPre2023ProductRevenue,
     load_certified_pre2023_product_revenue_registry,
 )
-from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_certification import (
-    _DRAM_LABELS,
-    _NAND_LABELS,
-    _OTHER_LABELS,
-    _TOTAL_LABELS,
-    _amount_at,
-    _direct_quarter_column,
-    _row_for_label,
-)
-from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_source_closure import (
-    ProductRevenueTableWitness,
-)
 from alpha_cycle.providers.opendart_documents import _decode_text, _safe_member_name
+
+if TYPE_CHECKING:
+    from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_source_closure import (
+        ProductRevenueTableWitness,
+    )
 
 _SUPPORTED_YEARS = frozenset({2021, 2022})
 _QUARTER_BY_END_MONTH = {3: 1, 6: 2, 9: 3}
@@ -160,6 +154,16 @@ def _witness_for_anchor(
     *,
     anchor: CertifiedPre2023ProductRevenue,
 ) -> ProductRevenueTableWitness:
+    # Import the historical certification graph only after parser dispatch is initialized.
+    # Source-closure diagnostics import the candidate replay path, which imports dispatch.
+    from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_certification import (
+        _DRAM_LABELS,
+        _NAND_LABELS,
+    )
+    from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_source_closure import (
+        ProductRevenueTableWitness,
+    )
+
     parser = _TableExtractor()
     parser.feed(decoded)
     parser.close()
@@ -230,6 +234,19 @@ def parse_pre2023_certified_product_revenue_archive(
             f"member={anchor.member_name} count={len(matching_members)}"
         )
     decoded, _encoding = _decode_text(matching_members[0])
+
+    # Deliberately late: importing this certification layer during module import creates
+    # parser_dispatch -> certified_replay -> source_closure -> candidate_replay -> dispatch.
+    from alpha_cycle.intelligence.sk_hynix_pre2023_product_revenue_certification import (
+        _DRAM_LABELS,
+        _NAND_LABELS,
+        _OTHER_LABELS,
+        _TOTAL_LABELS,
+        _amount_at,
+        _direct_quarter_column,
+        _row_for_label,
+    )
+
     witness = _witness_for_anchor(decoded, anchor=anchor)
     column, semantics = _direct_quarter_column(witness)
     if column != anchor.direct_quarter_column_index:
