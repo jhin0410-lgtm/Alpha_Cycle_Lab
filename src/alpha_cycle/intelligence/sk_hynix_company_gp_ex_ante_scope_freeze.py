@@ -295,8 +295,8 @@ def _validate_expansion_report(
         "eligible_added_observation_count": 30,
         "rejected_added_observation_count": 0,
     }
-    for key, expected in numeric_expectations.items():
-        if result.get(key) != expected:
+    for key, numeric_expected in numeric_expectations.items():
+        if result.get(key) != numeric_expected:
             raise ValueError(f"Ex-ante scope freeze expansion report {key} drifted")
     required_true = (
         "all_added_observations_point_in_time_eligible",
