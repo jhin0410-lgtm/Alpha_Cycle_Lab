@@ -58,6 +58,7 @@ def _spec() -> PeriodicProductRevenueSpec:
 def _legacy_table() -> bytes:
     return """
     <html><body>
+      <p>(단위: 백만원)</p>
       <table>
         <tr><th>구분</th><th>당분기</th><th>전분기</th></tr>
         <tr><td>DRAM</td><td>60</td><td>50</td></tr>
