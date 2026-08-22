@@ -64,6 +64,7 @@ def _point(
     kind: ReferenceFrameKind = ReferenceFrameKind.HISTORICAL_FORWARD_VINTAGE,
     evidence: tuple[str, ...] = (_EVIDENCE,),
     target_period_end: date = date(2026, 12, 31),
+    observed_at: datetime | None = None,
 ) -> ValuationReferencePoint:
     return ValuationReferencePoint(
         reference_id=reference_id,
@@ -72,7 +73,7 @@ def _point(
         target_period_end=target_period_end,
         reference_multiple=multiple,
         reference_kind=kind,
-        observed_at=datetime(2026, 8, 22, 15, 0, tzinfo=_KST),
+        observed_at=observed_at or datetime(2026, 8, 22, 15, 0, tzinfo=_KST),
         rationale="Frozen conditional valuation reference for reverse inference.",
         source_evidence_ids=evidence,
     )
@@ -160,10 +161,13 @@ def test_historical_target_period_is_rejected() -> None:
 
 
 def test_evaluation_date_mismatch_fails_closed() -> None:
+    prior_point = _point(
+        observed_at=datetime(2026, 8, 21, 15, 0, tzinfo=_KST),
+    )
     with pytest.raises(ValueError, match="same evaluation date"):
         build_price_implied_requirement(
             _valuation(evaluation_date=date(2026, 8, 22)),
-            _frame(evaluation_date=date(2026, 8, 21)),
+            _frame(prior_point, evaluation_date=date(2026, 8, 21)),
         )
 
 
