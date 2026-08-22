@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -10,7 +11,6 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_2026q3_numeric_forecas
     LockedNumericForecast,
 )
 from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_2026q3_outcome_scoring import (
-    OutcomeObservation,
     build_outcome_score,
     build_outcome_source_capture,
     extract_outcome_observation,
@@ -25,7 +25,6 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_historical_evaluation_
 )
 
 _KST = ZoneInfo("Asia/Seoul")
-_HASH = "1" * 64
 
 
 def _forecast() -> LockedNumericForecast:
@@ -154,37 +153,20 @@ def test_locked_source_extracts_exact_v2_accounts_and_scores_selected_win() -> N
 
 def test_score_uses_exact_tie_without_tolerance() -> None:
     contract = load_outcome_scoring_contract()
-    forecast = _forecast()
-    midpoint = (
-        forecast.selected_forecast_krw_million + forecast.benchmark_forecast_krw_million
-    ) / 2.0
-    actual_krw = int(midpoint * 1_000_000.0)
-    observation = OutcomeObservation(
-        source_capture_evidence_id=_HASH,
-        receipt_no="20261114000001",
-        receipt_date=date(2026, 11, 14),
-        revenue_krw=actual_krw + 10_000_000,
-        cost_of_sales_krw=10_000_000,
-        gross_profit_krw=actual_krw,
-        gross_profit_krw_million=actual_krw / 1_000_000.0,
-    )
     execution = load_frozen_historical_schema_repair_v2().runtime_execution
+    forecast = replace(
+        _forecast(),
+        selected_forecast_krw_million=65_991_356.0,
+    )
+    raw_payload = _raw_payload()
     capture = build_outcome_source_capture(
         contract,
         forecast,
         execution,
         evaluation_date=date(2026, 11, 14),
-        raw_payload=_raw_payload(),
+        raw_payload=raw_payload,
     )
-    observation = OutcomeObservation(
-        source_capture_evidence_id=capture.evidence_id,
-        receipt_no=observation.receipt_no,
-        receipt_date=observation.receipt_date,
-        revenue_krw=observation.revenue_krw,
-        cost_of_sales_krw=observation.cost_of_sales_krw,
-        gross_profit_krw=observation.gross_profit_krw,
-        gross_profit_krw_million=observation.gross_profit_krw_million,
-    )
+    observation = extract_outcome_observation(contract, execution, capture, raw_payload)
     score = build_outcome_score(contract, forecast, capture, observation)
     assert score.selected_absolute_error_krw_million == score.benchmark_absolute_error_krw_million
     assert score.winner == "tie"
