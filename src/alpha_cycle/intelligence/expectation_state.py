@@ -103,7 +103,10 @@ class CertifiedExpectationObservation:
                 raise ValueError("market_consensus requires an aggregation_method")
         elif self.market_consensus_certified:
             raise ValueError("market_consensus_certified cannot be true for a non-consensus kind")
-        if self.expectation_kind is ExpectationKind.SINGLE_BROKER and self.producer_identity is None:
+        if (
+            self.expectation_kind is ExpectationKind.SINGLE_BROKER
+            and self.producer_identity is None
+        ):
             raise ValueError("single_broker expectation requires producer_identity")
 
     @property
@@ -173,7 +176,9 @@ class ExpectationStateSnapshot:
             if observation.observed_at.astimezone(KOREA_TZ).date() > self.evaluation_date:
                 raise ValueError("expectation observation is after the evaluation date")
             if observation.target_period_end < self.evaluation_date:
-                raise ValueError("certified forward expectation target must not already be historical")
+                raise ValueError(
+                    "certified forward expectation target must not already be historical"
+                )
         _validate_text_tuple(self.warnings, "warnings")
 
     def payload_without_id(self) -> dict[str, object]:
