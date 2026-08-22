@@ -76,7 +76,9 @@ class TransmissionLag:
             (self.minimum_days, "minimum_days"),
             (self.maximum_days, "maximum_days"),
         ):
-            if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 0):
+            if value is not None and (
+                not isinstance(value, int) or isinstance(value, bool) or value < 0
+            ):
                 raise ValueError(f"{field} must be a non-negative integer when supplied")
         if (
             self.minimum_days is not None
@@ -317,8 +319,13 @@ class SemiconductorCausalGraphSnapshot:
             _validate_sha(value, field)
         _validate_sha_tuple(self.source_snapshot_ids, "source_snapshot_ids")
         _validate_text_refs(self.warnings, "warnings")
-        if tuple(item.value for item in self.critical_state_variables) != EXPECTED_CRITICAL_STATES:
-            raise ValueError("causal graph must expose the five frozen semiconductor critical states")
+        if (
+            tuple(item.value for item in self.critical_state_variables)
+            != EXPECTED_CRITICAL_STATES
+        ):
+            raise ValueError(
+                "causal graph must expose the five frozen semiconductor critical states"
+            )
         if not self.nodes:
             raise ValueError("semiconductor causal graph requires nodes")
         if not self.edges:
