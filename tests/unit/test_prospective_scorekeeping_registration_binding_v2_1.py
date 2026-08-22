@@ -270,6 +270,7 @@ def test_binding_rejects_insufficient_base_comparable_candidates() -> None:
         _base(),
         comparable_security_ids=("A",),
         pareto_frontier_security_ids=("A",),
+        dominance_relations=(),
         unique_pareto_leader_security_id=None,
     )
 
