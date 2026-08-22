@@ -146,8 +146,9 @@ def _gap_candidate(
     base: OpportunitySetSnapshot,
     security_id: str,
     *,
-    relative_gap: float,
+    relative_gap: float | None,
     suffix: str,
+    blockers: tuple[str, ...] = (),
 ) -> ExpectationGapOpportunityCandidateSnapshot:
     original = _base_candidate(base, security_id)
     return ExpectationGapOpportunityCandidateSnapshot(
@@ -161,7 +162,7 @@ def _gap_candidate(
         metric=ExpectationMetric.OPERATING_INCOME,
         target_date=date(2026, 12, 31),
         consensus_relative_gap=relative_gap,
-        comparison_blockers=(),
+        comparison_blockers=blockers,
         flags=(),
         guardrail_evidence_id=GUARDRAIL,
     )
@@ -244,6 +245,16 @@ def test_binding_rejects_overlay_from_a_different_base_snapshot() -> None:
         _register(base, overlay=overlay)
 
 
+def test_binding_rejects_overlay_candidate_policy_drift() -> None:
+    base = _base()
+    overlay = _overlay(base)
+    candidate_a = replace(overlay.candidates[0], comparison_policy_snapshot_id="f" * 64)
+    tampered = replace(overlay, candidates=(candidate_a, overlay.candidates[1]))
+
+    with pytest.raises(ValueError, match="candidate comparison policy mismatch"):
+        _register(base, overlay=tampered)
+
+
 def test_binding_rejects_snapshot_captured_after_registration() -> None:
     base = replace(
         _base(),
@@ -268,9 +279,17 @@ def test_binding_rejects_insufficient_base_comparable_candidates() -> None:
 
 def test_binding_rejects_overlay_without_two_expectation_comparable_candidates() -> None:
     base = _base()
+    original = _overlay(base)
+    blocked_b = replace(
+        original.candidates[1],
+        consensus_relative_gap=None,
+        comparison_blockers=("consensus_relative_gap_unavailable",),
+    )
     overlay = replace(
-        _overlay(base),
+        original,
+        candidates=(original.candidates[0], blocked_b),
         expectation_comparable_security_ids=("A",),
+        expectation_blocked_security_ids=("B",),
         expectation_pareto_frontier_security_ids=("A",),
         unique_expectation_pareto_leader_security_id=None,
     )
