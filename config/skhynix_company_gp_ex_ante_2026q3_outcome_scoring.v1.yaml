@@ -34,8 +34,7 @@ scoring:
   timing_policy:
     target_period_must_be_complete_before_acquisition: true
     target_period_end_date: 2026-09-30
-    minimum_target_acquisition_date: 2026-10-01
-    evaluation_date_must_not_precede_minimum_target_acquisition_date: true
+    evaluation_date_must_not_precede_target_period_end: true
     caller_must_supply_evaluation_date: true
     failed_or_empty_preavailability_response_must_not_be_persisted_as_outcome: true
 
