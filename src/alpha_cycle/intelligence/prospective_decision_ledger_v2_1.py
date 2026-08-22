@@ -30,6 +30,7 @@ from alpha_cycle.intelligence.prospective_opportunity_scorekeeping_v2_1 import (
 
 PROSPECTIVE_DECISION_LEDGER_SCHEMA_VERSION = 1
 _FLOAT_TOLERANCE = 1e-12
+_SUPPORTED_HORIZONS = frozenset({60, 120, 250})
 
 
 class ObservedDecisionAttribution(StrEnum):
@@ -112,12 +113,12 @@ class ProspectiveDecisionLedgerEntry:
 
     def __post_init__(self) -> None:
         _require_text(self.registration_id, "registration_id")
-        for value, field in (
+        for sha_value, field in (
             (self.opportunity_set_snapshot_id, "opportunity_set_snapshot_id"),
             (self.registration_snapshot_id, "registration_snapshot_id"),
             (self.outcome_snapshot_id, "outcome_snapshot_id"),
         ):
-            _validate_sha(value, field)
+            _validate_sha(sha_value, field)
         if self.expectation_overlay_snapshot_id is not None:
             _validate_sha(
                 self.expectation_overlay_snapshot_id,
@@ -134,10 +135,12 @@ class ProspectiveDecisionLedgerEntry:
             raise ValueError("ledger outcome must be scored after registration")
         if self.target_session <= self.entry_session:
             raise ValueError("ledger target_session must follow entry_session")
-        if self.horizon_trading_days not in {60, 120, 250}:
+        if self.horizon_trading_days not in _SUPPORTED_HORIZONS:
             raise ValueError("ledger horizon must be 60, 120, or 250 trading days")
         if not isinstance(self.price_basis, PriceBasis):
             raise ValueError("ledger price_basis must be a PriceBasis")
+        if self.price_basis is PriceBasis.RAW:
+            raise ValueError("ledger requires an adjusted price basis")
         _require_text(self.benchmark_security_id, "benchmark_security_id")
         _validate_security_tuple(self.security_ids, "security_ids", minimum=2)
         _validate_security_tuple(
@@ -154,7 +157,7 @@ class ProspectiveDecisionLedgerEntry:
         )
         if not set(self.ex_post_winner_security_ids).issubset(self.security_ids):
             raise ValueError("ledger winners must be registered securities")
-        for values, field in (
+        for security_values, field in (
             (self.expectation_comparable_security_ids, "expectation_comparable_security_ids"),
             (self.expectation_blocked_security_ids, "expectation_blocked_security_ids"),
             (
@@ -162,17 +165,17 @@ class ProspectiveDecisionLedgerEntry:
                 "expectation_pareto_frontier_security_ids",
             ),
         ):
-            _validate_security_tuple(values, field, minimum=0)
-            if not set(values).issubset(self.security_ids):
+            _validate_security_tuple(security_values, field, minimum=0)
+            if not set(security_values).issubset(self.security_ids):
                 raise ValueError(f"{field} must be a subset of registered securities")
-        for numeric, field in (
+        for required_numeric, field in (
             (self.benchmark_return, "benchmark_return"),
             (self.best_registered_candidate_return, "best_registered_candidate_return"),
             (self.base_frontier_best_return, "base_frontier_best_return"),
             (self.base_frontier_regret, "base_frontier_regret"),
         ):
-            _require_finite(numeric, field)
-        for numeric, field in (
+            _require_finite(required_numeric, field)
+        for optional_numeric, field in (
             (self.unique_base_leader_regret, "unique_base_leader_regret"),
             (self.expectation_frontier_best_return, "expectation_frontier_best_return"),
             (self.expectation_frontier_regret, "expectation_frontier_regret"),
@@ -185,13 +188,23 @@ class ProspectiveDecisionLedgerEntry:
                 "expectation_overlay_incremental_best_return",
             ),
         ):
-            if numeric is not None:
-                _require_finite(numeric, field)
+            if optional_numeric is not None:
+                _require_finite(optional_numeric, field)
         if self.base_frontier_regret < 0:
             raise ValueError("ledger base frontier regret cannot be negative")
         if self.expectation_frontier_regret is not None:
             if self.expectation_frontier_regret < 0:
                 raise ValueError("ledger expectation frontier regret cannot be negative")
+        if self.base_frontier_best_return > self.best_registered_candidate_return + _FLOAT_TOLERANCE:
+            raise ValueError("ledger base frontier best return cannot exceed candidate best return")
+        if self.unique_base_leader_security_id is None:
+            if self.unique_base_leader_regret is not None:
+                raise ValueError("base leader regret requires a registered unique base leader")
+        else:
+            if self.unique_base_leader_security_id not in self.base_pareto_frontier_security_ids:
+                raise ValueError("unique base leader must belong to the base frontier")
+            if self.unique_base_leader_regret is None:
+                raise ValueError("registered unique base leader requires a regret observation")
         if len(set(self.observed_attributions)) != len(self.observed_attributions):
             raise ValueError("ledger observed attributions must be unique")
         _validate_text_tuple(self.flags, "flags")
@@ -299,13 +312,15 @@ class ProspectiveDecisionCohortSummary:
     median_expectation_overlay_incremental_best_return: float | None
 
     def __post_init__(self) -> None:
-        if self.horizon_trading_days not in {60, 120, 250}:
+        if self.horizon_trading_days not in _SUPPORTED_HORIZONS:
             raise ValueError("ledger cohort horizon must be 60, 120, or 250")
         if not isinstance(self.price_basis, PriceBasis):
             raise ValueError("ledger cohort price_basis must be a PriceBasis")
+        if self.price_basis is PriceBasis.RAW:
+            raise ValueError("ledger cohort requires an adjusted price basis")
         if self.observation_count < 1:
             raise ValueError("ledger cohort requires at least one observation")
-        for value, field in (
+        for count_value, field in (
             (self.base_frontier_contains_winner_count, "base_frontier_contains_winner_count"),
             (self.unique_base_leader_observation_count, "unique_base_leader_observation_count"),
             (self.unique_base_leader_matched_best_count, "unique_base_leader_matched_best_count"),
@@ -320,15 +335,31 @@ class ProspectiveDecisionCohortSummary:
             (self.expectation_overlay_degraded_count, "expectation_overlay_degraded_count"),
             (self.expectation_overlay_unchanged_count, "expectation_overlay_unchanged_count"),
         ):
-            if value < 0 or value > self.observation_count:
+            if count_value < 0 or count_value > self.observation_count:
                 raise ValueError(f"{field} is outside cohort bounds")
-        for value, field in (
+        if self.unique_base_leader_matched_best_count > self.unique_base_leader_observation_count:
+            raise ValueError("base leader matches cannot exceed base leader observations")
+        if self.expectation_frontier_contains_winner_count > self.expectation_overlay_observation_count:
+            raise ValueError("expectation winner count cannot exceed overlay observations")
+        if (
+            self.expectation_complete_coverage_count + self.expectation_partial_coverage_count
+            != self.expectation_overlay_observation_count
+        ):
+            raise ValueError("expectation coverage counts must partition overlay observations")
+        if (
+            self.expectation_overlay_improved_count
+            + self.expectation_overlay_degraded_count
+            + self.expectation_overlay_unchanged_count
+            != self.expectation_overlay_observation_count
+        ):
+            raise ValueError("expectation overlay effect counts must partition overlay observations")
+        for required_value, field in (
             (self.base_frontier_contains_winner_rate, "base_frontier_contains_winner_rate"),
             (self.mean_base_frontier_regret, "mean_base_frontier_regret"),
             (self.median_base_frontier_regret, "median_base_frontier_regret"),
         ):
-            _require_finite(value, field)
-        for value, field in (
+            _require_finite(required_value, field)
+        for optional_value, field in (
             (self.unique_base_leader_matched_best_rate, "unique_base_leader_matched_best_rate"),
             (
                 self.expectation_frontier_contains_winner_rate,
@@ -345,8 +376,8 @@ class ProspectiveDecisionCohortSummary:
                 "median_expectation_overlay_incremental_best_return",
             ),
         ):
-            if value is not None:
-                _require_finite(value, field)
+            if optional_value is not None:
+                _require_finite(optional_value, field)
         for rate in (
             self.base_frontier_contains_winner_rate,
             self.unique_base_leader_matched_best_rate,
@@ -354,6 +385,24 @@ class ProspectiveDecisionCohortSummary:
         ):
             if rate is not None and not 0 <= rate <= 1:
                 raise ValueError("ledger cohort rates must be between zero and one")
+        _assert_close(
+            self.base_frontier_contains_winner_rate,
+            self.base_frontier_contains_winner_count / self.observation_count,
+            "cohort base frontier containment rate",
+        )
+        if self.unique_base_leader_observation_count == 0:
+            if self.unique_base_leader_matched_best_rate is not None:
+                raise ValueError("base leader rate requires base leader observations")
+        else:
+            if self.unique_base_leader_matched_best_rate is None:
+                raise ValueError("base leader observations require a match rate")
+            _assert_close(
+                self.unique_base_leader_matched_best_rate,
+                self.unique_base_leader_matched_best_count
+                / self.unique_base_leader_observation_count,
+                "cohort base leader match rate",
+            )
+        _validate_expectation_cohort_shape(self)
 
     def payload(self) -> dict[str, object]:
         return {
@@ -419,11 +468,17 @@ class ProspectiveDecisionLedgerSnapshot:
         )
         if len(set(summary_keys)) != len(summary_keys):
             raise ValueError("ledger cohort summary keys must be unique")
-        expected_keys = {
-            (item.horizon_trading_days, item.price_basis) for item in self.entries
-        }
-        if set(summary_keys) != expected_keys:
+        expected_groups = _entry_groups(self.entries)
+        if set(summary_keys) != set(expected_groups):
             raise ValueError("ledger cohort summaries do not cover the entry cohorts exactly")
+        summary_by_key = {
+            (item.horizon_trading_days, item.price_basis): item
+            for item in self.cohort_summaries
+        }
+        for key, group in expected_groups.items():
+            expected_summary = _cohort_summary(key[0], key[1], tuple(group))
+            if summary_by_key[key].payload() != expected_summary.payload():
+                raise ValueError("ledger cohort summary has drifted from included entries")
         _validate_text_tuple(self.flags, "flags")
 
     @property
@@ -510,7 +565,6 @@ def build_prospective_decision_ledger_entry(
         outcome,
         expectation_overlay=expectation_overlay,
     )
-    flags = tuple(dict.fromkeys(outcome.flags))
     return ProspectiveDecisionLedgerEntry(
         registration_id=registration.registration_id,
         opportunity_set_snapshot_id=opportunity_set.snapshot_id,
@@ -561,7 +615,7 @@ def build_prospective_decision_ledger_entry(
             outcome.expectation_overlay_incremental_best_return
         ),
         observed_attributions=attributions,
-        flags=flags,
+        flags=tuple(dict.fromkeys(outcome.flags)),
     )
 
 
@@ -575,9 +629,7 @@ def build_prospective_decision_ledger(
     _require_aware(built_at, "built_at")
     if not entries:
         raise ValueError("prospective decision ledger requires at least one entry")
-    groups: dict[tuple[int, PriceBasis], list[ProspectiveDecisionLedgerEntry]] = {}
-    for entry in entries:
-        groups.setdefault((entry.horizon_trading_days, entry.price_basis), []).append(entry)
+    groups = _entry_groups(entries)
     summaries = tuple(
         _cohort_summary(horizon, basis, tuple(group))
         for (horizon, basis), group in sorted(
@@ -622,6 +674,8 @@ def _validate_upstream_binding(
     *,
     expectation_overlay: ExpectationAugmentedOpportunitySetSnapshot | None,
 ) -> None:
+    if opportunity_set.captured_at > registration.registered_at:
+        raise ValueError("ledger registration cannot precede opportunity-set capture")
     if registration.opportunity_set_snapshot_id != opportunity_set.snapshot_id:
         raise ValueError("ledger registration is bound to a different opportunity set")
     derived_comparable = tuple(
@@ -653,6 +707,8 @@ def _validate_upstream_binding(
 
     if outcome.registration_snapshot_id != registration.snapshot_id:
         raise ValueError("ledger outcome is bound to a different registration")
+    if outcome.scored_at <= registration.registered_at:
+        raise ValueError("ledger outcome cannot be scored before registration")
     if outcome.entry_session != registration.entry_session:
         raise ValueError("ledger outcome entry session differs from registration")
     if outcome.horizon_trading_days != registration.horizon_trading_days:
@@ -678,37 +734,71 @@ def _validate_upstream_binding(
         return
     if expectation_overlay is None:
         raise ValueError("ledger requires the registered expectation overlay snapshot")
-    if expectation_overlay.snapshot_id != registration.expectation_overlay_snapshot_id:
+    _validate_registered_overlay(opportunity_set, registration, expectation_overlay)
+
+
+def _validate_registered_overlay(
+    opportunity_set: OpportunitySetSnapshot,
+    registration: ProspectiveOpportunityRegistration,
+    overlay: ExpectationAugmentedOpportunitySetSnapshot,
+) -> None:
+    if overlay.captured_at < opportunity_set.captured_at:
+        raise ValueError("ledger expectation overlay cannot precede its base opportunity set")
+    if overlay.captured_at > registration.registered_at:
+        raise ValueError("ledger registration cannot precede expectation-overlay capture")
+    if overlay.snapshot_id != registration.expectation_overlay_snapshot_id:
         raise ValueError("ledger expectation overlay differs from registration")
-    if expectation_overlay.base_opportunity_set_snapshot_id != opportunity_set.snapshot_id:
+    if overlay.base_opportunity_set_snapshot_id != opportunity_set.snapshot_id:
         raise ValueError("ledger expectation overlay is bound to a different opportunity set")
-    if expectation_overlay.evaluation_date != registration.evaluation_date:
+    if overlay.evaluation_date != registration.evaluation_date:
         raise ValueError("ledger expectation overlay evaluation_date differs from registration")
-    if expectation_overlay.horizon_trading_days != registration.horizon_trading_days:
+    if overlay.horizon_trading_days != registration.horizon_trading_days:
         raise ValueError("ledger expectation overlay horizon differs from registration")
-    if expectation_overlay.guardrail_evidence_id != registration.guardrail_evidence_id:
+    if overlay.guardrail_evidence_id != registration.guardrail_evidence_id:
         raise ValueError("ledger expectation overlay guardrail evidence differs from registration")
-    overlay_ids = tuple(sorted(item.security_id for item in expectation_overlay.candidates))
+    overlay_ids = tuple(sorted(item.security_id for item in overlay.candidates))
     if overlay_ids != registration.security_ids:
         raise ValueError("ledger expectation overlay candidate universe differs from registration")
-    derived_expectation_comparable = tuple(
-        sorted(
-            item.security_id
-            for item in expectation_overlay.candidates
-            if item.expectation_gap_comparable
-        )
+    base_by_security = {item.security_id: item for item in opportunity_set.candidates}
+    for candidate in overlay.candidates:
+        if candidate.comparison_policy_snapshot_id != overlay.comparison_policy_snapshot_id:
+            raise ValueError("ledger expectation overlay candidate policy has drifted")
+        if candidate.security_id not in base_by_security:
+            raise ValueError("ledger expectation overlay contains a non-base security")
+        if (
+            candidate.opportunity_candidate_snapshot_id
+            != base_by_security[candidate.security_id].snapshot_id
+        ):
+            raise ValueError("ledger expectation overlay candidate base binding has drifted")
+    derived_comparable = tuple(
+        sorted(item.security_id for item in overlay.candidates if item.expectation_gap_comparable)
     )
-    if tuple(sorted(expectation_overlay.expectation_comparable_security_ids)) != (
-        derived_expectation_comparable
-    ):
+    derived_blocked = tuple(
+        sorted(item.security_id for item in overlay.candidates if not item.expectation_gap_comparable)
+    )
+    if tuple(sorted(overlay.expectation_comparable_security_ids)) != derived_comparable:
         raise ValueError("ledger expectation comparable-security registry has drifted")
+    if tuple(sorted(overlay.expectation_blocked_security_ids)) != derived_blocked:
+        raise ValueError("ledger expectation blocked-security registry has drifted")
+    if len(derived_comparable) < 2:
+        raise ValueError("ledger expectation overlay requires two comparable securities")
+    if set(derived_comparable).intersection(derived_blocked):
+        raise ValueError("ledger expectation comparable and blocked registries overlap")
+    if set(derived_comparable).union(derived_blocked) != set(registration.security_ids):
+        raise ValueError("ledger expectation registries do not cover the candidate universe")
+    if set(overlay.base_pareto_frontier_security_ids) != set(
+        opportunity_set.pareto_frontier_security_ids
+    ):
+        raise ValueError("ledger expectation overlay base frontier differs from opportunity set")
     if set(registration.expectation_pareto_frontier_security_ids) != set(
-        expectation_overlay.expectation_pareto_frontier_security_ids
+        overlay.expectation_pareto_frontier_security_ids
     ):
         raise ValueError("ledger expectation frontier differs from registration")
+    if not set(overlay.expectation_pareto_frontier_security_ids).issubset(derived_comparable):
+        raise ValueError("ledger expectation frontier contains a blocked security")
     if (
         registration.unique_expectation_leader_security_id
-        != expectation_overlay.unique_expectation_pareto_leader_security_id
+        != overlay.unique_expectation_pareto_leader_security_id
     ):
         raise ValueError("ledger expectation leader differs from registration")
 
@@ -755,14 +845,14 @@ def _validate_outcome_metrics(
     )
 
     if registration.expectation_overlay_snapshot_id is None:
-        for value in (
+        for expectation_value in (
             outcome.expectation_frontier_best_return,
             outcome.expectation_frontier_regret,
             outcome.expectation_frontier_contains_ex_post_winner,
             outcome.unique_expectation_leader_regret,
             outcome.expectation_overlay_incremental_best_return,
         ):
-            if value is not None:
+            if expectation_value is not None:
                 raise ValueError("base-only ledger outcome contains expectation metrics")
         return
 
@@ -865,6 +955,15 @@ def _observed_attributions(
     return tuple(labels)
 
 
+def _entry_groups(
+    entries: tuple[ProspectiveDecisionLedgerEntry, ...],
+) -> dict[tuple[int, PriceBasis], list[ProspectiveDecisionLedgerEntry]]:
+    groups: dict[tuple[int, PriceBasis], list[ProspectiveDecisionLedgerEntry]] = {}
+    for entry in entries:
+        groups.setdefault((entry.horizon_trading_days, entry.price_basis), []).append(entry)
+    return groups
+
+
 def _cohort_summary(
     horizon: int,
     basis: PriceBasis,
@@ -891,6 +990,10 @@ def _cohort_summary(
         for item in expectation_entries
         if item.expectation_overlay_incremental_best_return is not None
     ]
+    if len(expectation_regrets) != len(expectation_entries):
+        raise ValueError("ledger expectation entries require frontier regret observations")
+    if len(incrementals) != len(expectation_entries):
+        raise ValueError("ledger expectation entries require incremental return observations")
     expectation_contains_count = sum(
         item.expectation_frontier_contains_ex_post_winner is True
         for item in expectation_entries
@@ -944,7 +1047,7 @@ def _cohort_summary(
 
 
 def _validate_expectation_entry_shape(entry: ProspectiveDecisionLedgerEntry) -> None:
-    overlay_fields = (
+    required_overlay_fields = (
         entry.expectation_provider_id,
         entry.expectation_metric,
         entry.expectation_target_date,
@@ -963,17 +1066,78 @@ def _validate_expectation_entry_shape(entry: ProspectiveDecisionLedgerEntry) -> 
             raise ValueError("base-only ledger entry cannot contain expectation frontier")
         if entry.unique_expectation_leader_security_id is not None:
             raise ValueError("base-only ledger entry cannot contain expectation leader")
-        if any(value is not None for value in overlay_fields):
+        if entry.unique_expectation_leader_regret is not None:
+            raise ValueError("base-only ledger entry cannot contain expectation leader regret")
+        if any(value is not None for value in required_overlay_fields):
             raise ValueError("base-only ledger entry cannot contain expectation metrics")
         return
-    if any(value is None for value in overlay_fields):
+    if any(value is None for value in required_overlay_fields):
         raise ValueError("expectation ledger entry is missing registered overlay metadata")
     if len(entry.expectation_comparable_security_ids) < 2:
         raise ValueError("expectation ledger entry requires at least two comparable securities")
+    if set(entry.expectation_comparable_security_ids).intersection(
+        entry.expectation_blocked_security_ids
+    ):
+        raise ValueError("expectation comparable and blocked securities cannot overlap")
+    if set(entry.expectation_comparable_security_ids).union(
+        entry.expectation_blocked_security_ids
+    ) != set(entry.security_ids):
+        raise ValueError("expectation comparable and blocked securities must cover candidates")
     if not set(entry.expectation_pareto_frontier_security_ids).issubset(
         entry.expectation_comparable_security_ids
     ):
         raise ValueError("expectation ledger frontier must be expectation-comparable")
+    if entry.expectation_frontier_best_return is not None:
+        if (
+            entry.expectation_frontier_best_return
+            > entry.best_registered_candidate_return + _FLOAT_TOLERANCE
+        ):
+            raise ValueError("expectation frontier best return cannot exceed candidate best return")
+    if entry.unique_expectation_leader_security_id is None:
+        if entry.unique_expectation_leader_regret is not None:
+            raise ValueError("expectation leader regret requires a registered leader")
+    else:
+        if (
+            entry.unique_expectation_leader_security_id
+            not in entry.expectation_pareto_frontier_security_ids
+        ):
+            raise ValueError("unique expectation leader must belong to expectation frontier")
+        if entry.unique_expectation_leader_regret is None:
+            raise ValueError("registered expectation leader requires a regret observation")
+
+
+def _validate_expectation_cohort_shape(summary: ProspectiveDecisionCohortSummary) -> None:
+    if summary.expectation_overlay_observation_count == 0:
+        if summary.expectation_frontier_contains_winner_count != 0:
+            raise ValueError("expectation winner count requires overlay observations")
+        if any(
+            value is not None
+            for value in (
+                summary.expectation_frontier_contains_winner_rate,
+                summary.mean_expectation_frontier_regret,
+                summary.median_expectation_frontier_regret,
+                summary.mean_expectation_overlay_incremental_best_return,
+                summary.median_expectation_overlay_incremental_best_return,
+            )
+        ):
+            raise ValueError("expectation cohort statistics require overlay observations")
+        return
+    if summary.expectation_frontier_contains_winner_rate is None:
+        raise ValueError("overlay observations require expectation containment rate")
+    _assert_close(
+        summary.expectation_frontier_contains_winner_rate,
+        summary.expectation_frontier_contains_winner_count
+        / summary.expectation_overlay_observation_count,
+        "cohort expectation frontier containment rate",
+    )
+    for value in (
+        summary.mean_expectation_frontier_regret,
+        summary.median_expectation_frontier_regret,
+        summary.mean_expectation_overlay_incremental_best_return,
+        summary.median_expectation_overlay_incremental_best_return,
+    ):
+        if value is None:
+            raise ValueError("overlay observations require expectation cohort statistics")
 
 
 def _leader_regret(
