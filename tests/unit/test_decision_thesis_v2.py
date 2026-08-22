@@ -316,7 +316,7 @@ def test_investable_thesis_requires_catalyst_payoff_and_expectation() -> None:
         _investable(scenario_refs=())
     with pytest.raises(ValueError, match="market-expectation claim"):
         _investable(claims=(_claim(),))
-    with pytest.raises(ValueError, match="market-expectation claim"):
+    with pytest.raises(ValueError, match="requires at least one evidence reference"):
         _investable(claims=(_claim(), replace(_expectation_claim(), evidence_refs=())))
 
 
