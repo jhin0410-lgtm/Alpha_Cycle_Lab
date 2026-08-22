@@ -255,7 +255,10 @@ class ResearchProcessObservabilitySummary:
         )
         if any(value < 0 for value in counts):
             raise ValueError("observability counts cannot be negative")
-        if self.orchestrated_run_count + self.pre_orchestration_blocked_run_count != self.run_count:
+        if (
+            self.orchestrated_run_count + self.pre_orchestration_blocked_run_count
+            != self.run_count
+        ):
             raise ValueError("run-kind counts must sum to run_count")
         if self.prospective_run_count + self.replay_run_count != self.run_count:
             raise ValueError("mode counts must sum to run_count")
@@ -390,7 +393,10 @@ def bind_orchestrated_run(
     if started_at < request.requested_at:
         raise ValueError("research run cannot start before its request")
     _validate_request_round_binding(request, round_snapshot)
-    if request.mode is ResearchRoundMode.PROSPECTIVE and request.requested_at > round_snapshot.captured_at:
+    if (
+        request.mode is ResearchRoundMode.PROSPECTIVE
+        and request.requested_at > round_snapshot.captured_at
+    ):
         raise ValueError("prospective round cannot predate the request that caused it")
     return ResearchRoundRunSnapshot(
         run_id=run_id,
@@ -490,16 +496,22 @@ def build_research_process_observability_summary(
             item.kind is ResearchRunKind.PRE_ORCHESTRATION_BLOCKED for item in runs
         ),
         blocked_run_count=sum(item.blocked for item in runs),
-        prospective_run_count=sum(item.mode is ResearchRoundMode.PROSPECTIVE for item in runs),
+        prospective_run_count=sum(
+            item.mode is ResearchRoundMode.PROSPECTIVE for item in runs
+        ),
         replay_run_count=sum(item.mode is ResearchRoundMode.REPLAY for item in runs),
         prospective_registered_run_count=sum(
             item.round_status is ResearchRoundStatus.PROSPECTIVE_REGISTERED for item in runs
         ),
-        opportunity_set_run_count=sum(item.opportunity_set_snapshot_id is not None for item in runs),
+        opportunity_set_run_count=sum(
+            item.opportunity_set_snapshot_id is not None for item in runs
+        ),
         expectation_overlay_run_count=sum(
             item.expectation_overlay_snapshot_id is not None for item in runs
         ),
-        unique_security_count=len({security for item in runs for security in item.security_ids}),
+        unique_security_count=len(
+            {security for item in runs for security in item.security_ids}
+        ),
         mean_blockers_per_run=(mean(blockers_per_run) if blockers_per_run else None),
         median_blockers_per_run=(median(blockers_per_run) if blockers_per_run else None),
         mean_duration_seconds=(mean(durations) if durations else None),
@@ -584,7 +596,10 @@ def _validate_request_round_binding(
             request.horizon_trading_days == round_snapshot.horizon_trading_days,
             "research-round horizon mismatch",
         ),
-        (request.security_ids == round_snapshot.security_ids, "research-round security mismatch"),
+        (
+            request.security_ids == round_snapshot.security_ids,
+            "research-round security mismatch",
+        ),
         (
             request.guardrail_evidence_id == round_snapshot.guardrail_evidence_id,
             "research-round guardrail mismatch",
