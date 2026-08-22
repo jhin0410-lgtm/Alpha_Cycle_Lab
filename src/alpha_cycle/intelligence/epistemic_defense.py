@@ -51,7 +51,7 @@ class PromotionRecommendation(StrEnum):
 
 @dataclass(frozen=True)
 class CounterExplanation:
-    """One independently generated alternative explanation for the thesis observations."""
+    """One independently generated alternative explanation for thesis observations."""
 
     explanation_id: str
     statement: str
@@ -63,13 +63,13 @@ class CounterExplanation:
     falsifier: str
 
     def __post_init__(self) -> None:
-        for value, field in (
+        for text_value, field in (
             (self.explanation_id, "explanation_id"),
             (self.statement, "statement"),
             (self.mechanism, "mechanism"),
             (self.falsifier, "falsifier"),
         ):
-            _require_text(value, field)
+            _require_text(text_value, field)
         _validate_text_refs(self.supporting_evidence_refs, "supporting_evidence_refs")
         _validate_text_refs(self.opposing_evidence_refs, "opposing_evidence_refs")
         if self.epistemic_status in {
@@ -96,7 +96,7 @@ class CounterExplanation:
 
 @dataclass(frozen=True)
 class UnresolvedContradiction:
-    """Material evidence conflict that must remain visible until a later snapshot resolves it."""
+    """Material evidence conflict kept visible until a later snapshot resolves it."""
 
     contradiction_id: str
     statement: str
@@ -168,8 +168,10 @@ class CounterThesisSnapshot:
             tuple(item.explanation_id for item in self.alternative_explanations),
             "explanation_id",
         )
-        ids = {item.explanation_id for item in self.alternative_explanations}
-        if self.strongest_alternative_explanation_id not in ids:
+        explanation_ids = {
+            item.explanation_id for item in self.alternative_explanations
+        }
+        if self.strongest_alternative_explanation_id not in explanation_ids:
             raise ValueError("strongest alternative explanation must exist in snapshot")
         _validate_text_refs(
             self.falsification_evidence_refs,
@@ -231,19 +233,24 @@ class BlindSpotCandidate:
     rationale: str
 
     def __post_init__(self) -> None:
-        for value, field in (
+        for text_value, field in (
             (self.candidate_id, "candidate_id"),
             (self.variable, "variable"),
             (self.mechanism, "mechanism"),
             (self.rationale, "rationale"),
         ):
-            _require_text(value, field)
+            _require_text(text_value, field)
         _validate_text_refs(self.evidence_refs, "evidence_refs")
-        if self.promotion_recommendation is PromotionRecommendation.PROMOTE_TO_CRITICAL_VARIABLE:
+        if (
+            self.promotion_recommendation
+            is PromotionRecommendation.PROMOTE_TO_CRITICAL_VARIABLE
+        ):
             if self.already_covered:
                 raise ValueError("already-covered variable cannot be promoted as a blind spot")
             if not self.evidence_refs:
-                raise ValueError("blind-spot promotion requires at least one evidence reference")
+                raise ValueError(
+                    "blind-spot promotion requires at least one evidence reference"
+                )
         if self.materiality is MaterialityLevel.HIGH and not self.evidence_refs:
             raise ValueError("high-materiality blind spot requires evidence_refs")
 
@@ -299,7 +306,9 @@ class BlindSpotDiscoverySnapshot:
         if len(self.existing_critical_state_variables) > 5:
             raise ValueError("critical state variables cannot exceed the v2.1 cap of five")
         if not self.graph_variables_used_as_exclusion_set:
-            raise ValueError("outside-graph discovery must exclude already represented variables")
+            raise ValueError(
+                "outside-graph discovery must exclude already represented variables"
+            )
         _validate_text_refs(self.search_scope, "search_scope")
         if not self.search_scope:
             raise ValueError("blind-spot discovery requires explicit search_scope")
@@ -314,10 +323,14 @@ class BlindSpotDiscoverySnapshot:
             raise ValueError("blind-spot discovery must document search limitations")
         if not self.candidates:
             if self.no_candidate_found_reason is None:
-                raise ValueError("empty blind-spot result requires no_candidate_found_reason")
+                raise ValueError(
+                    "empty blind-spot result requires no_candidate_found_reason"
+                )
             _require_text(self.no_candidate_found_reason, "no_candidate_found_reason")
         elif self.no_candidate_found_reason is not None:
-            raise ValueError("no_candidate_found_reason is only valid when candidates are empty")
+            raise ValueError(
+                "no_candidate_found_reason is only valid when candidates are empty"
+            )
 
     def payload_without_id(self) -> dict[str, object]:
         return {
@@ -368,22 +381,24 @@ class EpistemicDefensePackageSnapshot:
 
     def __post_init__(self) -> None:
         _require_aware(self.captured_at, "captured_at")
-        for value, field in (
+        for digest_value, field in (
             (self.thesis_snapshot_id, "thesis_snapshot_id"),
             (self.counter_thesis_snapshot_id, "counter_thesis_snapshot_id"),
             (self.blind_spot_snapshot_id, "blind_spot_snapshot_id"),
             (self.guardrail_evidence_id, "guardrail_evidence_id"),
         ):
-            _validate_sha(value, field)
+            _validate_sha(digest_value, field)
         if not self.required_contracts_present:
-            raise ValueError("epistemic defense package requires both v2.1 research contracts")
-        for value in (
+            raise ValueError(
+                "epistemic defense package requires both v2.1 research contracts"
+            )
+        for count_value in (
             self.high_materiality_counter_explanation_count,
             self.high_materiality_unresolved_contradiction_count,
             self.uncovered_high_materiality_blind_spot_count,
             self.blind_spot_promotion_candidate_count,
         ):
-            if value < 0:
+            if count_value < 0:
                 raise ValueError("epistemic diagnostic counts cannot be negative")
         _validate_text_refs(self.research_flags, "research_flags")
 
@@ -426,9 +441,13 @@ def build_counter_thesis_snapshot(
 ) -> CounterThesisSnapshot:
     active = guardrails or load_decision_system_v21_guardrails()
     if not active.independent_counter_thesis_required_for_investable:
-        raise ValueError("active v2.1 guardrails do not require an independent counter-thesis")
+        raise ValueError(
+            "active v2.1 guardrails do not require an independent counter-thesis"
+        )
     if not active.counter_thesis_created_without_support_search_required:
-        raise ValueError("active v2.1 guardrails do not require counter-thesis independence")
+        raise ValueError(
+            "active v2.1 guardrails do not require counter-thesis independence"
+        )
     payload = dict(values)
     supplied_guardrail = payload.pop("guardrail_evidence_id", None)
     if supplied_guardrail is not None and supplied_guardrail != active.evidence_id:
@@ -446,7 +465,9 @@ def build_blind_spot_snapshot(
 ) -> BlindSpotDiscoverySnapshot:
     active = guardrails or load_decision_system_v21_guardrails()
     if not active.outside_graph_discovery_required_for_investable:
-        raise ValueError("active v2.1 guardrails do not require outside-graph discovery")
+        raise ValueError(
+            "active v2.1 guardrails do not require outside-graph discovery"
+        )
     critical = values.get("existing_critical_state_variables")
     if isinstance(critical, tuple) and len(critical) > active.critical_state_variable_max:
         raise ValueError("critical state variables exceed active v2.1 complexity budget")
@@ -653,8 +674,8 @@ def _validate_lineage(
 
 
 def _validate_unique_ids(values: tuple[str, ...], field: str) -> None:
-    for value in values:
-        _require_text(value, field)
+    for text_value in values:
+        _require_text(text_value, field)
     if len(set(values)) != len(values):
         raise ValueError(f"duplicate {field} values are prohibited")
 
@@ -670,14 +691,16 @@ def _require_aware(value: datetime, field: str) -> None:
 
 
 def _validate_text_refs(values: tuple[str, ...], field: str) -> None:
-    for value in values:
-        _require_text(value, field)
+    for text_value in values:
+        _require_text(text_value, field)
     if len(set(values)) != len(values):
         raise ValueError(f"{field} cannot contain duplicates")
 
 
 def _validate_sha(value: str, field: str) -> None:
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
+    if len(value) != 64 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
         raise ValueError(f"{field} must be a lowercase SHA-256 digest")
 
 
@@ -685,7 +708,10 @@ def _read_json(path: Path) -> dict[str, object]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"JSON object required: {path}")
-    return {str(key): item for key, item in cast(dict[object, object], payload).items()}
+    return {
+        str(key): item
+        for key, item in cast(dict[object, object], payload).items()
+    }
 
 
 def _sha(value: object) -> str:
