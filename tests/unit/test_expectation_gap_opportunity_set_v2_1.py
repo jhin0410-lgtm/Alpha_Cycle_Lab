@@ -359,7 +359,13 @@ def test_expectation_overlay_artifacts_persist_immutably(tmp_path) -> None:
         captured_at=datetime(2026, 8, 22, 18, 20, tzinfo=_KST),
     )
     pointers = (
-        (persist_expectation_gap_comparison_policy(policy, output_root=tmp_path), policy.snapshot_id),
+        (
+            persist_expectation_gap_comparison_policy(
+                policy,
+                output_root=tmp_path,
+            ),
+            policy.snapshot_id,
+        ),
         (
             persist_expectation_gap_opportunity_candidate(first, output_root=tmp_path),
             first.snapshot_id,
