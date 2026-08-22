@@ -17,6 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 from statistics import mean, median
 
+from alpha_cycle.calendar.base import TradingCalendar
 from alpha_cycle.data.integrity import PriceBasis
 from alpha_cycle.intelligence.expectation_gap_opportunity_set_v2_1 import (
     ExpectationAugmentedOpportunitySetSnapshot,
@@ -26,6 +27,8 @@ from alpha_cycle.intelligence.opportunity_set_v2_1 import OpportunitySetSnapshot
 from alpha_cycle.intelligence.prospective_opportunity_scorekeeping_v2_1 import (
     ProspectiveOpportunityOutcomeSnapshot,
     ProspectiveOpportunityRegistration,
+    ScorekeepingEntryRule,
+    derive_entry_session,
 )
 
 PROSPECTIVE_DECISION_LEDGER_SCHEMA_VERSION = 1
@@ -526,6 +529,7 @@ def build_prospective_decision_ledger_entry(
     registration: ProspectiveOpportunityRegistration,
     outcome: ProspectiveOpportunityOutcomeSnapshot,
     *,
+    calendar: TradingCalendar,
     expectation_overlay: ExpectationAugmentedOpportunitySetSnapshot | None = None,
 ) -> ProspectiveDecisionLedgerEntry:
     """Revalidate one completed experiment and convert it into a ledger observation."""
@@ -534,9 +538,13 @@ def build_prospective_decision_ledger_entry(
         opportunity_set,
         registration,
         outcome,
+        calendar=calendar,
         expectation_overlay=expectation_overlay,
     )
-    returns = {item.security_id: item.realized_basis_return for item in outcome.candidate_outcomes}
+    returns = {
+        item.security_id: (item.exit_price / item.entry_price) - 1.0
+        for item in outcome.candidate_outcomes
+    }
     best_return = max(returns.values())
     _validate_outcome_metrics(registration, outcome, returns, best_return)
 
@@ -623,7 +631,7 @@ def build_prospective_decision_ledger_entry(
             outcome.expectation_overlay_incremental_best_return
         ),
         observed_attributions=attributions,
-        flags=tuple(dict.fromkeys(outcome.flags)),
+        flags=_derived_outcome_flags(registration, outcome),
     )
 
 
@@ -659,20 +667,23 @@ def persist_prospective_decision_ledger(
     snapshot: ProspectiveDecisionLedgerSnapshot,
     path: Path,
 ) -> None:
-    """Persist a ledger snapshot atomically without overwriting prior evidence."""
+    """Persist a ledger snapshot using an atomic exclusive no-overwrite claim."""
 
-    if path.exists():
-        raise FileExistsError(f"prospective decision ledger already exists: {path}")
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {"snapshot_id": snapshot.snapshot_id, **snapshot.payload_without_id()}
     encoded = json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        temporary.write_text(encoded, encoding="utf-8")
-        temporary.replace(path)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError as exc:
+        raise FileExistsError(f"prospective decision ledger already exists: {path}") from exc
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _validate_upstream_binding(
@@ -680,6 +691,7 @@ def _validate_upstream_binding(
     registration: ProspectiveOpportunityRegistration,
     outcome: ProspectiveOpportunityOutcomeSnapshot,
     *,
+    calendar: TradingCalendar,
     expectation_overlay: ExpectationAugmentedOpportunitySetSnapshot | None,
 ) -> None:
     if opportunity_set.captured_at > registration.registered_at:
@@ -695,7 +707,7 @@ def _validate_upstream_binding(
     )
     if tuple(sorted(opportunity_set.comparable_security_ids)) != derived_comparable:
         raise ValueError("ledger base opportunity comparable-security registry has drifted")
-    if registration.security_ids != derived_comparable:
+    if tuple(sorted(registration.security_ids)) != derived_comparable:
         raise ValueError("ledger registration candidate universe differs from base opportunity set")
     if set(registration.base_pareto_frontier_security_ids) != set(
         opportunity_set.pareto_frontier_security_ids
@@ -712,11 +724,10 @@ def _validate_upstream_binding(
         raise ValueError("ledger registration horizon differs from opportunity set")
     if registration.guardrail_evidence_id != opportunity_set.guardrail_evidence_id:
         raise ValueError("ledger registration guardrail evidence differs from opportunity set")
+    _validate_registration_horizon(registration, outcome, calendar=calendar)
 
     if outcome.registration_snapshot_id != registration.snapshot_id:
         raise ValueError("ledger outcome is bound to a different registration")
-    if outcome.scored_at <= registration.registered_at:
-        raise ValueError("ledger outcome cannot be scored before registration")
     if outcome.entry_session != registration.entry_session:
         raise ValueError("ledger outcome entry session differs from registration")
     if outcome.horizon_trading_days != registration.horizon_trading_days:
@@ -729,7 +740,13 @@ def _validate_upstream_binding(
     if outcome_ids != registration.security_ids:
         raise ValueError("ledger outcome candidate universe differs from registration")
     for candidate in outcome.candidate_outcomes:
-        expected_excess = candidate.realized_basis_return - outcome.benchmark_return
+        price_return = (candidate.exit_price / candidate.entry_price) - 1.0
+        _assert_close(
+            candidate.realized_basis_return,
+            price_return,
+            "candidate realized basis return",
+        )
+        expected_excess = price_return - outcome.benchmark_return
         _assert_close(
             candidate.benchmark_excess_return,
             expected_excess,
@@ -743,6 +760,29 @@ def _validate_upstream_binding(
     if expectation_overlay is None:
         raise ValueError("ledger requires the registered expectation overlay snapshot")
     _validate_registered_overlay(opportunity_set, registration, expectation_overlay)
+
+
+def _validate_registration_horizon(
+    registration: ProspectiveOpportunityRegistration,
+    outcome: ProspectiveOpportunityOutcomeSnapshot,
+    *,
+    calendar: TradingCalendar,
+) -> None:
+    if registration.entry_rule is not ScorekeepingEntryRule.NEXT_AVAILABLE_SESSION_CLOSE:
+        raise ValueError("ledger does not support the registered entry rule")
+    expected_entry = derive_entry_session(registration.registered_at, calendar=calendar)
+    if registration.entry_session != expected_entry:
+        raise ValueError("ledger registration entry session has drifted from its entry rule")
+    if not calendar.is_session(registration.entry_session):
+        raise ValueError("ledger registration entry_session is not a trading session")
+    expected_target = registration.entry_session
+    for _ in range(registration.horizon_trading_days):
+        expected_target = calendar.next_session(expected_target)
+    if outcome.target_session != expected_target:
+        raise ValueError("ledger outcome target session does not match the declared horizon")
+    target_close = calendar.session_close(expected_target)
+    if outcome.scored_at.astimezone(calendar.timezone) < target_close:
+        raise ValueError("ledger outcome was scored before the declared horizon closed")
 
 
 def _validate_registered_overlay(
@@ -765,7 +805,7 @@ def _validate_registered_overlay(
     if overlay.guardrail_evidence_id != registration.guardrail_evidence_id:
         raise ValueError("ledger expectation overlay guardrail evidence differs from registration")
     overlay_ids = tuple(sorted(item.security_id for item in overlay.candidates))
-    if overlay_ids != registration.security_ids:
+    if overlay_ids != tuple(sorted(registration.security_ids)):
         raise ValueError("ledger expectation overlay candidate universe differs from registration")
     base_by_security = {item.security_id: item for item in opportunity_set.candidates}
     for candidate in overlay.candidates:
@@ -905,6 +945,32 @@ def _validate_outcome_metrics(
         incremental,
         "expectation overlay incremental best return",
     )
+
+
+def _derived_outcome_flags(
+    registration: ProspectiveOpportunityRegistration,
+    outcome: ProspectiveOpportunityOutcomeSnapshot,
+) -> tuple[str, ...]:
+    flags: list[str] = []
+    if len(outcome.ex_post_winner_security_ids) > 1:
+        flags.append("ex_post_return_tie")
+    if not outcome.base_frontier_contains_ex_post_winner:
+        flags.append("base_pareto_frontier_missed_ex_post_winner")
+    if outcome.expectation_frontier_contains_ex_post_winner is False:
+        flags.append("expectation_pareto_frontier_missed_ex_post_winner")
+    if (
+        registration.unique_base_leader_security_id is not None
+        and outcome.unique_base_leader_regret is not None
+        and outcome.unique_base_leader_regret > _FLOAT_TOLERANCE
+    ):
+        flags.append("unique_base_leader_underperformed_ex_post_winner")
+    if (
+        registration.unique_expectation_leader_security_id is not None
+        and outcome.unique_expectation_leader_regret is not None
+        and outcome.unique_expectation_leader_regret > _FLOAT_TOLERANCE
+    ):
+        flags.append("unique_expectation_leader_underperformed_ex_post_winner")
+    return tuple(flags)
 
 
 def _observed_attributions(
