@@ -1,0 +1,88 @@
+schema_version: 1
+policy:
+  policy_id: alpha_cycle_decision_system_v2
+  policy_version: 1.0-architecture-freeze
+  status: architecture_frozen_before_v2_thesis_integration
+
+  north_star: >-
+    Detect change before it is fully reflected in market expectations, verify transmission
+    into company economics and valuation, compare 3/6/12-month payoff and uncertainty across
+    competing opportunities, allocate capital deliberately, and learn from immutable outcomes.
+
+  economic_objective:
+    primary: long_run_capital_growth
+    benchmark_relative_return_is_diagnostic_not_primary: true
+    forecast_error_is_local_metric_not_global_objective: true
+    universal_company_score_is_primary_decision_object: false
+
+  decision_unit:
+    primary_object: investment_thesis_snapshot
+    ticker_score_is_backward_compatibility_only: true
+    existing_position_cost_basis_has_priority: false
+
+  horizons:
+    primary_trading_days:
+      - 60
+      - 120
+      - 250
+    supporting_path_trading_days:
+      - 1
+      - 5
+      - 20
+    exact_calendar_equivalence_claimed: false
+
+  uncertainty_dimensions:
+    - evidence
+    - model
+    - regime
+    - expectation
+    - catalyst
+    - valuation
+    allowed_levels:
+      - low
+      - medium
+      - high
+      - unknown
+
+  claim_epistemic_statuses:
+    - observed_fact
+    - accounting_identity
+    - economic_hypothesis
+    - empirically_validated_relationship
+    - unvalidated_inference
+
+  thesis_statuses:
+    - research_priority
+    - underwriting
+    - investable_now
+    - valuation_gated
+    - catalyst_gated
+    - evidence_gated
+    - timing_gated
+    - weakening
+    - invalidated
+    - replaced
+    - closed
+
+  portfolio_policy:
+    automatic_order_execution_enabled: false
+    unconstrained_kelly_sizing_enabled: false
+    mathematically_optimal_weight_claim_enabled: false
+    explicit_portfolio_overlap_required_for_investable_thesis: true
+    opportunity_cost_comparison_required_for_investable_thesis: true
+
+  research_governance:
+    point_in_time_required: true
+    revision_lineage_required_when_source_can_revise: true
+    protected_outcome_rule_must_be_frozen_before_scoring: true
+    post_outcome_thesis_rewrite_allowed: false
+    successor_model_requires_new_research_round: true
+    uncertified_provider_semantics_may_be_promoted_to_consensus: false
+    missing_evidence_may_be_replaced_with_neutral_score: false
+    provenance_effort_must_be_proportional_to_economic_importance: true
+
+  migration:
+    existing_decision_scorecard_removed: false
+    existing_scorecard_role: backward_compatibility_and_diagnostic
+    v2_thesis_integrated_into_existing_decision_snapshot: false
+    skhynix_2026q3_frozen_research_round_changed: false
