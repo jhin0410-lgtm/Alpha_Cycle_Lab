@@ -222,28 +222,29 @@ def build_research_inbox(
     ledger: ResearchRunLedgerSnapshot,
 ) -> tuple[ResearchInboxRow, ...]:
     latest_requests: dict[str, AnalysisRequestSnapshot] = {}
-    latest_runs: dict[str, ResearchRoundRunSnapshot] = {}
+    latest_runs_by_request: dict[str, ResearchRoundRunSnapshot] = {}
+
     for request in ledger.requests:
         for security_id in request.security_ids:
-            current = latest_requests.get(security_id)
-            if current is None or _request_key(request) > _request_key(current):
+            current_request = latest_requests.get(security_id)
+            if current_request is None or _request_key(request) > _request_key(current_request):
                 latest_requests[security_id] = request
+
     for run in ledger.runs:
-        for security_id in run.security_ids:
-            current = latest_runs.get(security_id)
-            if current is None or _run_key(run) > _run_key(current):
-                latest_runs[security_id] = run
+        current_run = latest_runs_by_request.get(run.request_snapshot_id)
+        if current_run is None or _run_key(run) > _run_key(current_run):
+            latest_runs_by_request[run.request_snapshot_id] = run
 
     rows: list[ResearchInboxRow] = []
     for security_id in sorted(latest_requests):
         request = latest_requests[security_id]
-        run = latest_runs.get(security_id)
-        if run is None or run.started_at < request.requested_at:
+        matching_run = latest_runs_by_request.get(request.snapshot_id)
+        if matching_run is None:
             rows.append(
                 ResearchInboxRow(
                     security_id=security_id,
                     latest_request_at=request.requested_at,
-                    latest_run_completed_at=(run.completed_at if run is not None else None),
+                    latest_run_completed_at=None,
                     requested_lane=request.requested_lane,
                     mode=request.mode,
                     state="request_pending",
@@ -258,15 +259,19 @@ def build_research_inbox(
             ResearchInboxRow(
                 security_id=security_id,
                 latest_request_at=request.requested_at,
-                latest_run_completed_at=run.completed_at,
-                requested_lane=run.requested_lane,
-                mode=run.mode,
-                state=_run_state(run),
-                blocker_count=len(run.blockers),
-                opportunity_set_available=run.opportunity_set_snapshot_id is not None,
-                expectation_overlay_available=run.expectation_overlay_snapshot_id is not None,
+                latest_run_completed_at=matching_run.completed_at,
+                requested_lane=matching_run.requested_lane,
+                mode=matching_run.mode,
+                state=_run_state(matching_run),
+                blocker_count=len(matching_run.blockers),
+                opportunity_set_available=(
+                    matching_run.opportunity_set_snapshot_id is not None
+                ),
+                expectation_overlay_available=(
+                    matching_run.expectation_overlay_snapshot_id is not None
+                ),
                 prospective_registered=(
-                    run.prospective_registration_snapshot_id is not None
+                    matching_run.prospective_registration_snapshot_id is not None
                 ),
             )
         )
