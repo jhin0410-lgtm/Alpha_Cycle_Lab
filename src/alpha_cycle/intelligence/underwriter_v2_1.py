@@ -231,7 +231,9 @@ class UnderwritingReadinessSnapshot:
             UnderwritingReadiness.DEEP_LANE_READY_FOR_HUMAN_REVIEW,
             UnderwritingReadiness.DEEP_LANE_READY_WITH_EPISTEMIC_FLAGS,
         }
-        if self.readiness in ready_states and (self.required_elements_missing or self.blockers):
+        if self.readiness in ready_states and (
+            self.required_elements_missing or self.blockers
+        ):
             raise ValueError("ready underwriting state cannot contain missing elements or blockers")
 
     def payload_without_id(self) -> dict[str, object]:
@@ -452,11 +454,16 @@ def build_underwriting_readiness(
             blockers.append("terminal_thesis_status")
         missing = tuple(item for item in required if not satisfied_map.get(item, False))
         satisfied = tuple(item for item in required if satisfied_map.get(item, False))
+        sector_graph_flag = (
+            ("sector_level_causal_graph",)
+            if causal_graph is not None and causal_graph.security_id is None
+            else ()
+        )
         flags = tuple(
             dict.fromkeys(
                 tournament.flags
                 + _epistemic_flags(epistemic_defense)
-                + (("sector_level_causal_graph",) if causal_graph and causal_graph.security_id is None else ())
+                + sector_graph_flag
             )
         )
         if missing or blockers:
@@ -547,7 +554,8 @@ def _fast_lane_elements(
     return {
         "why_now": bool(thesis.why_now.strip()),
         "catalyst": bool(thesis.catalysts),
-        "transmission": bool(context.transmission_evidence_refs) or causal_graph is not None,
+        "transmission": bool(context.transmission_evidence_refs)
+        or causal_graph is not None,
         "expectation_or_priced_in_assessment": (
             _has_security_expectation(expectations, thesis.security_id)
             or _has_available_price_implied(price_implied, thesis.security_id)
@@ -574,8 +582,14 @@ def _deep_lane_elements(
     return {
         "full_causal_graph": causal_graph is not None,
         "forecast_tournament": tournament.comparable,
-        "certified_expectation": _has_comparable_market_consensus(expectations, tournament),
-        "valuation": _has_available_forward_valuation(forward_valuation, thesis.security_id),
+        "certified_expectation": _has_comparable_market_consensus(
+            expectations,
+            tournament,
+        ),
+        "valuation": _has_available_forward_valuation(
+            forward_valuation,
+            thesis.security_id,
+        ),
         "payoff_surface": payoff_surface is not None,
         "counter_thesis": epistemic_defense is not None,
         "outside_graph_scan": epistemic_defense is not None,
@@ -719,7 +733,8 @@ def _has_available_forward_valuation(
     security_id: str,
 ) -> bool:
     return valuation is not None and any(
-        item.security_id == security_id and item.status is ForwardValuationStatus.AVAILABLE
+        item.security_id == security_id
+        and item.status is ForwardValuationStatus.AVAILABLE
         for item in valuation.observations
     )
 
