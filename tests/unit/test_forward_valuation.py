@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -50,6 +49,7 @@ def _expectation(
     value: float = 10_000.0,
     unit: str = "KRW_million",
     provider: str = "certified_consensus",
+    observed_at: datetime | None = None,
 ) -> CertifiedExpectationObservation:
     return CertifiedExpectationObservation(
         security_id="000660",
@@ -59,7 +59,7 @@ def _expectation(
         expectation_kind=ExpectationKind.MARKET_CONSENSUS,
         value=value,
         unit=unit,
-        observed_at=datetime(2026, 8, 22, 16, 0, tzinfo=_KST),
+        observed_at=observed_at or datetime(2026, 8, 22, 16, 0, tzinfo=_KST),
         source_evidence_id=("a" if provider == "certified_consensus" else "c") * 64,
         semantics=_semantics(provider),
         market_consensus_certified=True,
@@ -70,10 +70,13 @@ def _expectation(
 
 def _expectation_state(
     observations: tuple[CertifiedExpectationObservation, ...],
+    *,
+    captured_at: datetime | None = None,
+    evaluation_date: date | None = None,
 ) -> ExpectationStateSnapshot:
     return ExpectationStateSnapshot(
-        captured_at=datetime(2026, 8, 22, 16, 30, tzinfo=_KST),
-        evaluation_date=date(2026, 8, 22),
+        captured_at=captured_at or datetime(2026, 8, 22, 16, 30, tzinfo=_KST),
+        evaluation_date=evaluation_date or date(2026, 8, 22),
         observations=observations,
         source_snapshot_ids=("d" * 64,),
     )
@@ -183,8 +186,12 @@ def test_multiple_certified_providers_remain_separate_instead_of_silent_average(
 
 
 def test_evaluation_date_mismatch_fails_closed() -> None:
-    expectations = replace(
-        _expectation_state((_expectation(),)),
+    prior_observation = _expectation(
+        observed_at=datetime(2026, 8, 21, 16, 0, tzinfo=_KST),
+    )
+    expectations = _expectation_state(
+        (prior_observation,),
+        captured_at=datetime(2026, 8, 21, 16, 30, tzinfo=_KST),
         evaluation_date=date(2026, 8, 21),
     )
     with pytest.raises(ValueError, match="same evaluation date"):
