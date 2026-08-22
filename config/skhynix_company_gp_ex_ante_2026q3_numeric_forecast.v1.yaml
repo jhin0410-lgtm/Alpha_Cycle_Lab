@@ -1,0 +1,53 @@
+schema_version: 1
+forecast:
+  forecast_id: skhynix_company_gp_ex_ante_2026q3_numeric_forecast
+  forecast_version: 1.0-locked-before-2026q3-origin
+  status: frozen_before_2026q3_outcome
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+  target_period: 2026Q3
+
+  locked_inputs:
+    selected_estimator_path: data/private/research/skhynix-company-gp-ex-ante-selected-estimator/latest_selected_estimator.json
+    prospective_feature_vector_path: data/private/research/skhynix-company-gp-ex-ante-2026q3-prospective/latest_feature_vector.json
+
+  deterministic_prediction:
+    selected_candidate_id: lagged_gp_affine_ols
+    estimator: ordinary_least_squares
+    predictors:
+      - lagged_company_gross_profit
+    use_frozen_raw_unit_intercept_and_coefficients: true
+    verify_against_frozen_standardized_representation: true
+    internal_rounding_allowed: false
+    post_feature_model_refit_allowed: false
+    post_feature_coefficient_change_allowed: false
+    post_feature_predictor_change_allowed: false
+
+  prospective_benchmark:
+    benchmark_id: previous_reported_quarter_gross_profit_persistence
+    prediction_rule: lagged_company_gross_profit
+    freeze_benchmark_prediction_now: true
+
+  uncertainty_policy:
+    numeric_prediction_interval_enabled: false
+    reason: no_pre_outcome_interval_calibration_rule_was_frozen
+    historical_oos_mae_is_report_only_error_scale: true
+    training_error_is_report_only: true
+
+  timing_policy:
+    forecast_must_be_locked_not_after_forecast_origin: true
+    later_replay_of_existing_locked_artifact_allowed: true
+    first_forecast_after_origin_without_locked_artifact_allowed: false
+
+  protected_boundary_after_forecast:
+    prospective_feature_vector_frozen: true
+    prospective_forecast_run: true
+    2026q1_used_for_selection: false
+    2026q3_target_read: false
+    2026q3_source_outcome_loaded: false
+    2026q3_evaluated: false
+    numeric_forward_forecast_enabled: true
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    investment_action_enabled: false
