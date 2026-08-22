@@ -299,6 +299,14 @@ class CompetenceCohortSummary:
         if not self.dimension_summaries:
             raise ValueError("competence cohort requires dimension summaries")
 
+    @property
+    def cohort_key(self) -> tuple[int, str, str]:
+        return (
+            self.horizon_trading_days,
+            self.regime_taxonomy_id,
+            self.regime_bucket_id,
+        )
+
     def payload(self) -> dict[str, object]:
         return {
             "horizon_trading_days": self.horizon_trading_days,
@@ -392,17 +400,6 @@ class ProspectiveCompetenceLedgerSnapshot:
             "portfolio_optimization_enabled": False,
             "automatic_execution_enabled": False,
         }
-
-
-def _cohort_key(summary: CompetenceCohortSummary) -> tuple[int, str, str]:
-    return (
-        summary.horizon_trading_days,
-        summary.regime_taxonomy_id,
-        summary.regime_bucket_id,
-    )
-
-
-CompetenceCohortSummary.cohort_key = property(_cohort_key)  # type: ignore[attr-defined]
 
 
 def build_competence_context_registration(
@@ -599,11 +596,10 @@ def _build_cohort_summaries(
             observation.regime_bucket_id,
         )
         groups.setdefault(key, []).append(observation)
-    summaries = tuple(
+    return tuple(
         _summarize_cohort(key, tuple(items))
         for key, items in sorted(groups.items())
     )
-    return summaries
 
 
 def _summarize_cohort(
