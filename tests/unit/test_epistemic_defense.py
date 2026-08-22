@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -35,8 +34,6 @@ from alpha_cycle.intelligence.epistemic_defense import (
 )
 
 _KST = ZoneInfo("Asia/Seoul")
-_EVIDENCE_A = "a" * 64
-_EVIDENCE_B = "b" * 64
 
 
 def _uncertainty() -> ThesisUncertainty:
@@ -116,7 +113,9 @@ def _counter(thesis: InvestmentThesisSnapshot, **overrides: object):
         "thesis_snapshot_id": thesis.snapshot_id,
         "captured_at": datetime(2026, 8, 22, 18, 10, tzinfo=_KST),
         "created_without_thesis_support_search": True,
-        "independence_method": "Separate search prompt and evidence pass before reading support refs.",
+        "independence_method": (
+            "Separate search prompt and evidence pass before reading support refs."
+        ),
         "search_scope": ("demand reversal", "customer inventory", "competitor supply"),
         "strongest_alternative_explanation_id": "alt-demand-pull-forward",
         "alternative_explanations": (_alternative(),),
@@ -167,7 +166,9 @@ def _blind_spot(thesis: InvestmentThesisSnapshot, **overrides: object):
         ),
         "graph_variables_used_as_exclusion_set": True,
         "search_scope": ("macro", "competition", "policy", "capital allocation"),
-        "discovery_method": "Search outside the existing critical-state variable names and mechanisms.",
+        "discovery_method": (
+            "Search outside the existing critical-state variable names and mechanisms."
+        ),
         "search_completed": True,
         "candidates": (_candidate(),),
         "search_limitations": (
