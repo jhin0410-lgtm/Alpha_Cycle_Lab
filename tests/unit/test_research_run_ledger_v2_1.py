@@ -307,8 +307,19 @@ def test_ledger_rejects_fabricated_summary() -> None:
 def test_security_history_and_latest_run_are_deterministic() -> None:
     request_a = _request(request_id="request-a")
     request_b = _request(request_id="request-b")
-    run_a = _bound_run(request_a, run_id="run-a")
-    run_b = _bound_run(request_b, run_id="run-b", offset_seconds=30)
+    round_a = _round()
+    round_b = replace(
+        _round(),
+        round_id="round-2",
+        captured_at=NOW + timedelta(seconds=35),
+    )
+    run_a = _bound_run(request_a, round_a, run_id="run-a")
+    run_b = _bound_run(
+        request_b,
+        round_b,
+        run_id="run-b",
+        offset_seconds=30,
+    )
     ledger = build_research_run_ledger(
         (request_a, request_b),
         (run_b, run_a),
