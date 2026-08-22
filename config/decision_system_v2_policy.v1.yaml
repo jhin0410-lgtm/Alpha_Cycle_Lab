@@ -31,13 +31,14 @@ policy:
       - 20
     exact_calendar_equivalence_claimed: false
 
-  uncertainty_dimensions:
-    - evidence
-    - model
-    - regime
-    - expectation
-    - catalyst
-    - valuation
+  uncertainty:
+    dimensions:
+      - evidence
+      - model
+      - regime
+      - expectation
+      - catalyst
+      - valuation
     allowed_levels:
       - low
       - medium
