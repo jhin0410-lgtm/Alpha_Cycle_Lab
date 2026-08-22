@@ -27,6 +27,7 @@ from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 
 RESEARCH_RUN_LEDGER_SCHEMA_VERSION = 1
 _SUPPORTED_HORIZONS = frozenset({60, 120, 250})
+_HEX_DIGITS = frozenset("0123456789abcdef")
 
 
 class ResearchRunKind(StrEnum):
@@ -325,6 +326,10 @@ class ResearchRunLedgerSnapshot:
             raise ValueError("ledger cannot be built before a request was recorded")
         if any(item.completed_at > self.built_at for item in self.runs):
             raise ValueError("ledger cannot be built before a run completed")
+        if self.requests != tuple(sorted(self.requests, key=_request_sort_key)):
+            raise ValueError("ledger requests must use canonical chronological order")
+        if self.runs != tuple(sorted(self.runs, key=_run_sort_key)):
+            raise ValueError("ledger runs must use canonical chronological order")
         request_ids = [item.request_id for item in self.requests]
         request_snapshot_ids = [item.snapshot_id for item in self.requests]
         run_ids = [item.run_id for item in self.runs]
@@ -392,6 +397,8 @@ def bind_orchestrated_run(
     _require_aware(completed_at, "completed_at")
     if started_at < request.requested_at:
         raise ValueError("research run cannot start before its request")
+    if round_snapshot.captured_at > completed_at:
+        raise ValueError("research round cutoff cannot be after run completion")
     _validate_request_round_binding(request, round_snapshot)
     if (
         request.mode is ResearchRoundMode.PROSPECTIVE
@@ -467,11 +474,16 @@ def build_research_run_ledger(
     *,
     built_at: datetime,
 ) -> ResearchRunLedgerSnapshot:
-    summary = build_research_process_observability_summary(requests, runs)
+    canonical_requests = tuple(sorted(requests, key=_request_sort_key))
+    canonical_runs = tuple(sorted(runs, key=_run_sort_key))
+    summary = build_research_process_observability_summary(
+        canonical_requests,
+        canonical_runs,
+    )
     return ResearchRunLedgerSnapshot(
         built_at=built_at,
-        requests=requests,
-        runs=runs,
+        requests=canonical_requests,
+        runs=canonical_runs,
         summary=summary,
     )
 
@@ -488,6 +500,8 @@ def build_research_process_observability_summary(
     codes = Counter(blocker.code for item in runs for blocker in item.blockers)
     blockers_per_run = [len(item.blockers) for item in runs]
     durations = [item.duration_seconds for item in runs]
+    request_securities = {security for item in requests for security in item.security_ids}
+    run_securities = {security for item in runs for security in item.security_ids}
     return ResearchProcessObservabilitySummary(
         request_count=len(requests),
         run_count=len(runs),
@@ -509,9 +523,7 @@ def build_research_process_observability_summary(
         expectation_overlay_run_count=sum(
             item.expectation_overlay_snapshot_id is not None for item in runs
         ),
-        unique_security_count=len(
-            {security for item in runs for security in item.security_ids}
-        ),
+        unique_security_count=len(request_securities | run_securities),
         mean_blockers_per_run=(mean(blockers_per_run) if blockers_per_run else None),
         median_blockers_per_run=(median(blockers_per_run) if blockers_per_run else None),
         mean_duration_seconds=(mean(durations) if durations else None),
@@ -527,12 +539,7 @@ def runs_for_security(
     security_id: str,
 ) -> tuple[ResearchRoundRunSnapshot, ...]:
     _require_text(security_id, "security_id")
-    return tuple(
-        sorted(
-            (item for item in ledger.runs if security_id in item.security_ids),
-            key=lambda item: (item.completed_at, item.run_id),
-        )
-    )
+    return tuple(item for item in ledger.runs if security_id in item.security_ids)
 
 
 def latest_run_for_security(
@@ -645,8 +652,10 @@ def _persist_content_addressed(
     payload["snapshot_id"] = snapshot_id
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     fd: int | None = None
+    created = False
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        created = True
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = None
             handle.write(encoded)
@@ -655,9 +664,18 @@ def _persist_content_addressed(
     except BaseException:
         if fd is not None:
             os.close(fd)
-        path.unlink(missing_ok=True)
+        if created:
+            path.unlink(missing_ok=True)
         raise
     return path
+
+
+def _request_sort_key(item: AnalysisRequestSnapshot) -> tuple[datetime, str, str]:
+    return (item.requested_at, item.request_id, item.snapshot_id)
+
+
+def _run_sort_key(item: ResearchRoundRunSnapshot) -> tuple[datetime, str, str]:
+    return (item.completed_at, item.run_id, item.snapshot_id)
 
 
 def _validate_counter_rows(values: tuple[tuple[str, int], ...], field: str) -> None:
@@ -690,12 +708,8 @@ def _validate_text_tuple(values: tuple[str, ...], field: str) -> None:
 
 
 def _validate_sha(value: str, field: str) -> None:
-    if len(value) != 64:
-        raise ValueError(f"{field} must be a SHA-256 hex digest")
-    try:
-        int(value, 16)
-    except ValueError as exc:
-        raise ValueError(f"{field} must be a SHA-256 hex digest") from exc
+    if len(value) != 64 or any(character not in _HEX_DIGITS for character in value):
+        raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
 
 
 def _sha(payload: dict[str, object]) -> str:
