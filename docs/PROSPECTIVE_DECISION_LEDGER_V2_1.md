@@ -77,23 +77,31 @@ A cohort summary reports descriptive statistics such as:
 - overlay improved / degraded / unchanged counts
 - mean and median expectation-overlay incremental best return
 
-The ledger does not pool different horizons into one score.
+The ledger does not pool different horizons into one score. A supplied cohort summary is also recomputed from its included ledger entries before the snapshot is accepted, so stale aggregate counts or rates cannot be persisted merely because they are individually in range.
 
 ## Provenance and anti-hindsight boundary
 
 The ledger rejects observations when the registered and realized objects do not reconcile. Examples include:
 
 - registration points to another opportunity-set snapshot
+- opportunity-set or expectation-overlay capture occurs after registration
 - candidate universe differs from the base capital-allocation-comparable universe
 - registered Pareto frontier or leader differs from the frozen opportunity set
+- an expectation candidate is not bound to the exact base candidate snapshot
+- expectation comparable/blocked registries do not match candidate-level comparability
 - outcome points to another registration snapshot
 - outcome candidate universe differs from the registration
 - benchmark, horizon, price basis, or entry session drift
+- the target session does not equal the declared 60/120/250 trading-day horizon on the supplied trading calendar
+- scoring occurs before the target session closes
+- recorded realized return differs from `(exit_price / entry_price) - 1`
 - benchmark-excess return arithmetic drift
 - ex-post winner, frontier regret, leader regret, or overlay incremental-return drift
 - a registered expectation overlay is missing or replaced by another snapshot
 
-The outcome is therefore not trusted merely because it is a valid dataclass. Decision metrics are recomputed from the frozen candidate returns before a ledger entry is accepted.
+The outcome is therefore not trusted merely because it is a valid dataclass. Realized returns are recomputed from the recorded entry/exit prices, the target session is rederived from the trading calendar, decision metrics are recomputed from those returns, and ledger flags are regenerated from validated metrics rather than copied from the upstream outcome.
+
+Candidate order is preserved for the registered experiment, but eligibility comparisons are order-independent. A valid direct registration therefore does not fail simply because its candidate tuple is not lexically sorted.
 
 ## Explicitly disabled
 
@@ -112,7 +120,7 @@ Prospective observations must accumulate before any later calibration or model-s
 
 ## Persistence
 
-`ProspectiveDecisionLedgerSnapshot` is content-addressed. Persistence includes its snapshot SHA-256 and refuses overwrite of an existing path.
+`ProspectiveDecisionLedgerSnapshot` is content-addressed. Persistence includes its snapshot SHA-256 and claims the final path with an atomic exclusive-create operation. Concurrent writers therefore cannot both pass a check and silently replace one another; one writer wins the path and later contenders fail closed with `FileExistsError`.
 
 This creates immutable checkpoints of the learning history rather than a mutable score table whose past can be silently rewritten.
 
