@@ -42,7 +42,17 @@ def register_prospective_opportunity_set(
     if opportunity_set.evaluation_date > registration_date:
         raise ValueError("opportunity-set evaluation_date cannot follow registration date")
 
-    comparable = tuple(sorted(opportunity_set.comparable_security_ids))
+    declared_comparable = tuple(sorted(opportunity_set.comparable_security_ids))
+    derived_comparable = tuple(
+        sorted(
+            item.security_id
+            for item in opportunity_set.candidates
+            if item.capital_allocation_comparable
+        )
+    )
+    if declared_comparable != derived_comparable:
+        raise ValueError("base opportunity-set comparable-security registry has drifted")
+    comparable = derived_comparable
     if len(comparable) < 2:
         raise ValueError(
             "prospective cross-sectional scorekeeping requires at least two "
@@ -102,6 +112,8 @@ def _validate_overlay(
 ) -> None:
     if overlay.captured_at > registered_at:
         raise ValueError("scorekeeping registration cannot precede expectation-overlay capture")
+    if overlay.captured_at < base.captured_at:
+        raise ValueError("expectation-overlay capture cannot precede base opportunity-set capture")
     if overlay.base_opportunity_set_snapshot_id != base.snapshot_id:
         raise ValueError("expectation overlay is bound to a different base opportunity set")
     if overlay.evaluation_date != base.evaluation_date:
@@ -127,25 +139,31 @@ def _validate_overlay(
         if candidate.opportunity_candidate_snapshot_id != base_matches[0].snapshot_id:
             raise ValueError("expectation overlay candidate is bound to a different base candidate")
 
-    derived_comparable = tuple(
+    derived_expectation_comparable = tuple(
         sorted(item.security_id for item in overlay.candidates if item.expectation_gap_comparable)
     )
-    derived_blocked = tuple(
+    derived_expectation_blocked = tuple(
         sorted(
             item.security_id
             for item in overlay.candidates
             if not item.expectation_gap_comparable
         )
     )
-    if tuple(sorted(overlay.expectation_comparable_security_ids)) != derived_comparable:
+    if (
+        tuple(sorted(overlay.expectation_comparable_security_ids))
+        != derived_expectation_comparable
+    ):
         raise ValueError("expectation overlay comparable-security registry has drifted")
-    if tuple(sorted(overlay.expectation_blocked_security_ids)) != derived_blocked:
+    if (
+        tuple(sorted(overlay.expectation_blocked_security_ids))
+        != derived_expectation_blocked
+    ):
         raise ValueError("expectation overlay blocked-security registry has drifted")
     if set(overlay.base_pareto_frontier_security_ids) != set(
         base.pareto_frontier_security_ids
     ):
         raise ValueError("expectation overlay base Pareto frontier differs from base snapshot")
-    if len(overlay.expectation_comparable_security_ids) < 2:
+    if len(derived_expectation_comparable) < 2:
         raise ValueError(
             "expectation overlay requires at least two expectation-comparable securities "
             "for prospective cross-sectional scorekeeping"
@@ -153,10 +171,10 @@ def _validate_overlay(
     if not overlay.expectation_pareto_frontier_security_ids:
         raise ValueError("expectation overlay requires a non-empty expectation Pareto frontier")
     if not set(overlay.expectation_pareto_frontier_security_ids).issubset(
-        comparable_security_ids
+        derived_expectation_comparable
     ):
         raise ValueError(
-            "expectation Pareto frontier is not contained in the registered candidate universe"
+            "expectation Pareto frontier is not contained in expectation-comparable securities"
         )
 
 
