@@ -1,0 +1,69 @@
+schema_version: 1
+scoring:
+  scoring_id: skhynix_company_gp_ex_ante_2026q3_outcome_scoring
+  scoring_version: 1.0-frozen-before-2026q3-outcome
+  status: frozen_before_2026q3_outcome
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+  target_period: 2026Q3
+
+  locked_inputs:
+    numeric_forecast_path: data/private/research/skhynix-company-gp-ex-ante-2026q3-forecast/latest_numeric_forecast.json
+    historical_execution_v2_path: config/skhynix_company_gp_ex_ante_historical_evaluation_execution.v2.yaml
+
+  target_source_policy:
+    provider: opendart
+    endpoint: fnlttSinglAcntAll
+    business_year: 2026
+    report_code: "11014"
+    fs_div: CFS
+    current_term_amount_field: thstrm_amount
+    account_alias_policy_source: historical_execution_v2
+    allowed_statement_divisions_source: historical_execution_v2
+    require_revenue_minus_cost_equals_gross_profit: true
+    require_same_receipt_for_selected_accounts: true
+    require_receipt_date_not_after_evaluation_date: true
+    raw_payload_capture_before_target_extraction: true
+    raw_payload_refresh_after_first_successful_capture_allowed: false
+    account_name_fuzzy_matching_allowed: false
+    arithmetic_derivation_of_missing_source_accounts_allowed: false
+    source_fallback_allowed: false
+    correction_search_or_selection_allowed: false
+    partial_target_acceptance_allowed: false
+
+  timing_policy:
+    target_period_must_be_complete_before_acquisition: true
+    target_period_end_date: 2026-09-30
+    evaluation_date_must_not_precede_target_period_end: true
+    caller_must_supply_evaluation_date: true
+    failed_or_empty_preavailability_response_must_not_be_persisted_as_outcome: true
+
+  frozen_score_definition:
+    primary_metric: absolute_error_krw_million
+    selected_error_sign_convention: forecast_minus_actual
+    benchmark_error_sign_convention: forecast_minus_actual
+    selected_absolute_error_rule: abs_selected_signed_error
+    benchmark_absolute_error_rule: abs_benchmark_signed_error
+    winner_rule: strict_lower_absolute_error
+    exact_absolute_error_tie_result: tie
+    tolerance_based_tie_allowed: false
+    post_outcome_metric_addition_allowed: false
+    post_outcome_metric_reweighting_allowed: false
+    historical_mae_used_as_pass_fail_threshold: false
+    relative_error_primary_metric_allowed: false
+
+  post_score_boundary:
+    model_refit_allowed: false
+    coefficient_change_allowed: false
+    predictor_change_allowed: false
+    feature_change_allowed: false
+    benchmark_change_allowed: false
+    target_source_refresh_allowed: false
+    2026q3_target_read_after_successful_score: true
+    2026q3_source_outcome_loaded_after_successful_score: true
+    2026q3_evaluated_after_successful_score: true
+    prospective_forecast_remains_immutable: true
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    investment_action_enabled: false
