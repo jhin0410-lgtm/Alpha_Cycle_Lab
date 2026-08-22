@@ -101,8 +101,10 @@ class PayoffSurfaceSnapshot:
         _validate_sha_tuple(self.source_snapshot_ids, "source_snapshot_ids")
         _validate_sha(self.guardrail_evidence_id, "guardrail_evidence_id")
         _validate_text_tuple(self.warnings, "warnings")
-        labels = tuple(sorted(item.label.value for item in self.scenarios))
-        if labels != EXPECTED_SCENARIO_LABELS:
+        labels = tuple(item.label.value for item in self.scenarios)
+        if len(labels) != len(EXPECTED_SCENARIO_LABELS) or set(labels) != set(
+            EXPECTED_SCENARIO_LABELS
+        ):
             raise ValueError("payoff surface requires exactly one bear, base, and bull scenario")
         ids = tuple(item.scenario_id for item in self.scenarios)
         if len(set(ids)) != len(ids):
