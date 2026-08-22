@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
@@ -572,10 +573,7 @@ def build_attribution_evaluation(
         _evaluate_hypothesis(item, tuple(by_hypothesis[item.hypothesis_id]))
         for item in plan.hypotheses
     )
-    layer_summaries = tuple(
-        _summarize_layer(layer, evaluations)
-        for layer in AttributionLayer
-    )
+    layer_summaries = tuple(_summarize_layer(layer, evaluations) for layer in AttributionLayer)
     flags: list[str] = []
     statuses = {item.status for item in evaluations}
     if HypothesisEvaluationStatus.INCONSISTENT in statuses:
@@ -675,7 +673,8 @@ def _validate_ledger_binding(
     )
     if ledger_entry.target_session != target_session:
         raise ValueError("attribution ledger target session differs from declared horizon")
-    if ledger_entry.scored_at.astimezone(calendar.timezone) < calendar.session_close(target_session):
+    target_close = calendar.session_close(target_session)
+    if ledger_entry.scored_at.astimezone(calendar.timezone) < target_close:
         raise ValueError("attribution ledger was scored before target-session close")
 
 
@@ -806,13 +805,11 @@ def _validate_text_tuple(values: tuple[str, ...], field: str) -> None:
         _require_text(value, field)
 
 
-def _validate_unique_ids(values: object, field: str) -> None:
-    items = tuple(values)  # type: ignore[arg-type]
+def _validate_unique_ids(values: Iterable[str], field: str) -> None:
+    items = tuple(values)
     if len(set(items)) != len(items):
         raise ValueError(f"{field} must be unique")
     for value in items:
-        if not isinstance(value, str):
-            raise ValueError(f"{field} must contain strings")
         _require_text(value, field)
 
 
