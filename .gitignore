@@ -9,6 +9,7 @@ credentials/
 data/raw/
 data/private/
 outputs/
+.alpha_cycle_artifacts/
 *.db
 *.sqlite*
 *orders*.log
