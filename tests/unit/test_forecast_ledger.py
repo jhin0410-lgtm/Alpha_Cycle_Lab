@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -146,13 +145,14 @@ def test_selected_and_persistence_forecasts_share_one_dependency_cluster() -> No
     assert summary.payload()["statistical_effective_sample_size_claimed"] is False
 
 
-def test_outcome_is_separate_and_cannot_precede_target_date() -> None:
+def test_outcome_is_target_level_and_cannot_precede_target_date() -> None:
     registration = _registration()
     original_id = registration.snapshot_id
     outcome = _outcome(registration)
-    assert outcome.registration_snapshot_id == original_id
+    assert outcome.target_key == registration.target_key
     assert registration.snapshot_id == original_id
     assert outcome.snapshot_id != registration.snapshot_id
+    assert outcome.payload_without_id()["forecast_registration_specific"] is False
     with pytest.raises(ValueError, match="before target_date"):
         build_forecast_outcome(
             registration,
@@ -182,7 +182,7 @@ def test_evaluation_computes_accuracy_without_composite_score() -> None:
     assert payload["composite_forecast_score"] is None
 
 
-def test_baseline_information_gain_is_same_outcome_absolute_error_advantage() -> None:
+def test_one_target_outcome_can_score_selected_and_baseline_forecasts() -> None:
     benchmark = _registration(
         forecast_id="benchmark",
         forecast_value=65_991_356.0,
@@ -193,26 +193,46 @@ def test_baseline_information_gain_is_same_outcome_absolute_error_advantage() ->
         forecast_id="selected",
         baseline_refs=(benchmark.snapshot_id,),
     )
-    selected_outcome = _outcome(selected)
-    benchmark_outcome = replace(
-        selected_outcome,
-        registration_snapshot_id=benchmark.snapshot_id,
-    )
+    outcome = _outcome(selected)
     benchmark_eval = build_forecast_evaluation(
         benchmark,
-        benchmark_outcome,
+        outcome,
         evaluated_at=datetime(2026, 11, 1, 10, 10, tzinfo=_KST),
     )
     selected_eval = build_forecast_evaluation(
         selected,
-        selected_outcome,
+        outcome,
         evaluated_at=datetime(2026, 11, 1, 10, 11, tzinfo=_KST),
         baseline_evaluation=benchmark_eval,
     )
+    assert benchmark_eval.outcome_snapshot_id == selected_eval.outcome_snapshot_id
     expected = benchmark_eval.accuracy.absolute_error - selected_eval.accuracy.absolute_error
     assert selected_eval.absolute_error_advantage_vs_baseline == pytest.approx(expected)
     assert selected_eval.information_gain is DiagnosticAvailability.OBSERVED
     assert selected_eval.baseline_evaluation_refs == (benchmark_eval.snapshot_id,)
+
+
+def test_baseline_evaluation_must_have_been_preregistered_as_baseline() -> None:
+    benchmark = _registration(
+        forecast_id="benchmark",
+        forecast_value=65_991_356.0,
+        forecaster_kind=ForecasterKind.BENCHMARK,
+        model_family="persistence",
+    )
+    selected = _registration(forecast_id="selected", baseline_refs=())
+    outcome = _outcome(selected)
+    benchmark_eval = build_forecast_evaluation(
+        benchmark,
+        outcome,
+        evaluated_at=datetime(2026, 11, 1, 10, 10, tzinfo=_KST),
+    )
+    with pytest.raises(ValueError, match="not declared in registration.baseline_refs"):
+        build_forecast_evaluation(
+            selected,
+            outcome,
+            evaluated_at=datetime(2026, 11, 1, 10, 11, tzinfo=_KST),
+            baseline_evaluation=benchmark_eval,
+        )
 
 
 def test_primary_ape_fails_closed_when_actual_is_zero() -> None:
