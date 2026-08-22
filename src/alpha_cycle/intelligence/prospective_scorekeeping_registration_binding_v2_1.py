@@ -116,6 +116,31 @@ def _validate_overlay(
         raise ValueError(
             "expectation overlay must represent every and only base-comparable security"
         )
+    for candidate in overlay.candidates:
+        if candidate.comparison_policy_snapshot_id != overlay.comparison_policy_snapshot_id:
+            raise ValueError("expectation overlay candidate comparison policy mismatch")
+        base_matches = tuple(
+            item for item in base.candidates if item.security_id == candidate.security_id
+        )
+        if len(base_matches) != 1:
+            raise ValueError("base opportunity set must contain exactly one overlay security")
+        if candidate.opportunity_candidate_snapshot_id != base_matches[0].snapshot_id:
+            raise ValueError("expectation overlay candidate is bound to a different base candidate")
+
+    derived_comparable = tuple(
+        sorted(item.security_id for item in overlay.candidates if item.expectation_gap_comparable)
+    )
+    derived_blocked = tuple(
+        sorted(
+            item.security_id
+            for item in overlay.candidates
+            if not item.expectation_gap_comparable
+        )
+    )
+    if tuple(sorted(overlay.expectation_comparable_security_ids)) != derived_comparable:
+        raise ValueError("expectation overlay comparable-security registry has drifted")
+    if tuple(sorted(overlay.expectation_blocked_security_ids)) != derived_blocked:
+        raise ValueError("expectation overlay blocked-security registry has drifted")
     if set(overlay.base_pareto_frontier_security_ids) != set(
         base.pareto_frontier_security_ids
     ):
