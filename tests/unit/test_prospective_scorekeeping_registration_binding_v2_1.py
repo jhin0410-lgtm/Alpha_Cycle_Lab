@@ -255,6 +255,33 @@ def test_binding_rejects_overlay_candidate_policy_drift() -> None:
         _register(base, overlay=tampered)
 
 
+def test_binding_rejects_overlay_candidate_bound_to_wrong_base_candidate() -> None:
+    base = _base()
+    overlay = _overlay(base)
+    candidate_a = replace(
+        overlay.candidates[0],
+        opportunity_candidate_snapshot_id="f" * 64,
+    )
+    tampered = replace(overlay, candidates=(candidate_a, overlay.candidates[1]))
+
+    with pytest.raises(ValueError, match="different base candidate"):
+        _register(base, overlay=tampered)
+
+
+def test_binding_rejects_overlay_captured_before_base_snapshot() -> None:
+    base = replace(
+        _base(),
+        captured_at=datetime(2026, 8, 22, 18, 8, tzinfo=SEOUL),
+    )
+    overlay = replace(
+        _overlay(base),
+        captured_at=datetime(2026, 8, 22, 18, 7, tzinfo=SEOUL),
+    )
+
+    with pytest.raises(ValueError, match="cannot precede base opportunity-set capture"):
+        _register(base, overlay=overlay)
+
+
 def test_binding_rejects_snapshot_captured_after_registration() -> None:
     base = replace(
         _base(),
@@ -265,7 +292,7 @@ def test_binding_rejects_snapshot_captured_after_registration() -> None:
         _register(base, overlay=None)
 
 
-def test_binding_rejects_insufficient_base_comparable_candidates() -> None:
+def test_binding_rejects_base_comparable_registry_drift() -> None:
     base = replace(
         _base(),
         comparable_security_ids=("A",),
@@ -274,8 +301,46 @@ def test_binding_rejects_insufficient_base_comparable_candidates() -> None:
         unique_pareto_leader_security_id=None,
     )
 
+    with pytest.raises(ValueError, match="comparable-security registry has drifted"):
+        _register(base, overlay=None)
+
+
+def test_binding_rejects_insufficient_base_comparable_candidates() -> None:
+    original = _base()
+    candidate_b = replace(
+        original.candidates[1],
+        research_class=OpportunityResearchClass.FAST_READY,
+        comparison_blockers=("underwriter_not_deep_ready",),
+    )
+    base = replace(
+        original,
+        candidates=(original.candidates[0], candidate_b, original.candidates[2]),
+        comparable_security_ids=("A",),
+        pareto_frontier_security_ids=("A",),
+        fast_lane_research_security_ids=("B", "C"),
+        dominance_relations=(),
+        unique_pareto_leader_security_id=None,
+    )
+
     with pytest.raises(ValueError, match="at least two base-comparable"):
         _register(base, overlay=None)
+
+
+def test_binding_rejects_expectation_comparable_registry_drift() -> None:
+    base = _base()
+    original = _overlay(base)
+    blocked_b = replace(
+        original.candidates[1],
+        consensus_relative_gap=None,
+        comparison_blockers=("consensus_relative_gap_unavailable",),
+    )
+    overlay = replace(
+        original,
+        candidates=(original.candidates[0], blocked_b),
+    )
+
+    with pytest.raises(ValueError, match="comparable-security registry has drifted"):
+        _register(base, overlay=overlay)
 
 
 def test_binding_rejects_overlay_without_two_expectation_comparable_candidates() -> None:
