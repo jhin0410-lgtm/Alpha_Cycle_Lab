@@ -1,9 +1,9 @@
 """Dependency-aware prospective competence ledger for Decision System v2.1.
 
-This module learns only descriptive recurrence patterns across completed prospective attribution
+The module learns only descriptive recurrence patterns across completed prospective attribution
 experiments. Regime and dependency-cluster labels are frozen before the outcome so later grouping
-cannot be chosen after seeing performance. Raw observations and independent cluster counts remain
-separate; no statistical effective sample size, composite skill score, or architecture update is
+cannot be selected after seeing performance. Raw observations and dependency clusters stay
+separate; no statistical effective sample size, scalar skill score, or architecture update is
 claimed.
 """
 
@@ -25,6 +25,7 @@ from alpha_cycle.intelligence.prospective_causal_attribution_v2_1 import (
     AttributionDomain,
     AttributionLayer,
     HypothesisEvaluationStatus,
+    ObservedDirection,
     ProspectiveAttributionEvaluationSnapshot,
     ProspectiveAttributionPlanSnapshot,
 )
@@ -73,7 +74,7 @@ class CompetenceContextRegistration:
         _require_text(self.dependency_cluster_id, "dependency_cluster_id")
         _require_text(self.regime_taxonomy_id, "regime_taxonomy_id")
         _require_text(self.regime_bucket_id, "regime_bucket_id")
-        _validate_refs(self.regime_evidence_refs, "regime_evidence_refs")
+        _validate_text_tuple(self.regime_evidence_refs, "regime_evidence_refs")
         if not self.regime_evidence_refs:
             raise ValueError("competence context requires pre-outcome regime evidence")
 
@@ -169,8 +170,7 @@ class CompetenceObservationSnapshot:
             (item.hypothesis_id for item in self.hypothesis_results),
             "hypothesis_id",
         )
-        observed_layers = {item.layer for item in self.hypothesis_results}
-        if observed_layers != set(AttributionLayer):
+        if {item.layer for item in self.hypothesis_results} != set(AttributionLayer):
             raise ValueError("competence observation must retain all attribution layers")
         if len(set(self.selection_diagnostics)) != len(self.selection_diagnostics):
             raise ValueError("competence selection diagnostics must be unique")
@@ -185,9 +185,7 @@ class CompetenceObservationSnapshot:
             "observed_at": self.observed_at.isoformat(),
             "context_snapshot_id": self.context_snapshot_id,
             "attribution_plan_snapshot_id": self.attribution_plan_snapshot_id,
-            "attribution_evaluation_snapshot_id": (
-                self.attribution_evaluation_snapshot_id
-            ),
+            "attribution_evaluation_snapshot_id": self.attribution_evaluation_snapshot_id,
             "ledger_entry_snapshot_id": self.ledger_entry_snapshot_id,
             "security_id": self.security_id,
             "horizon_trading_days": self.horizon_trading_days,
@@ -261,7 +259,7 @@ class CompetenceDimensionSummary:
 
 @dataclass(frozen=True)
 class CompetenceCohortSummary:
-    """One horizon × preregistered regime cohort, with dependency counts kept explicit."""
+    """One horizon × preregistered regime cohort with dependency counts explicit."""
 
     horizon_trading_days: int
     regime_taxonomy_id: str
@@ -294,10 +292,10 @@ class CompetenceCohortSummary:
         dimension_keys = tuple(
             (item.layer, item.domain) for item in self.dimension_summaries
         )
+        if not dimension_keys:
+            raise ValueError("competence cohort requires dimension summaries")
         if len(set(dimension_keys)) != len(dimension_keys):
             raise ValueError("competence dimension summaries must be unique")
-        if not self.dimension_summaries:
-            raise ValueError("competence cohort requires dimension summaries")
 
     @property
     def cohort_key(self) -> tuple[int, str, str]:
@@ -343,13 +341,10 @@ class ProspectiveCompetenceLedgerSnapshot:
         evaluation_ids = tuple(
             item.attribution_evaluation_snapshot_id for item in self.observations
         )
-        ledger_ids = tuple(item.ledger_entry_snapshot_id for item in self.observations)
         if len(set(context_ids)) != len(context_ids):
             raise ValueError("competence context snapshots must be unique")
         if len(set(evaluation_ids)) != len(evaluation_ids):
             raise ValueError("competence attribution evaluations must be unique")
-        if len(set(ledger_ids)) != len(ledger_ids):
-            raise ValueError("competence ledger entries must be unique")
         if any(item.observed_at > self.built_at for item in self.observations):
             raise ValueError("competence ledger cannot predate an included observation")
         expected = _build_cohort_summaries(self.observations)
@@ -414,7 +409,7 @@ def build_competence_context_registration(
     regime_evidence_refs: tuple[str, ...],
     calendar: TradingCalendar,
 ) -> CompetenceContextRegistration:
-    """Freeze grouping labels before the first scored close."""
+    """Freeze grouping labels no later than the first scored close."""
 
     guardrails = load_decision_system_v21_guardrails()
     if guardrails.single_trade_outcome_may_change_architecture_invariant:
@@ -425,16 +420,25 @@ def build_competence_context_registration(
         raise ValueError("competence registration uses another guardrail snapshot")
     if attribution_plan.registration_snapshot_id != registration.snapshot_id:
         raise ValueError("competence attribution plan is bound to another registration")
+    if attribution_plan.registration_id != registration.registration_id:
+        raise ValueError("competence attribution plan registration id differs")
     if attribution_plan.security_id not in registration.security_ids:
         raise ValueError("competence security is absent from registration universe")
+    if attribution_plan.evaluation_date != registration.evaluation_date:
+        raise ValueError("competence attribution evaluation date differs from registration")
+    if attribution_plan.entry_session != registration.entry_session:
+        raise ValueError("competence attribution entry session differs from registration")
     if attribution_plan.horizon_trading_days != registration.horizon_trading_days:
         raise ValueError("competence attribution horizon differs from registration")
+    _require_aware(attribution_plan.planned_at, "attribution_plan.planned_at")
+    if attribution_plan.planned_at < registration.registered_at:
+        raise ValueError("competence attribution plan cannot predate opportunity registration")
     _require_aware(registered_at, "registered_at")
     if registered_at < attribution_plan.planned_at:
         raise ValueError("competence context cannot predate attribution plan")
-    expected_entry = derive_entry_session(registration.registered_at, calendar=calendar)
     if registration.entry_rule is not ScorekeepingEntryRule.NEXT_AVAILABLE_SESSION_CLOSE:
         raise ValueError("unsupported competence entry rule")
+    expected_entry = derive_entry_session(registration.registered_at, calendar=calendar)
     if registration.entry_session != expected_entry:
         raise ValueError("competence registration entry session has drifted")
     if registered_at.astimezone(calendar.timezone) > calendar.session_close(expected_entry):
@@ -479,6 +483,8 @@ def build_competence_observation(
         raise ValueError("competence evaluation is bound to another ledger entry")
     if ledger_entry.registration_snapshot_id != context.registration_snapshot_id:
         raise ValueError("competence ledger entry is bound to another registration")
+    if ledger_entry.registration_id != attribution_plan.registration_id:
+        raise ValueError("competence ledger registration id differs from attribution plan")
     if context.security_id != attribution_plan.security_id:
         raise ValueError("competence context security differs from attribution plan")
     if attribution_evaluation.security_id != context.security_id:
@@ -492,11 +498,16 @@ def build_competence_observation(
     if ledger_entry.horizon_trading_days != context.horizon_trading_days:
         raise ValueError("competence ledger horizon differs from context")
     _require_aware(observed_at, "observed_at")
+    if attribution_evaluation.evaluated_at < ledger_entry.scored_at:
+        raise ValueError("competence attribution evaluation predates ledger scoring")
     if observed_at < attribution_evaluation.evaluated_at:
         raise ValueError("competence observation cannot predate attribution evaluation")
     if observed_at < ledger_entry.scored_at:
         raise ValueError("competence observation cannot predate ledger scoring")
-    expected_hypotheses = {item.hypothesis_id: item for item in attribution_plan.hypotheses}
+
+    expected_hypotheses = {
+        item.hypothesis_id: item for item in attribution_plan.hypotheses
+    }
     results: list[CompetenceHypothesisResult] = []
     for evaluation in attribution_evaluation.hypothesis_evaluations:
         hypothesis = expected_hypotheses.get(evaluation.hypothesis_id)
@@ -506,6 +517,14 @@ def build_competence_observation(
             raise ValueError("competence evaluation layer differs from frozen hypothesis")
         if evaluation.domain is not hypothesis.domain:
             raise ValueError("competence evaluation domain differs from frozen hypothesis")
+        if evaluation.expected_direction is not hypothesis.expected_direction:
+            raise ValueError("competence evaluation expected direction differs from frozen hypothesis")
+        recomputed_status = _mechanical_status(
+            hypothesis.expected_direction.value,
+            evaluation.observed_directions,
+        )
+        if evaluation.status is not recomputed_status:
+            raise ValueError("competence evaluation status differs from mechanical recomputation")
         results.append(
             CompetenceHypothesisResult(
                 hypothesis_id=evaluation.hypothesis_id,
@@ -516,6 +535,7 @@ def build_competence_observation(
         )
     if set(expected_hypotheses) != {item.hypothesis_id for item in results}:
         raise ValueError("competence evaluation does not cover all frozen hypotheses")
+    _validate_layer_summaries(attribution_evaluation)
     if attribution_evaluation.selection_diagnostics != ledger_entry.observed_attributions:
         raise ValueError("competence selection diagnostics differ from validated ledger entry")
     return CompetenceObservationSnapshot(
@@ -583,6 +603,57 @@ def persist_competence_ledger(
     _persist_snapshot(snapshot.snapshot_id, snapshot.payload_without_id(), path)
 
 
+def _mechanical_status(
+    expected_direction: str,
+    observed_directions: tuple[ObservedDirection, ...],
+) -> HypothesisEvaluationStatus:
+    for item in observed_directions:
+        if not isinstance(item, ObservedDirection):
+            raise ValueError("competence observed directions must use ObservedDirection")
+    known = tuple(
+        item for item in observed_directions if item is not ObservedDirection.UNKNOWN
+    )
+    if not known:
+        return HypothesisEvaluationStatus.INSUFFICIENT
+    if any(item is ObservedDirection.MIXED for item in known):
+        return HypothesisEvaluationStatus.MIXED
+    observed_values = {item.value for item in known}
+    if observed_values == {expected_direction}:
+        return HypothesisEvaluationStatus.CONSISTENT
+    if expected_direction not in observed_values and len(observed_values) == 1:
+        return HypothesisEvaluationStatus.INCONSISTENT
+    return HypothesisEvaluationStatus.MIXED
+
+
+def _validate_layer_summaries(
+    evaluation: ProspectiveAttributionEvaluationSnapshot,
+) -> None:
+    summaries = {item.layer: item for item in evaluation.layer_summaries}
+    if set(summaries) != set(AttributionLayer):
+        raise ValueError("competence evaluation layer summaries are incomplete")
+    for layer in AttributionLayer:
+        items = tuple(
+            item for item in evaluation.hypothesis_evaluations if item.layer is layer
+        )
+        summary = summaries[layer]
+        expected = (
+            len(items),
+            sum(item.status is HypothesisEvaluationStatus.CONSISTENT for item in items),
+            sum(item.status is HypothesisEvaluationStatus.INCONSISTENT for item in items),
+            sum(item.status is HypothesisEvaluationStatus.MIXED for item in items),
+            sum(item.status is HypothesisEvaluationStatus.INSUFFICIENT for item in items),
+        )
+        actual = (
+            summary.hypothesis_count,
+            summary.consistent_count,
+            summary.inconsistent_count,
+            summary.mixed_count,
+            summary.insufficient_count,
+        )
+        if actual != expected:
+            raise ValueError("competence evaluation layer summary differs from hypothesis results")
+
+
 def _build_cohort_summaries(
     observations: tuple[CompetenceObservationSnapshot, ...],
 ) -> tuple[CompetenceCohortSummary, ...]:
@@ -619,7 +690,7 @@ def _summarize_cohort(
             dimension_statuses.setdefault((result.layer, result.domain), []).append(
                 result.status
             )
-    dimension_summaries = tuple(
+    dimensions = tuple(
         CompetenceDimensionSummary(
             layer=layer,
             domain=domain,
@@ -638,7 +709,7 @@ def _summarize_cohort(
         raw_observation_count=len(observations),
         independent_dependency_cluster_count=len(ordered_clusters),
         dependency_cluster_counts=ordered_clusters,
-        dimension_summaries=dimension_summaries,
+        dimension_summaries=dimensions,
     )
 
 
@@ -677,7 +748,7 @@ def _persist_snapshot(
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-    except Exception:
+    except BaseException:
         path.unlink(missing_ok=True)
         raise
 
@@ -695,10 +766,6 @@ def _require_aware(value: datetime, field: str) -> None:
 def _validate_sha(value: str, field: str) -> None:
     if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
         raise ValueError(f"{field} must be a lowercase SHA-256 hex digest")
-
-
-def _validate_refs(values: tuple[str, ...], field: str) -> None:
-    _validate_text_tuple(values, field)
 
 
 def _validate_text_tuple(values: tuple[str, ...], field: str) -> None:
