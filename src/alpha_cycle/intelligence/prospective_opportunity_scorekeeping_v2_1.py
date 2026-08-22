@@ -1,8 +1,8 @@
 """Prospective scorekeeping for Decision System v2.1 opportunity sets.
 
-This module freezes the decision set before future market outcomes exist and later scores the
-same registered candidates on a fixed trading-session horizon. It is an evaluation layer, not a
-portfolio recommendation or execution engine.
+The module freezes a cross-sectional decision observation before future outcomes exist and later
+scores exactly that preregistered set on a fixed trading-session horizon. It evaluates research;
+it does not recommend portfolio weights or execute trades.
 """
 
 from __future__ import annotations
@@ -57,6 +57,10 @@ class ProspectiveOpportunityRegistration:
     def __post_init__(self) -> None:
         _require_text(self.registration_id, "registration_id")
         _require_aware(self.registered_at, "registered_at")
+        if not isinstance(self.entry_rule, ScorekeepingEntryRule):
+            raise ValueError("entry_rule must be a ScorekeepingEntryRule")
+        if not isinstance(self.price_basis, PriceBasis):
+            raise ValueError("price_basis must be a PriceBasis")
         if self.horizon_trading_days not in SUPPORTED_HORIZONS:
             raise ValueError("scorekeeping horizon must be 60, 120, or 250 trading days")
         if self.entry_session < self.evaluation_date:
@@ -68,6 +72,7 @@ class ProspectiveOpportunityRegistration:
         _validate_sha_tuple(self.source_evidence_ids, "source_evidence_ids")
         if not self.source_evidence_ids:
             raise ValueError("scorekeeping registration requires source evidence")
+
         _validate_security_tuple(self.security_ids, "security_ids", minimum=2)
         _validate_security_tuple(
             self.base_pareto_frontier_security_ids,
@@ -80,10 +85,12 @@ class ProspectiveOpportunityRegistration:
         _require_text(self.benchmark_security_id, "benchmark_security_id")
         if self.benchmark_security_id in security_set:
             raise ValueError("benchmark security cannot also be a registered candidate")
+
         if self.unique_base_leader_security_id is not None:
             _require_text(self.unique_base_leader_security_id, "unique_base_leader_security_id")
             if self.unique_base_leader_security_id not in self.base_pareto_frontier_security_ids:
                 raise ValueError("unique base leader must belong to the base Pareto frontier")
+
         if self.expectation_overlay_snapshot_id is None:
             if self.expectation_pareto_frontier_security_ids:
                 raise ValueError("expectation frontier requires an overlay snapshot")
@@ -158,7 +165,7 @@ class ProspectiveOpportunityRegistration:
 
 @dataclass(frozen=True)
 class CandidateRealizedOutcome:
-    """Observed path statistics for one preregistered security."""
+    """Observed adjusted-close path statistics for one preregistered security."""
 
     security_id: str
     entry_price: float
@@ -227,19 +234,22 @@ class ProspectiveOpportunityOutcomeSnapshot:
         _require_aware(self.scored_at, "scored_at")
         _validate_sha(self.registration_snapshot_id, "registration_snapshot_id")
         _require_text(self.benchmark_security_id, "benchmark_security_id")
+        if not isinstance(self.price_basis, PriceBasis):
+            raise ValueError("price_basis must be a PriceBasis")
         if self.horizon_trading_days not in SUPPORTED_HORIZONS:
             raise ValueError("outcome horizon must be 60, 120, or 250 trading days")
         if self.target_session <= self.entry_session:
             raise ValueError("target_session must follow entry_session")
         if self.price_basis is PriceBasis.RAW:
             raise ValueError("outcome cannot use raw price basis")
-        for value, field in (
+
+        for required_value, field in (
             (self.benchmark_return, "benchmark_return"),
             (self.base_frontier_best_return, "base_frontier_best_return"),
             (self.base_frontier_regret, "base_frontier_regret"),
         ):
-            _require_finite(value, field)
-        for value, field in (
+            _require_finite(required_value, field)
+        for optional_value, field in (
             (self.unique_base_leader_regret, "unique_base_leader_regret"),
             (self.expectation_frontier_best_return, "expectation_frontier_best_return"),
             (self.expectation_frontier_regret, "expectation_frontier_regret"),
@@ -252,8 +262,9 @@ class ProspectiveOpportunityOutcomeSnapshot:
                 "expectation_overlay_incremental_best_return",
             ),
         ):
-            if value is not None:
-                _require_finite(value, field)
+            if optional_value is not None:
+                _require_finite(optional_value, field)
+
         if not self.candidate_outcomes:
             raise ValueError("outcome requires candidate observations")
         ids = tuple(item.security_id for item in self.candidate_outcomes)
@@ -338,8 +349,14 @@ def score_prospective_opportunity(
 ) -> ProspectiveOpportunityOutcomeSnapshot:
     """Score one registration only after the full frozen trading horizon exists."""
     _require_aware(scored_at, "scored_at")
-    if observed_price_basis is not registration.price_basis:
+    if not isinstance(observed_price_basis, PriceBasis):
+        raise ValueError("observed_price_basis must be a PriceBasis")
+    if observed_price_basis != registration.price_basis:
         raise ValueError("observed market price basis does not match registration")
+
+    registration_date = registration.registered_at.astimezone(calendar.timezone).date()
+    if registration.evaluation_date > registration_date:
+        raise ValueError("evaluation_date cannot be after the registration date")
     expected_entry = derive_entry_session(registration.registered_at, calendar=calendar)
     if registration.entry_rule is not ScorekeepingEntryRule.NEXT_AVAILABLE_SESSION_CLOSE:
         raise ValueError("unsupported scorekeeping entry rule")
