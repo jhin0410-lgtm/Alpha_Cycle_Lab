@@ -1,0 +1,91 @@
+schema_version: 1
+successor_policy:
+  policy_id: alpha_cycle_decision_system_v2_1_guardrails
+  policy_version: 2.1-epistemic-guardrail-freeze
+  status: successor_guardrails_frozen_before_forward_valuation_merge
+
+  predecessor:
+    policy_path: config/decision_system_v2_policy.v1.yaml
+    policy_id: alpha_cycle_decision_system_v2
+    policy_version: 1.0-architecture-freeze
+    policy_evidence_id: 110e923c042ac9c38948a81e5f0805070d8e3ea34798b776cf9c152ae9a6b457
+    rewrite_allowed: false
+
+  epistemic_guardrails:
+    independent_counter_thesis_required_for_investable: true
+    counter_thesis_created_without_support_search_required: true
+    outside_graph_discovery_required_for_investable: true
+    unresolved_contradictions_must_be_preserved: true
+
+  complexity:
+    critical_state_variable_max: 5
+    evidence_node_count_capped: false
+
+  forecast_governance:
+    preregistration_required_for_decision_relevant_forecast: true
+    registration_and_outcome_snapshots_separate: true
+    registration_immutable: true
+    dependency_cluster_required: true
+    performance_vector_dimensions:
+      - accuracy
+      - calibration
+      - decision_relevance
+      - information_gain
+      - difficulty
+    composite_forecast_score_enabled: false
+
+  research_lanes:
+    fast:
+      allowed_thesis_statuses:
+        - research_priority
+        - underwriting
+      small_exploratory_position_human_review_only: true
+      automatic_execution_enabled: false
+      required_elements:
+        - why_now
+        - catalyst
+        - transmission
+        - expectation_or_priced_in_assessment
+        - top_downside
+        - counter_thesis
+        - kill_condition
+        - position_uncertainty
+    deep:
+      required_for_thesis_statuses:
+        - investable_now
+      required_elements:
+        - full_causal_graph
+        - forecast_tournament
+        - certified_expectation
+        - valuation
+        - payoff_surface
+        - counter_thesis
+        - outside_graph_scan
+        - opportunity_set_comparison
+        - portfolio_overlap
+
+  decision_outcome:
+    separate_snapshots_required: true
+    mutable_combined_row_allowed: false
+
+  attribution:
+    required_diagnostic_layers:
+      - market
+      - sector_theme
+      - factor_regime
+      - security_specific
+    causal_claim_from_residual_attribution_allowed: false
+
+  architecture_learning:
+    change_proposal_required: true
+    single_trade_outcome_may_change_architecture_invariant: false
+    correctness_exception_classes:
+      - look_ahead_bug
+      - provenance_violation
+      - accounting_error
+      - security_or_safety_defect
+    historical_policy_rewrite_allowed: false
+
+  migration:
+    forward_valuation_revalidation_required_after_guardrail_merge: true
+    frozen_skhynix_2026q3_round_changed: false

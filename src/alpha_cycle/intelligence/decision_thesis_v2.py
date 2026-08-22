@@ -1,6 +1,6 @@
 """Immutable thesis and uncertainty contracts for Alpha Cycle Lab decision-system v2.
 
-This module deliberately does not replace the existing scorecard pipeline.  It defines the
+This module deliberately does not replace the existing scorecard pipeline. It defines the
 forward v2 research unit that can later be integrated without changing any already-frozen
 prospective experiment.
 """
@@ -21,6 +21,9 @@ import yaml
 DEFAULT_DECISION_SYSTEM_V2_POLICY = Path("config/decision_system_v2_policy.v1.yaml")
 PRIMARY_HORIZONS = (60, 120, 250)
 SUPPORTING_PATH_HORIZONS = (1, 5, 20)
+EXPECTATION_CLAIM_CATEGORIES = frozenset(
+    {"market_expectation", "market_consensus", "expectation_state"}
+)
 
 
 class EpistemicStatus(StrEnum):
@@ -177,12 +180,23 @@ class DecisionSystemV2Policy:
     status: str
     primary_horizons: tuple[int, ...]
     supporting_horizons: tuple[int, ...]
+    exact_calendar_equivalence_claimed: bool
     automatic_order_execution_enabled: bool
     unconstrained_kelly_sizing_enabled: bool
     mathematically_optimal_weight_claim_enabled: bool
+    explicit_portfolio_overlap_required_for_investable_thesis: bool
+    opportunity_cost_comparison_required_for_investable_thesis: bool
     point_in_time_required: bool
+    revision_lineage_required_when_source_can_revise: bool
+    protected_outcome_rule_must_be_frozen_before_scoring: bool
     post_outcome_thesis_rewrite_allowed: bool
     successor_model_requires_new_research_round: bool
+    uncertified_provider_semantics_may_be_promoted_to_consensus: bool
+    missing_evidence_may_be_replaced_with_neutral_score: bool
+    provenance_effort_must_be_proportional_to_economic_importance: bool
+    existing_decision_scorecard_removed: bool
+    existing_scorecard_role: str
+    v2_thesis_integrated_into_existing_decision_snapshot: bool
     skhynix_2026q3_frozen_research_round_changed: bool
     evidence_id: str
 
@@ -197,18 +211,40 @@ class DecisionSystemV2Policy:
             raise ValueError("Primary v2 horizons must remain 60/120/250 trading days")
         if self.supporting_horizons != SUPPORTING_PATH_HORIZONS:
             raise ValueError("Supporting path horizons must remain 1/5/20 trading days")
+        if self.exact_calendar_equivalence_claimed:
+            raise ValueError("Trading-day horizons cannot claim exact calendar equivalence")
         if self.automatic_order_execution_enabled:
             raise ValueError("Decision-system v2 cannot enable automatic order execution")
         if self.unconstrained_kelly_sizing_enabled:
             raise ValueError("Unconstrained Kelly sizing is not permitted before calibration")
         if self.mathematically_optimal_weight_claim_enabled:
             raise ValueError("Optimal-weight claims are not permitted before calibration")
+        if not self.explicit_portfolio_overlap_required_for_investable_thesis:
+            raise ValueError("Investable theses must assess portfolio overlap")
+        if not self.opportunity_cost_comparison_required_for_investable_thesis:
+            raise ValueError("Investable theses must compare opportunity cost")
         if not self.point_in_time_required:
             raise ValueError("Point-in-time evidence remains mandatory")
+        if not self.revision_lineage_required_when_source_can_revise:
+            raise ValueError("Revisable sources require revision lineage")
+        if not self.protected_outcome_rule_must_be_frozen_before_scoring:
+            raise ValueError("Protected-outcome rules must be frozen before scoring")
         if self.post_outcome_thesis_rewrite_allowed:
             raise ValueError("Post-outcome thesis rewriting is prohibited")
         if not self.successor_model_requires_new_research_round:
             raise ValueError("Successor models must use a new research-round identity")
+        if self.uncertified_provider_semantics_may_be_promoted_to_consensus:
+            raise ValueError("Uncertified provider semantics cannot be promoted to consensus")
+        if self.missing_evidence_may_be_replaced_with_neutral_score:
+            raise ValueError("Missing evidence cannot be replaced with a neutral score")
+        if not self.provenance_effort_must_be_proportional_to_economic_importance:
+            raise ValueError("Provenance effort must remain proportional to economic importance")
+        if self.existing_decision_scorecard_removed:
+            raise ValueError("The v1 scorecard must remain available as a diagnostic")
+        if self.existing_scorecard_role != "backward_compatibility_and_diagnostic":
+            raise ValueError("Unexpected legacy scorecard role")
+        if self.v2_thesis_integrated_into_existing_decision_snapshot:
+            raise ValueError("v2 thesis integration was explicitly deferred in the frozen policy")
         if self.skhynix_2026q3_frozen_research_round_changed:
             raise ValueError("Architecture v2 must not alter the frozen SK hynix 2026Q3 round")
         _validate_sha(self.evidence_id, "policy evidence_id")
@@ -218,7 +254,7 @@ class DecisionSystemV2Policy:
 class InvestmentThesisSnapshot:
     """Content-addressed point-in-time thesis state.
 
-    A later update creates another snapshot and references this snapshot as its parent.  It
+    A later update creates another snapshot and references this snapshot as its parent. It
     does not mutate the original belief state.
     """
 
@@ -278,6 +314,14 @@ class InvestmentThesisSnapshot:
                 raise ValueError("Investable thesis requires opportunity-set comparison")
             if not self.portfolio_overlap:
                 raise ValueError("Investable thesis requires explicit portfolio-overlap assessment")
+            if not self.catalysts:
+                raise ValueError("Investable thesis requires at least one catalyst clock")
+            if not self.scenario_refs:
+                raise ValueError("Investable thesis requires at least one payoff scenario")
+            if not _has_evidence_backed_expectation_claim(self.claims):
+                raise ValueError(
+                    "Investable thesis requires an evidence-backed market-expectation claim"
+                )
 
     def payload_without_id(self) -> dict[str, object]:
         return {
@@ -337,27 +381,71 @@ def load_decision_system_v2_policy(
         status=str(policy.get("status", "")),
         primary_horizons=primary,
         supporting_horizons=supporting,
-        automatic_order_execution_enabled=bool(
-            portfolio_raw.get("automatic_order_execution_enabled")
+        exact_calendar_equivalence_claimed=_bool_field(
+            horizons_raw, "exact_calendar_equivalence_claimed"
         ),
-        unconstrained_kelly_sizing_enabled=bool(
-            portfolio_raw.get("unconstrained_kelly_sizing_enabled")
+        automatic_order_execution_enabled=_bool_field(
+            portfolio_raw, "automatic_order_execution_enabled"
         ),
-        mathematically_optimal_weight_claim_enabled=bool(
-            portfolio_raw.get("mathematically_optimal_weight_claim_enabled")
+        unconstrained_kelly_sizing_enabled=_bool_field(
+            portfolio_raw, "unconstrained_kelly_sizing_enabled"
         ),
-        point_in_time_required=bool(governance_raw.get("point_in_time_required")),
-        post_outcome_thesis_rewrite_allowed=bool(
-            governance_raw.get("post_outcome_thesis_rewrite_allowed")
+        mathematically_optimal_weight_claim_enabled=_bool_field(
+            portfolio_raw, "mathematically_optimal_weight_claim_enabled"
         ),
-        successor_model_requires_new_research_round=bool(
-            governance_raw.get("successor_model_requires_new_research_round")
+        explicit_portfolio_overlap_required_for_investable_thesis=_bool_field(
+            portfolio_raw,
+            "explicit_portfolio_overlap_required_for_investable_thesis",
         ),
-        skhynix_2026q3_frozen_research_round_changed=bool(
-            migration_raw.get("skhynix_2026q3_frozen_research_round_changed")
+        opportunity_cost_comparison_required_for_investable_thesis=_bool_field(
+            portfolio_raw,
+            "opportunity_cost_comparison_required_for_investable_thesis",
+        ),
+        point_in_time_required=_bool_field(governance_raw, "point_in_time_required"),
+        revision_lineage_required_when_source_can_revise=_bool_field(
+            governance_raw, "revision_lineage_required_when_source_can_revise"
+        ),
+        protected_outcome_rule_must_be_frozen_before_scoring=_bool_field(
+            governance_raw, "protected_outcome_rule_must_be_frozen_before_scoring"
+        ),
+        post_outcome_thesis_rewrite_allowed=_bool_field(
+            governance_raw, "post_outcome_thesis_rewrite_allowed"
+        ),
+        successor_model_requires_new_research_round=_bool_field(
+            governance_raw, "successor_model_requires_new_research_round"
+        ),
+        uncertified_provider_semantics_may_be_promoted_to_consensus=_bool_field(
+            governance_raw,
+            "uncertified_provider_semantics_may_be_promoted_to_consensus",
+        ),
+        missing_evidence_may_be_replaced_with_neutral_score=_bool_field(
+            governance_raw, "missing_evidence_may_be_replaced_with_neutral_score"
+        ),
+        provenance_effort_must_be_proportional_to_economic_importance=_bool_field(
+            governance_raw,
+            "provenance_effort_must_be_proportional_to_economic_importance",
+        ),
+        existing_decision_scorecard_removed=_bool_field(
+            migration_raw, "existing_decision_scorecard_removed"
+        ),
+        existing_scorecard_role=str(migration_raw.get("existing_scorecard_role", "")),
+        v2_thesis_integrated_into_existing_decision_snapshot=_bool_field(
+            migration_raw,
+            "v2_thesis_integrated_into_existing_decision_snapshot",
+        ),
+        skhynix_2026q3_frozen_research_round_changed=_bool_field(
+            migration_raw, "skhynix_2026q3_frozen_research_round_changed"
         ),
         evidence_id=evidence_id,
     )
+
+
+def _has_evidence_backed_expectation_claim(claims: tuple[ThesisClaim, ...]) -> bool:
+    for claim in claims:
+        category = claim.category.strip().casefold().replace("-", "_").replace(" ", "_")
+        if category in EXPECTATION_CLAIM_CATEGORIES and claim.evidence_refs:
+            return True
+    return False
 
 
 def _require_text(value: str, field: str) -> None:
@@ -393,6 +481,13 @@ def _mapping(value: object, field: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be an object")
     return {str(key): item for key, item in cast(dict[object, object], value).items()}
+
+
+def _bool_field(mapping: dict[str, object], field: str) -> bool:
+    value = mapping.get(field)
+    if not isinstance(value, bool):
+        raise ValueError(f"{field} must be a YAML boolean")
+    return value
 
 
 def _int_tuple(value: object, field: str) -> tuple[int, ...]:
