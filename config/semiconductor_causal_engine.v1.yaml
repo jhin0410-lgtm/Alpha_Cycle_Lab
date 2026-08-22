@@ -1,0 +1,52 @@
+schema_version: 1
+policy:
+  policy_id: alpha_cycle_semiconductor_causal_engine
+  policy_version: 1.0-foundation
+  sector: semiconductor
+  source_boundary_path: config/semiconductor_structural_sources.yaml
+
+  critical_state_variables:
+    - ai_hbm_demand
+    - supply_capacity_yield
+    - memory_price_mix
+    - earnings_revision_trajectory
+    - valuation_positioning
+
+  graph_policy:
+    critical_state_variable_max: 5
+    every_critical_state_variable_requires_node: true
+    evidence_node_count_capped: false
+    self_loops_allowed: false
+    feedback_cycles_allowed: true
+    dag_claimed: false
+    correlation_alone_may_establish_causality: false
+    material_edge_requires_falsifier: true
+    observed_or_validated_edge_requires_evidence: true
+    opposing_evidence_preserved: true
+    regime_applicability_required: true
+    timing_or_lag_required: true
+
+  transmission_contract:
+    allowed_node_types:
+      - critical_state
+      - industry_driver
+      - company_driver
+      - company_kpi
+      - accounting_metric
+      - expectation_state
+      - valuation_state
+      - catalyst
+    allowed_edge_directions:
+      - positive
+      - negative
+      - mixed
+      - conditional
+      - unknown
+
+  governance:
+    point_in_time_required: true
+    graph_is_forecast_model: false
+    graph_is_decision_score: false
+    graph_approves_investability: false
+    automatic_execution_enabled: false
+    frozen_skhynix_2026q3_round_changed: false
