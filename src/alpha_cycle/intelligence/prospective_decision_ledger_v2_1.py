@@ -195,7 +195,10 @@ class ProspectiveDecisionLedgerEntry:
         if self.expectation_frontier_regret is not None:
             if self.expectation_frontier_regret < 0:
                 raise ValueError("ledger expectation frontier regret cannot be negative")
-        if self.base_frontier_best_return > self.best_registered_candidate_return + _FLOAT_TOLERANCE:
+        if (
+            self.base_frontier_best_return
+            > self.best_registered_candidate_return + _FLOAT_TOLERANCE
+        ):
             raise ValueError("ledger base frontier best return cannot exceed candidate best return")
         if self.unique_base_leader_security_id is None:
             if self.unique_base_leader_regret is not None:
@@ -339,7 +342,10 @@ class ProspectiveDecisionCohortSummary:
                 raise ValueError(f"{field} is outside cohort bounds")
         if self.unique_base_leader_matched_best_count > self.unique_base_leader_observation_count:
             raise ValueError("base leader matches cannot exceed base leader observations")
-        if self.expectation_frontier_contains_winner_count > self.expectation_overlay_observation_count:
+        if (
+            self.expectation_frontier_contains_winner_count
+            > self.expectation_overlay_observation_count
+        ):
             raise ValueError("expectation winner count cannot exceed overlay observations")
         if (
             self.expectation_complete_coverage_count + self.expectation_partial_coverage_count
@@ -352,7 +358,9 @@ class ProspectiveDecisionCohortSummary:
             + self.expectation_overlay_unchanged_count
             != self.expectation_overlay_observation_count
         ):
-            raise ValueError("expectation overlay effect counts must partition overlay observations")
+            raise ValueError(
+                "expectation overlay effect counts must partition overlay observations"
+            )
         for required_value, field in (
             (self.base_frontier_contains_winner_rate, "base_frontier_contains_winner_rate"),
             (self.mean_base_frontier_regret, "mean_base_frontier_regret"),
@@ -774,7 +782,11 @@ def _validate_registered_overlay(
         sorted(item.security_id for item in overlay.candidates if item.expectation_gap_comparable)
     )
     derived_blocked = tuple(
-        sorted(item.security_id for item in overlay.candidates if not item.expectation_gap_comparable)
+        sorted(
+            item.security_id
+            for item in overlay.candidates
+            if not item.expectation_gap_comparable
+        )
     )
     if tuple(sorted(overlay.expectation_comparable_security_ids)) != derived_comparable:
         raise ValueError("ledger expectation comparable-security registry has drifted")
