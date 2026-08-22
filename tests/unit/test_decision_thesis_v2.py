@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+import yaml
 
 from alpha_cycle.intelligence.decision_thesis_v2 import (
+    DEFAULT_DECISION_SYSTEM_V2_POLICY,
     CatalystClock,
     ClaimDirection,
     EpistemicStatus,
@@ -24,8 +27,14 @@ _KST = ZoneInfo("Asia/Seoul")
 
 def _uncertainty() -> ThesisUncertainty:
     return ThesisUncertainty(
-        evidence=UncertaintyDimension(UncertaintyLevel.LOW, "Primary-source evidence is bound."),
-        model=UncertaintyDimension(UncertaintyLevel.HIGH, "Forecast history is still shallow."),
+        evidence=UncertaintyDimension(
+            UncertaintyLevel.LOW,
+            "Primary-source evidence is bound.",
+        ),
+        model=UncertaintyDimension(
+            UncertaintyLevel.HIGH,
+            "Forecast history is still shallow.",
+        ),
         regime=UncertaintyDimension(
             UncertaintyLevel.HIGH,
             "Current scale may be structurally new.",
@@ -53,6 +62,17 @@ def _claim() -> ThesisClaim:
         epistemic_status=EpistemicStatus.OBSERVED_FACT,
         direction=ClaimDirection.POSITIVE,
         evidence_refs=("evidence:memory-pricing:2026-08-22",),
+    )
+
+
+def _expectation_claim() -> ThesisClaim:
+    return ThesisClaim(
+        claim_id="market-expectation-fy2026",
+        category="market_expectation",
+        statement="The certified FY2026 expectation is below the thesis base case.",
+        epistemic_status=EpistemicStatus.OBSERVED_FACT,
+        direction=ClaimDirection.NEUTRAL,
+        evidence_refs=("expectation-state:fy2026:2026-08-22",),
     )
 
 
@@ -89,18 +109,144 @@ def _snapshot(**overrides: object) -> InvestmentThesisSnapshot:
     return InvestmentThesisSnapshot(**values)  # type: ignore[arg-type]
 
 
-def test_policy_freezes_horizons_and_preserves_skhynix_round() -> None:
+def _investable(**overrides: object) -> InvestmentThesisSnapshot:
+    values: dict[str, object] = {
+        "status": ThesisStatus.INVESTABLE_NOW,
+        "claims": (_claim(), _expectation_claim()),
+        "scenario_refs": ("scenario:bull-base-bear:2026-08-22",),
+    }
+    values.update(overrides)
+    return _snapshot(**values)
+
+
+def _policy_payload() -> dict[str, object]:
+    payload = yaml.safe_load(DEFAULT_DECISION_SYSTEM_V2_POLICY.read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _write_policy(tmp_path: Path, payload: dict[str, object]) -> Path:
+    path = tmp_path / "policy.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return path
+
+
+def test_policy_freezes_all_governance_and_migration_invariants() -> None:
     policy = load_decision_system_v2_policy()
     assert policy.primary_horizons == (60, 120, 250)
     assert policy.supporting_horizons == (1, 5, 20)
+    assert not policy.exact_calendar_equivalence_claimed
     assert policy.point_in_time_required
+    assert policy.revision_lineage_required_when_source_can_revise
+    assert policy.protected_outcome_rule_must_be_frozen_before_scoring
     assert not policy.post_outcome_thesis_rewrite_allowed
     assert policy.successor_model_requires_new_research_round
+    assert not policy.uncertified_provider_semantics_may_be_promoted_to_consensus
+    assert not policy.missing_evidence_may_be_replaced_with_neutral_score
+    assert policy.provenance_effort_must_be_proportional_to_economic_importance
+    assert policy.explicit_portfolio_overlap_required_for_investable_thesis
+    assert policy.opportunity_cost_comparison_required_for_investable_thesis
+    assert not policy.existing_decision_scorecard_removed
+    assert policy.existing_scorecard_role == "backward_compatibility_and_diagnostic"
+    assert not policy.v2_thesis_integrated_into_existing_decision_snapshot
     assert not policy.skhynix_2026q3_frozen_research_round_changed
     assert not policy.automatic_order_execution_enabled
     assert not policy.unconstrained_kelly_sizing_enabled
     assert not policy.mathematically_optimal_weight_claim_enabled
     assert len(policy.evidence_id) == 64
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("horizons", "exact_calendar_equivalence_claimed"),
+        ("portfolio_policy", "automatic_order_execution_enabled"),
+        ("portfolio_policy", "explicit_portfolio_overlap_required_for_investable_thesis"),
+        ("research_governance", "point_in_time_required"),
+        ("research_governance", "revision_lineage_required_when_source_can_revise"),
+        ("research_governance", "protected_outcome_rule_must_be_frozen_before_scoring"),
+        ("research_governance", "uncertified_provider_semantics_may_be_promoted_to_consensus"),
+        ("research_governance", "missing_evidence_may_be_replaced_with_neutral_score"),
+        ("migration", "existing_decision_scorecard_removed"),
+        ("migration", "v2_thesis_integrated_into_existing_decision_snapshot"),
+        ("migration", "skhynix_2026q3_frozen_research_round_changed"),
+    ],
+)
+def test_policy_rejects_quoted_boolean_values(
+    tmp_path: Path,
+    section: str,
+    field: str,
+) -> None:
+    payload = _policy_payload()
+    policy = payload["policy"]
+    assert isinstance(policy, dict)
+    target = policy[section]
+    assert isinstance(target, dict)
+    target[field] = "false"
+    with pytest.raises(ValueError, match=f"{field} must be a YAML boolean"):
+        load_decision_system_v2_policy(_write_policy(tmp_path, payload))
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "invalid_value"),
+    [
+        ("horizons", "exact_calendar_equivalence_claimed", True),
+        ("portfolio_policy", "automatic_order_execution_enabled", True),
+        ("portfolio_policy", "unconstrained_kelly_sizing_enabled", True),
+        ("portfolio_policy", "mathematically_optimal_weight_claim_enabled", True),
+        (
+            "portfolio_policy",
+            "explicit_portfolio_overlap_required_for_investable_thesis",
+            False,
+        ),
+        (
+            "portfolio_policy",
+            "opportunity_cost_comparison_required_for_investable_thesis",
+            False,
+        ),
+        ("research_governance", "point_in_time_required", False),
+        ("research_governance", "revision_lineage_required_when_source_can_revise", False),
+        (
+            "research_governance",
+            "protected_outcome_rule_must_be_frozen_before_scoring",
+            False,
+        ),
+        ("research_governance", "post_outcome_thesis_rewrite_allowed", True),
+        ("research_governance", "successor_model_requires_new_research_round", False),
+        (
+            "research_governance",
+            "uncertified_provider_semantics_may_be_promoted_to_consensus",
+            True,
+        ),
+        (
+            "research_governance",
+            "missing_evidence_may_be_replaced_with_neutral_score",
+            True,
+        ),
+        (
+            "research_governance",
+            "provenance_effort_must_be_proportional_to_economic_importance",
+            False,
+        ),
+        ("migration", "existing_decision_scorecard_removed", True),
+        ("migration", "v2_thesis_integrated_into_existing_decision_snapshot", True),
+        ("migration", "skhynix_2026q3_frozen_research_round_changed", True),
+    ],
+)
+def test_policy_fails_closed_when_frozen_boolean_invariant_drifts(
+    tmp_path: Path,
+    section: str,
+    field: str,
+    invalid_value: bool,
+) -> None:
+    payload = _policy_payload()
+    policy = payload["policy"]
+    assert isinstance(policy, dict)
+    target = policy[section]
+    assert isinstance(target, dict)
+    target[field] = invalid_value
+    with pytest.raises(ValueError):
+        load_decision_system_v2_policy(_write_policy(tmp_path, payload))
 
 
 def test_observed_fact_requires_evidence() -> None:
@@ -154,12 +300,26 @@ def test_primary_thesis_horizon_is_limited_to_three_six_twelve_month_policy() ->
         _snapshot(horizon_trading_days=20)
 
 
-def test_investable_thesis_requires_kill_overlap_and_opportunity_cost_context() -> None:
+def test_investable_thesis_requires_existing_core_decision_context() -> None:
     with pytest.raises(ValueError, match="kill condition"):
-        _snapshot(status=ThesisStatus.INVESTABLE_NOW, kill_conditions=())
+        _investable(kill_conditions=())
     with pytest.raises(ValueError, match="opportunity-set comparison"):
-        _snapshot(status=ThesisStatus.INVESTABLE_NOW, opportunity_set_refs=())
+        _investable(opportunity_set_refs=())
     with pytest.raises(ValueError, match="portfolio-overlap assessment"):
-        _snapshot(status=ThesisStatus.INVESTABLE_NOW, portfolio_overlap=())
-    ready = _snapshot(status=ThesisStatus.INVESTABLE_NOW)
+        _investable(portfolio_overlap=())
+
+
+def test_investable_thesis_requires_catalyst_payoff_and_expectation() -> None:
+    with pytest.raises(ValueError, match="catalyst clock"):
+        _investable(catalysts=())
+    with pytest.raises(ValueError, match="payoff scenario"):
+        _investable(scenario_refs=())
+    with pytest.raises(ValueError, match="market-expectation claim"):
+        _investable(claims=(_claim(),))
+    with pytest.raises(ValueError, match="market-expectation claim"):
+        _investable(claims=(_claim(), replace(_expectation_claim(), evidence_refs=())))
+
+
+def test_investable_thesis_passes_when_all_frozen_requirements_are_present() -> None:
+    ready = _investable()
     assert ready.status is ThesisStatus.INVESTABLE_NOW
