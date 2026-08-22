@@ -100,7 +100,7 @@ class ForecastRegistrationSnapshot:
     guardrail_evidence_id: str
 
     def __post_init__(self) -> None:
-        for value, field in (
+        for text_value, field in (
             (self.forecast_id, "forecast_id"),
             (self.security_id, "security_id"),
             (self.target_variable, "target_variable"),
@@ -110,14 +110,14 @@ class ForecastRegistrationSnapshot:
             (self.model_family, "model_family"),
             (self.dependency_cluster_id, "dependency_cluster_id"),
         ):
-            _require_text(value, field)
-        for value, field in (
+            _require_text(text_value, field)
+        for timestamp_value, field in (
             (self.registered_at, "registered_at"),
             (self.ledger_recorded_at, "ledger_recorded_at"),
             (self.forecast_origin, "forecast_origin"),
             (self.information_cutoff, "information_cutoff"),
         ):
-            _require_aware(value, field)
+            _require_aware(timestamp_value, field)
         if self.information_cutoff > self.registered_at:
             raise ValueError("information_cutoff cannot occur after registered_at")
         if self.registered_at > self.ledger_recorded_at:
@@ -274,12 +274,12 @@ class ForecastAccuracyDiagnostics:
     inside_predeclared_range: bool | None
 
     def __post_init__(self) -> None:
-        for value, field in (
+        for numeric_value, field in (
             (self.signed_error, "signed_error"),
             (self.absolute_error, "absolute_error"),
             (self.squared_error, "squared_error"),
         ):
-            _require_finite(value, field)
+            _require_finite(numeric_value, field)
         if self.absolute_error < 0 or self.squared_error < 0:
             raise ValueError("absolute and squared errors must be non-negative")
         if self.absolute_percentage_error is not None:
