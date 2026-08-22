@@ -1,8 +1,8 @@
 """Point-in-time research-round orchestration for Decision System v2.1.
 
-This module is an integration spine over existing typed research contracts. It never invents
-missing evidence, mutates a thesis, chooses a target price, sizes a position, or executes a trade.
-Missing or incompatible inputs become structured blockers so research fails closed.
+This is an integration spine over existing typed contracts. It never invents missing evidence,
+mutates a thesis, chooses a target price, sizes a position, or executes a trade. Missing or
+incompatible inputs become structured blockers so a research round fails closed.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ from alpha_cycle.intelligence.decision_view_v2_1 import (
 from alpha_cycle.intelligence.expectation_gap_opportunity_set_v2_1 import (
     ExpectationAugmentedOpportunitySetSnapshot,
     ExpectationGapComparisonPolicySnapshot,
+    ExpectationGapOpportunityCandidateSnapshot,
     build_expectation_augmented_opportunity_set,
     build_expectation_gap_opportunity_candidate,
 )
@@ -66,8 +67,6 @@ class ResearchRoundStatus(StrEnum):
 
 @dataclass(frozen=True)
 class ResearchRoundBlocker:
-    """One fail-closed reason that prevents the round from advancing."""
-
     component: str
     code: str
     detail: str
@@ -95,8 +94,6 @@ class ResearchRoundBlocker:
 
 @dataclass(frozen=True)
 class ResearchSecurityPackage:
-    """Typed source package for one security in a cross-sectional research round."""
-
     thesis: InvestmentThesisSnapshot
     underwriting: UnderwritingReadinessSnapshot | None = None
     payoff_surface: PayoffSurfaceSnapshot | None = None
@@ -110,8 +107,6 @@ class ResearchSecurityPackage:
 
 @dataclass(frozen=True)
 class ProspectiveRegistrationRequest:
-    """External scorekeeping inputs not derivable from research snapshots."""
-
     registration_id: str
     registered_at: datetime
     benchmark_security_id: str
@@ -134,8 +129,6 @@ class ProspectiveRegistrationRequest:
 
 @dataclass(frozen=True)
 class ResearchRoundSnapshot:
-    """Immutable integration result for one same-date/same-horizon research round."""
-
     round_id: str
     mode: ResearchRoundMode
     status: ResearchRoundStatus
@@ -203,8 +196,7 @@ class ResearchRoundSnapshot:
             (self.flags, "flags"),
         ):
             _validate_text_tuple(values, field)
-        security_set = set(self.security_ids)
-        if not set(self.comparable_security_ids).issubset(security_set):
+        if not set(self.comparable_security_ids).issubset(self.security_ids):
             raise ValueError("comparable securities must belong to the research round")
         if not set(self.base_pareto_frontier_security_ids).issubset(
             self.comparable_security_ids
@@ -216,17 +208,17 @@ class ResearchRoundSnapshot:
         ):
             raise ValueError("expectation Pareto frontier requires an expectation overlay")
         _validate_sha(self.guardrail_evidence_id, "guardrail_evidence_id")
-        blocked_statuses = {
+        blocked = {
             ResearchRoundStatus.PROSPECTIVE_BLOCKED,
             ResearchRoundStatus.REPLAY_BLOCKED,
         }
-        if self.status in blocked_statuses and not self.blockers:
+        if self.status in blocked and not self.blockers:
             raise ValueError("blocked research round requires at least one blocker")
-        if self.status not in blocked_statuses and self.blockers:
+        if self.status not in blocked and self.blockers:
             raise ValueError("ready or registered research round cannot contain blockers")
-        self._validate_mode_status()
+        self._validate_status()
 
-    def _validate_mode_status(self) -> None:
+    def _validate_status(self) -> None:
         if self.status is ResearchRoundStatus.PROSPECTIVE_REGISTERED:
             if self.mode is not ResearchRoundMode.PROSPECTIVE:
                 raise ValueError("only a prospective round can be prospectively registered")
@@ -234,16 +226,18 @@ class ResearchRoundSnapshot:
                 raise ValueError("prospective_registered status requires registration snapshot")
         elif self.prospective_registration_snapshot_id is not None:
             raise ValueError("registration snapshot requires prospective_registered status")
-        if self.mode is ResearchRoundMode.REPLAY and self.status not in {
+        replay_statuses = {
             ResearchRoundStatus.REPLAY_BLOCKED,
             ResearchRoundStatus.REPLAY_READY,
-        }:
-            raise ValueError("replay mode requires a replay status")
-        if self.mode is ResearchRoundMode.PROSPECTIVE and self.status not in {
+        }
+        prospective_statuses = {
             ResearchRoundStatus.PROSPECTIVE_BLOCKED,
             ResearchRoundStatus.PROSPECTIVE_READY_FOR_REGISTRATION,
             ResearchRoundStatus.PROSPECTIVE_REGISTERED,
-        }:
+        }
+        if self.mode is ResearchRoundMode.REPLAY and self.status not in replay_statuses:
+            raise ValueError("replay mode requires a replay status")
+        if self.mode is ResearchRoundMode.PROSPECTIVE and self.status not in prospective_statuses:
             raise ValueError("prospective mode requires a prospective status")
 
     @property
@@ -297,8 +291,6 @@ class ResearchRoundSnapshot:
 
 @dataclass(frozen=True)
 class ResearchRoundArtifacts:
-    """Typed in-memory artifacts produced while assembling the round."""
-
     snapshot: ResearchRoundSnapshot
     opportunity_candidates: tuple[OpportunityCandidateSnapshot, ...]
     opportunity_set: OpportunitySetSnapshot | None
@@ -318,7 +310,7 @@ def run_research_round(
     registration_request: ProspectiveRegistrationRequest | None = None,
     guardrails: DecisionSystemV21Guardrails | None = None,
 ) -> ResearchRoundArtifacts:
-    """Assemble existing contracts and return blockers instead of inventing evidence."""
+    """Assemble typed v2.1 contracts and fail closed on missing or mismatched evidence."""
 
     active = guardrails or load_decision_system_v21_guardrails()
     _require_text(round_id, "round_id")
@@ -339,7 +331,7 @@ def run_research_round(
     underwriting_ids: list[str] = []
     payoff_ids: list[str] = []
     decision_view_ids: list[str] = []
-    expectation_gap_ids: list[str] = []
+    gap_ids: list[str] = []
 
     for package in packages:
         _validate_package(
@@ -353,18 +345,18 @@ def run_research_round(
         if package.underwriting is not None:
             underwriting_ids.append(package.underwriting.snapshot_id)
             flags.extend(
-                f"{package.security_id}:underwriter:{item}"
-                for item in package.underwriting.flags
+                f"{package.security_id}:underwriter:{flag}"
+                for flag in package.underwriting.flags
             )
         if package.payoff_surface is not None:
             payoff_ids.append(package.payoff_surface.snapshot_id)
         if package.decision_view is not None:
             decision_view_ids.append(package.decision_view.snapshot_id)
         if package.expectation_gap is not None:
-            expectation_gap_ids.append(package.expectation_gap.snapshot_id)
+            gap_ids.append(package.expectation_gap.snapshot_id)
 
         package_blocked = any(
-            item.security_id == package.security_id for item in blockers
+            blocker.security_id == package.security_id for blocker in blockers
         )
         if (
             not package_blocked
@@ -391,39 +383,38 @@ def run_research_round(
                     package.security_id,
                 )
 
-    opportunity_set = _build_base_opportunity_set(
+    opportunity_set = _build_opportunity_set_or_block(
         candidates,
-        packages=packages,
+        package_count=len(packages),
         captured_at=captured_at,
         evaluation_date=evaluation_date,
         horizon_trading_days=horizon_trading_days,
         guardrails=active,
         blockers=blockers,
     )
-    overlay = _build_expectation_overlay(
+    overlay = _build_overlay_or_block(
         packages,
         candidates,
         opportunity_set=opportunity_set,
-        expectation_policy=expectation_policy,
+        policy=expectation_policy,
         captured_at=captured_at,
         evaluation_date=evaluation_date,
         guardrails=active,
         blockers=blockers,
         flags=flags,
     )
-    registration = _register_prospective_if_requested(
+    registration = _register_or_block(
         mode,
         opportunity_set=opportunity_set,
-        expectation_overlay=overlay,
+        overlay=overlay,
         request=registration_request,
         blockers=blockers,
         flags=flags,
     )
-    status = _derive_status(mode, blockers=blockers, registration=registration)
     snapshot = ResearchRoundSnapshot(
         round_id=round_id,
         mode=mode,
-        status=status,
+        status=_status(mode, blockers, registration),
         captured_at=captured_at,
         evaluation_date=evaluation_date,
         horizon_trading_days=horizon_trading_days,
@@ -432,7 +423,7 @@ def run_research_round(
         underwriting_snapshot_ids=tuple(underwriting_ids),
         payoff_surface_snapshot_ids=tuple(payoff_ids),
         decision_view_snapshot_ids=tuple(decision_view_ids),
-        expectation_gap_snapshot_ids=tuple(expectation_gap_ids),
+        expectation_gap_snapshot_ids=tuple(gap_ids),
         opportunity_candidate_snapshot_ids=tuple(item.snapshot_id for item in candidates),
         opportunity_set_snapshot_id=(opportunity_set.snapshot_id if opportunity_set else None),
         expectation_overlay_snapshot_id=(overlay.snapshot_id if overlay else None),
@@ -469,14 +460,13 @@ def _validate_package(
     blockers: list[ResearchRoundBlocker],
 ) -> None:
     thesis = package.thesis
-    security_id = thesis.security_id
     if thesis.captured_at > captured_at:
         _block(
             blockers,
             "thesis",
             "thesis_after_round_cutoff",
             "thesis snapshot was captured after the research-round cutoff",
-            security_id,
+            thesis.security_id,
             thesis.snapshot_id,
         )
     if thesis.horizon_trading_days != horizon_trading_days:
@@ -485,45 +475,37 @@ def _validate_package(
             "thesis",
             "thesis_horizon_mismatch",
             "thesis horizon differs from the research-round horizon",
-            security_id,
+            thesis.security_id,
             thesis.snapshot_id,
         )
     _validate_underwriting(
         package,
-        captured_at=captured_at,
-        evaluation_date=evaluation_date,
-        guardrail_evidence_id=guardrail_evidence_id,
-        blockers=blockers,
+        captured_at,
+        evaluation_date,
+        guardrail_evidence_id,
+        blockers,
     )
     _validate_payoff(
         package,
-        captured_at=captured_at,
-        horizon_trading_days=horizon_trading_days,
-        guardrail_evidence_id=guardrail_evidence_id,
-        blockers=blockers,
+        captured_at,
+        horizon_trading_days,
+        guardrail_evidence_id,
+        blockers,
     )
-    _validate_decision_view(
+    _validate_view_and_gap(
         package,
-        captured_at=captured_at,
-        evaluation_date=evaluation_date,
-        guardrail_evidence_id=guardrail_evidence_id,
-        blockers=blockers,
-    )
-    _validate_expectation_gap(
-        package,
-        captured_at=captured_at,
-        evaluation_date=evaluation_date,
-        guardrail_evidence_id=guardrail_evidence_id,
-        blockers=blockers,
+        captured_at,
+        evaluation_date,
+        guardrail_evidence_id,
+        blockers,
     )
 
 
 def _validate_underwriting(
     package: ResearchSecurityPackage,
-    *,
     captured_at: datetime,
     evaluation_date: date,
-    guardrail_evidence_id: str,
+    guardrail_id: str,
     blockers: list[ResearchRoundBlocker],
 ) -> None:
     item = package.underwriting
@@ -542,17 +524,16 @@ def _validate_underwriting(
         (item.security_id == thesis.security_id, "underwriting_security_mismatch"),
         (item.evaluation_date == evaluation_date, "underwriting_evaluation_date_mismatch"),
         (item.captured_at <= captured_at, "underwriting_after_round_cutoff"),
-        (item.guardrail_evidence_id == guardrail_evidence_id, "underwriting_guardrail_mismatch"),
+        (item.guardrail_evidence_id == guardrail_id, "underwriting_guardrail_mismatch"),
     )
     _apply_checks(blockers, "underwriter", thesis.security_id, item.snapshot_id, checks)
 
 
 def _validate_payoff(
     package: ResearchSecurityPackage,
-    *,
     captured_at: datetime,
-    horizon_trading_days: int,
-    guardrail_evidence_id: str,
+    horizon: int,
+    guardrail_id: str,
     blockers: list[ResearchRoundBlocker],
 ) -> None:
     item = package.payoff_surface
@@ -569,45 +550,38 @@ def _validate_payoff(
     checks = (
         (item.thesis_snapshot_id == thesis.snapshot_id, "payoff_thesis_mismatch"),
         (item.security_id == thesis.security_id, "payoff_security_mismatch"),
-        (item.horizon_trading_days == horizon_trading_days, "payoff_horizon_mismatch"),
+        (item.horizon_trading_days == horizon, "payoff_horizon_mismatch"),
         (item.captured_at <= captured_at, "payoff_after_round_cutoff"),
-        (item.guardrail_evidence_id == guardrail_evidence_id, "payoff_guardrail_mismatch"),
+        (item.guardrail_evidence_id == guardrail_id, "payoff_guardrail_mismatch"),
     )
     _apply_checks(blockers, "payoff_surface", thesis.security_id, item.snapshot_id, checks)
 
 
-def _validate_decision_view(
+def _validate_view_and_gap(
     package: ResearchSecurityPackage,
-    *,
     captured_at: datetime,
     evaluation_date: date,
-    guardrail_evidence_id: str,
+    guardrail_id: str,
     blockers: list[ResearchRoundBlocker],
 ) -> None:
-    item = package.decision_view
-    if item is None:
-        return
-    checks = (
-        (item.security_id == package.security_id, "decision_view_security_mismatch"),
-        (item.evaluation_date == evaluation_date, "decision_view_evaluation_date_mismatch"),
-        (item.captured_at <= captured_at, "decision_view_after_round_cutoff"),
-        (item.guardrail_evidence_id == guardrail_evidence_id, "decision_view_guardrail_mismatch"),
-    )
-    _apply_checks(blockers, "decision_view", package.security_id, item.snapshot_id, checks)
-
-
-def _validate_expectation_gap(
-    package: ResearchSecurityPackage,
-    *,
-    captured_at: datetime,
-    evaluation_date: date,
-    guardrail_evidence_id: str,
-    blockers: list[ResearchRoundBlocker],
-) -> None:
+    view = package.decision_view
+    if view is not None:
+        view_checks = (
+            (view.security_id == package.security_id, "decision_view_security_mismatch"),
+            (view.evaluation_date == evaluation_date, "decision_view_evaluation_date_mismatch"),
+            (view.captured_at <= captured_at, "decision_view_after_round_cutoff"),
+            (view.guardrail_evidence_id == guardrail_id, "decision_view_guardrail_mismatch"),
+        )
+        _apply_checks(
+            blockers,
+            "decision_view",
+            package.security_id,
+            view.snapshot_id,
+            view_checks,
+        )
     gap = package.expectation_gap
     if gap is None:
         return
-    view = package.decision_view
     if view is None:
         _block(
             blockers,
@@ -618,12 +592,15 @@ def _validate_expectation_gap(
             gap.snapshot_id,
         )
         return
-    checks = (
-        (gap.decision_view_snapshot_id == view.snapshot_id, "expectation_gap_decision_view_mismatch"),
+    gap_checks = (
+        (
+            gap.decision_view_snapshot_id == view.snapshot_id,
+            "expectation_gap_decision_view_mismatch",
+        ),
         (gap.security_id == package.security_id, "expectation_gap_security_mismatch"),
         (gap.evaluation_date == evaluation_date, "expectation_gap_evaluation_date_mismatch"),
         (gap.captured_at <= captured_at, "expectation_gap_after_round_cutoff"),
-        (gap.guardrail_evidence_id == guardrail_evidence_id, "expectation_gap_guardrail_mismatch"),
+        (gap.guardrail_evidence_id == guardrail_id, "expectation_gap_guardrail_mismatch"),
         (
             gap.target_variable == view.target_variable
             and gap.target_date == view.target_date
@@ -631,7 +608,13 @@ def _validate_expectation_gap(
             "expectation_gap_target_mismatch",
         ),
     )
-    _apply_checks(blockers, "expectation_gap", package.security_id, gap.snapshot_id, checks)
+    _apply_checks(
+        blockers,
+        "expectation_gap",
+        package.security_id,
+        gap.snapshot_id,
+        gap_checks,
+    )
 
 
 def _apply_checks(
@@ -643,21 +626,27 @@ def _apply_checks(
 ) -> None:
     for condition, code in checks:
         if not condition:
-            detail = code.replace("_", " ")
-            _block(blockers, component, code, detail, security_id, snapshot_id)
+            _block(
+                blockers,
+                component,
+                code,
+                code.replace("_", " "),
+                security_id,
+                snapshot_id,
+            )
 
 
-def _build_base_opportunity_set(
+def _build_opportunity_set_or_block(
     candidates: list[OpportunityCandidateSnapshot],
     *,
-    packages: tuple[ResearchSecurityPackage, ...],
+    package_count: int,
     captured_at: datetime,
     evaluation_date: date,
     horizon_trading_days: int,
     guardrails: DecisionSystemV21Guardrails,
     blockers: list[ResearchRoundBlocker],
 ) -> OpportunitySetSnapshot | None:
-    if len(candidates) != len(packages):
+    if len(candidates) != package_count:
         _block(
             blockers,
             "opportunity_set",
@@ -674,12 +663,7 @@ def _build_base_opportunity_set(
             guardrails=guardrails,
         )
     except ValueError as exc:
-        _block(
-            blockers,
-            "opportunity_set",
-            "opportunity_set_build_failed",
-            str(exc),
-        )
+        _block(blockers, "opportunity_set", "opportunity_set_build_failed", str(exc))
         return None
     if len(result.comparable_security_ids) < 2:
         detail = (
@@ -696,46 +680,47 @@ def _build_base_opportunity_set(
     return result
 
 
-def _build_expectation_overlay(
+def _build_overlay_or_block(
     packages: tuple[ResearchSecurityPackage, ...],
     candidates: list[OpportunityCandidateSnapshot],
     *,
     opportunity_set: OpportunitySetSnapshot | None,
-    expectation_policy: ExpectationGapComparisonPolicySnapshot | None,
+    policy: ExpectationGapComparisonPolicySnapshot | None,
     captured_at: datetime,
     evaluation_date: date,
     guardrails: DecisionSystemV21Guardrails,
     blockers: list[ResearchRoundBlocker],
     flags: list[str],
 ) -> ExpectationAugmentedOpportunitySetSnapshot | None:
-    if expectation_policy is None:
+    if policy is None:
         flags.append("expectation_overlay_not_requested")
         return None
-    if expectation_policy.guardrail_evidence_id != guardrails.evidence_id:
+    if policy.guardrail_evidence_id != guardrails.evidence_id:
         _block(
             blockers,
             "expectation_overlay",
             "expectation_policy_guardrail_mismatch",
             "expectation policy is not bound to the active v2.1 guardrail",
-            snapshot_id=expectation_policy.snapshot_id,
+            snapshot_id=policy.snapshot_id,
         )
         return None
-    if expectation_policy.evaluation_date != evaluation_date:
+    if policy.evaluation_date != evaluation_date or policy.registered_at > captured_at:
         _block(
             blockers,
             "expectation_overlay",
-            "expectation_policy_evaluation_date_mismatch",
-            "expectation policy uses another evaluation date",
-            snapshot_id=expectation_policy.snapshot_id,
+            "expectation_policy_pit_mismatch",
+            "expectation policy is not valid at the declared PIT cutoff",
+            snapshot_id=policy.snapshot_id,
         )
         return None
     if opportunity_set is None:
         return None
-    by_package = {item.security_id: item for item in packages}
-    by_candidate = {item.security_id: item for item in candidates}
-    expectation_candidates = []
+
+    packages_by_security = {item.security_id: item for item in packages}
+    candidates_by_security = {item.security_id: item for item in candidates}
+    expectation_candidates: list[ExpectationGapOpportunityCandidateSnapshot] = []
     for security_id in opportunity_set.comparable_security_ids:
-        package = by_package[security_id]
+        package = packages_by_security[security_id]
         gap = package.expectation_gap
         if gap is None:
             _block(
@@ -749,9 +734,9 @@ def _build_expectation_overlay(
         try:
             expectation_candidates.append(
                 build_expectation_gap_opportunity_candidate(
-                    by_candidate[security_id],
+                    candidates_by_security[security_id],
                     gap,
-                    expectation_policy,
+                    policy,
                     captured_at=captured_at,
                     guardrails=guardrails,
                 )
@@ -765,9 +750,9 @@ def _build_expectation_overlay(
                 security_id,
                 gap.snapshot_id,
             )
-    expected_count = len(opportunity_set.comparable_security_ids)
-    if expected_count < 2 or len(expectation_candidates) != expected_count:
-        if expected_count >= 2:
+    expected = len(opportunity_set.comparable_security_ids)
+    if expected < 2 or len(expectation_candidates) != expected:
+        if expected >= 2:
             _block(
                 blockers,
                 "expectation_overlay",
@@ -779,7 +764,7 @@ def _build_expectation_overlay(
     try:
         return build_expectation_augmented_opportunity_set(
             opportunity_set,
-            expectation_policy,
+            policy,
             tuple(expectation_candidates),
             captured_at=captured_at,
             guardrails=guardrails,
@@ -795,11 +780,11 @@ def _build_expectation_overlay(
         return None
 
 
-def _register_prospective_if_requested(
+def _register_or_block(
     mode: ResearchRoundMode,
     *,
     opportunity_set: OpportunitySetSnapshot | None,
-    expectation_overlay: ExpectationAugmentedOpportunitySetSnapshot | None,
+    overlay: ExpectationAugmentedOpportunitySetSnapshot | None,
     request: ProspectiveRegistrationRequest | None,
     blockers: list[ResearchRoundBlocker],
     flags: list[str],
@@ -826,7 +811,7 @@ def _register_prospective_if_requested(
             price_basis=request.price_basis,
             source_evidence_ids=request.source_evidence_ids,
             calendar=request.calendar,
-            expectation_overlay=expectation_overlay,
+            expectation_overlay=overlay,
         )
     except ValueError as exc:
         _block(
@@ -839,9 +824,8 @@ def _register_prospective_if_requested(
         return None
 
 
-def _derive_status(
+def _status(
     mode: ResearchRoundMode,
-    *,
     blockers: list[ResearchRoundBlocker],
     registration: ProspectiveOpportunityRegistration | None,
 ) -> ResearchRoundStatus:
@@ -861,8 +845,6 @@ def persist_research_round(
     *,
     output_root: str | Path,
 ) -> Path:
-    """Persist one immutable research-round integration snapshot."""
-
     path = Path(output_root) / "research_round_v2_1" / f"{snapshot.snapshot_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = dict(snapshot.payload_without_id())
@@ -892,13 +874,7 @@ def _block(
     security_id: str | None = None,
     snapshot_id: str | None = None,
 ) -> None:
-    value = ResearchRoundBlocker(
-        component=component,
-        code=code,
-        detail=detail,
-        security_id=security_id,
-        snapshot_id=snapshot_id,
-    )
+    value = ResearchRoundBlocker(component, code, detail, security_id, snapshot_id)
     if value not in blockers:
         blockers.append(value)
 
