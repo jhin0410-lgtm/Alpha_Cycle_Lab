@@ -24,9 +24,9 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
 )
 from alpha_cycle.intelligence.expectation_state import ExpectationKind, ExpectationMetric
 from alpha_cycle.intelligence.forecast_ledger import (
+    ForecasterKind,
     ForecastRegistrationMode,
     ForecastRegistrationSnapshot,
-    ForecasterKind,
     OrdinalAssessment,
     PrimaryErrorMetric,
 )
