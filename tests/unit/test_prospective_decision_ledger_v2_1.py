@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from threading import Barrier
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -41,6 +43,54 @@ TARGET_SESSION = date(2026, 11, 16)
 GUARDRAIL = "d" * 64
 SOURCE = "a" * 64
 POLICY = "c" * 64
+
+
+class WeekdayCalendar:
+    timezone = SEOUL
+
+    def is_session(self, value: date) -> bool:
+        return value.weekday() < 5
+
+    def next_session(self, value: date) -> date:
+        current = value + timedelta(days=1)
+        while not self.is_session(current):
+            current += timedelta(days=1)
+        return current
+
+    def previous_session(self, value: date) -> date:
+        current = value - timedelta(days=1)
+        while not self.is_session(current):
+            current -= timedelta(days=1)
+        return current
+
+    def sessions_between(
+        self,
+        start: date,
+        end: date,
+        *,
+        inclusive: bool = True,
+    ) -> list[date]:
+        sessions: list[date] = []
+        current = start
+        while current <= end:
+            if self.is_session(current):
+                sessions.append(current)
+            current += timedelta(days=1)
+        if inclusive:
+            return sessions
+        return [item for item in sessions if start < item < end]
+
+    def session_open(self, value: date) -> datetime:
+        return datetime.combine(value, time(9, 0), tzinfo=self.timezone)
+
+    def session_close(self, value: date) -> datetime:
+        return datetime.combine(value, time(15, 30), tzinfo=self.timezone)
+
+    def session_label(self, timestamp: datetime) -> date:
+        return timestamp.astimezone(self.timezone).date()
+
+
+CALENDAR = WeekdayCalendar()
 
 
 def _candidate(
@@ -233,10 +283,27 @@ def _realized(
     )
 
 
+def _ordered_outcomes(
+    registration: ProspectiveOpportunityRegistration,
+    returns: dict[str, float],
+    *,
+    benchmark_return: float,
+) -> tuple[CandidateRealizedOutcome, ...]:
+    return tuple(
+        _realized(
+            security_id,
+            returns[security_id],
+            benchmark_return=benchmark_return,
+        )
+        for security_id in registration.security_ids
+    )
+
+
 def _outcome_overlay(
     registration: ProspectiveOpportunityRegistration,
 ) -> ProspectiveOpportunityOutcomeSnapshot:
     benchmark_return = 0.05
+    returns = {"A": 0.30, "B": 0.10, "C": 0.20}
     return ProspectiveOpportunityOutcomeSnapshot(
         scored_at=datetime(2026, 11, 16, 16, 0, tzinfo=SEOUL),
         registration_snapshot_id=registration.snapshot_id,
@@ -246,10 +313,10 @@ def _outcome_overlay(
         price_basis=PriceBasis.TOTAL_RETURN_ADJUSTED,
         benchmark_security_id="BM",
         benchmark_return=benchmark_return,
-        candidate_outcomes=(
-            _realized("A", 0.30, benchmark_return=benchmark_return),
-            _realized("B", 0.10, benchmark_return=benchmark_return),
-            _realized("C", 0.20, benchmark_return=benchmark_return),
+        candidate_outcomes=_ordered_outcomes(
+            registration,
+            returns,
+            benchmark_return=benchmark_return,
         ),
         ex_post_winner_security_ids=("A",),
         base_frontier_best_return=0.20,
@@ -269,6 +336,7 @@ def _outcome_base_only(
     registration: ProspectiveOpportunityRegistration,
 ) -> ProspectiveOpportunityOutcomeSnapshot:
     benchmark_return = 0.05
+    returns = {"A": 0.10, "B": 0.30, "C": 0.20}
     return ProspectiveOpportunityOutcomeSnapshot(
         scored_at=datetime(2026, 11, 16, 16, 5, tzinfo=SEOUL),
         registration_snapshot_id=registration.snapshot_id,
@@ -278,10 +346,10 @@ def _outcome_base_only(
         price_basis=PriceBasis.TOTAL_RETURN_ADJUSTED,
         benchmark_security_id="BM",
         benchmark_return=benchmark_return,
-        candidate_outcomes=(
-            _realized("A", 0.10, benchmark_return=benchmark_return),
-            _realized("B", 0.30, benchmark_return=benchmark_return),
-            _realized("C", 0.20, benchmark_return=benchmark_return),
+        candidate_outcomes=_ordered_outcomes(
+            registration,
+            returns,
+            benchmark_return=benchmark_return,
         ),
         ex_post_winner_security_ids=("B",),
         base_frontier_best_return=0.30,
@@ -297,18 +365,29 @@ def _outcome_base_only(
     )
 
 
+def _ledger_entry(
+    base: OpportunitySetSnapshot,
+    registration: ProspectiveOpportunityRegistration,
+    outcome: ProspectiveOpportunityOutcomeSnapshot,
+    *,
+    overlay: ExpectationAugmentedOpportunitySetSnapshot | None = None,
+):
+    return build_prospective_decision_ledger_entry(
+        base,
+        registration,
+        outcome,
+        calendar=CALENDAR,
+        expectation_overlay=overlay,
+    )
+
+
 def test_overlay_entry_records_only_observed_selection_attribution() -> None:
     base = _base()
     overlay = _overlay(base)
     registration = _registration(base, registration_id="overlay-60d", overlay=overlay)
     outcome = _outcome_overlay(registration)
 
-    entry = build_prospective_decision_ledger_entry(
-        base,
-        registration,
-        outcome,
-        expectation_overlay=overlay,
-    )
+    entry = _ledger_entry(base, registration, outcome, overlay=overlay)
 
     assert entry.ex_post_winner_security_ids == ("A",)
     assert entry.base_frontier_regret == pytest.approx(0.10)
@@ -335,7 +414,7 @@ def test_base_only_entry_does_not_invent_expectation_metadata() -> None:
     registration = _registration(base, registration_id="base-only-60d", overlay=None)
     outcome = _outcome_base_only(registration)
 
-    entry = build_prospective_decision_ledger_entry(base, registration, outcome)
+    entry = _ledger_entry(base, registration, outcome)
 
     assert entry.expectation_overlay_snapshot_id is None
     assert entry.expectation_comparable_security_ids == ()
@@ -361,13 +440,13 @@ def test_ledger_aggregates_base_and_overlay_observations_without_refitting_score
         registration_id="base-only-60d",
         overlay=None,
     )
-    overlay_entry = build_prospective_decision_ledger_entry(
+    overlay_entry = _ledger_entry(
         base,
         overlay_registration,
         _outcome_overlay(overlay_registration),
-        expectation_overlay=overlay,
+        overlay=overlay,
     )
-    base_entry = build_prospective_decision_ledger_entry(
+    base_entry = _ledger_entry(
         base,
         base_registration,
         _outcome_base_only(base_registration),
@@ -408,12 +487,77 @@ def test_ledger_rejects_outcome_metric_drift() -> None:
     outcome = replace(_outcome_overlay(registration), base_frontier_regret=0.01)
 
     with pytest.raises(ValueError, match="base frontier regret has drifted"):
-        build_prospective_decision_ledger_entry(
-            base,
-            registration,
-            outcome,
-            expectation_overlay=overlay,
-        )
+        _ledger_entry(base, registration, outcome, overlay=overlay)
+
+
+def test_ledger_rejects_realized_return_inconsistent_with_recorded_prices() -> None:
+    base = _base()
+    registration = _registration(base, registration_id="base-only-60d", overlay=None)
+    outcome = _outcome_base_only(registration)
+    first = outcome.candidate_outcomes[0]
+    tampered = replace(
+        first,
+        realized_basis_return=first.realized_basis_return + 0.05,
+        benchmark_excess_return=first.benchmark_excess_return + 0.05,
+    )
+    outcome = replace(
+        outcome,
+        candidate_outcomes=(tampered, *outcome.candidate_outcomes[1:]),
+    )
+
+    with pytest.raises(ValueError, match="candidate realized basis return has drifted"):
+        _ledger_entry(base, registration, outcome)
+
+
+def test_ledger_rejects_target_session_that_does_not_match_horizon() -> None:
+    base = _base()
+    registration = _registration(base, registration_id="base-only-60d", overlay=None)
+    outcome = replace(
+        _outcome_base_only(registration),
+        target_session=date(2026, 11, 13),
+    )
+
+    with pytest.raises(ValueError, match="target session does not match"):
+        _ledger_entry(base, registration, outcome)
+
+
+def test_ledger_rejects_scoring_before_target_session_close() -> None:
+    base = _base()
+    registration = _registration(base, registration_id="base-only-60d", overlay=None)
+    outcome = replace(
+        _outcome_base_only(registration),
+        scored_at=datetime(2026, 11, 16, 15, 0, tzinfo=SEOUL),
+    )
+
+    with pytest.raises(ValueError, match="before the declared horizon closed"):
+        _ledger_entry(base, registration, outcome)
+
+
+def test_ledger_accepts_valid_registration_candidate_order_without_sort_requirement() -> None:
+    base = _base()
+    registration = replace(
+        _registration(base, registration_id="base-only-reordered-60d", overlay=None),
+        security_ids=("C", "B", "A"),
+    )
+    outcome = _outcome_base_only(registration)
+
+    entry = _ledger_entry(base, registration, outcome)
+
+    assert entry.security_ids == ("C", "B", "A")
+    assert tuple(item.security_id for item in outcome.candidate_outcomes) == ("C", "B", "A")
+
+
+def test_ledger_recomputes_stale_outcome_flags_from_validated_metrics() -> None:
+    base = _base()
+    registration = _registration(base, registration_id="base-only-60d", overlay=None)
+    outcome = replace(
+        _outcome_base_only(registration),
+        flags=("base_pareto_frontier_missed_ex_post_winner",),
+    )
+
+    entry = _ledger_entry(base, registration, outcome)
+
+    assert entry.flags == ()
 
 
 def test_ledger_rejects_registration_bound_to_another_opportunity_snapshot() -> None:
@@ -423,7 +567,7 @@ def test_ledger_rejects_registration_bound_to_another_opportunity_snapshot() -> 
     outcome = _outcome_base_only(wrong_registration)
 
     with pytest.raises(ValueError, match="different opportunity set"):
-        build_prospective_decision_ledger_entry(base, wrong_registration, outcome)
+        _ledger_entry(base, wrong_registration, outcome)
 
 
 def test_ledger_requires_the_exact_registered_expectation_overlay() -> None:
@@ -434,12 +578,7 @@ def test_ledger_requires_the_exact_registered_expectation_overlay() -> None:
     wrong_overlay = replace(overlay, comparison_policy_snapshot_id="f" * 64)
 
     with pytest.raises(ValueError, match="expectation overlay differs from registration"):
-        build_prospective_decision_ledger_entry(
-            base,
-            registration,
-            outcome,
-            expectation_overlay=wrong_overlay,
-        )
+        _ledger_entry(base, registration, outcome, overlay=wrong_overlay)
 
 
 def test_ledger_snapshot_refuses_duplicate_registration_and_persistence_overwrite(
@@ -447,7 +586,7 @@ def test_ledger_snapshot_refuses_duplicate_registration_and_persistence_overwrit
 ) -> None:
     base = _base()
     registration = _registration(base, registration_id="base-only-60d", overlay=None)
-    entry = build_prospective_decision_ledger_entry(
+    entry = _ledger_entry(
         base,
         registration,
         _outcome_base_only(registration),
@@ -470,3 +609,29 @@ def test_ledger_snapshot_refuses_duplicate_registration_and_persistence_overwrit
 
     with pytest.raises(FileExistsError, match="already exists"):
         persist_prospective_decision_ledger(ledger, target)
+
+
+def test_ledger_persistence_uses_atomic_exclusive_creation(tmp_path: Path) -> None:
+    base = _base()
+    registration = _registration(base, registration_id="base-only-atomic-60d", overlay=None)
+    entry = _ledger_entry(base, registration, _outcome_base_only(registration))
+    ledger = build_prospective_decision_ledger(
+        (entry,),
+        built_at=datetime(2026, 11, 16, 17, 0, tzinfo=SEOUL),
+    )
+    target = tmp_path / "atomic-ledger.json"
+    barrier = Barrier(2)
+
+    def writer() -> str:
+        barrier.wait()
+        try:
+            persist_prospective_decision_ledger(ledger, target)
+        except FileExistsError:
+            return "exists"
+        return "written"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: writer(), range(2)))
+
+    assert sorted(results) == ["exists", "written"]
+    assert ledger.snapshot_id in target.read_text(encoding="utf-8")
