@@ -79,7 +79,11 @@ def _expectation_state(
     )
 
 
-def _valuation(*, market_cap: float | None = 100_000_000_000.0, complete: bool = True) -> ValuationEvidenceSnapshot:
+def _valuation(
+    *,
+    market_cap: float | None = 100_000_000_000.0,
+    complete: bool = True,
+) -> ValuationEvidenceSnapshot:
     metrics = pd.DataFrame(
         [
             {
