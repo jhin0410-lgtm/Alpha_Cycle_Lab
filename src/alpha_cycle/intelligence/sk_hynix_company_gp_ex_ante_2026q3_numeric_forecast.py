@@ -14,13 +14,11 @@ from zoneinfo import ZoneInfo
 import yaml
 
 from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_2026q3_prospective_feature import (
-    DEFAULT_2026Q3_FEATURE_VECTOR,
     FrozenProspectiveFeatureVector,
     load_prospective_feature_vector,
     load_selected_estimator_artifact,
 )
 from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_selected_estimator_freeze import (
-    DEFAULT_SELECTED_ESTIMATOR_POINTER,
     FrozenSelectedEstimatorFullFit,
 )
 
