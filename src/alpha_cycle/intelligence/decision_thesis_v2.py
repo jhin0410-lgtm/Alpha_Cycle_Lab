@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
@@ -261,7 +262,10 @@ class InvestmentThesisSnapshot:
         if not self.claims:
             raise ValueError("Investment thesis requires at least one explicit claim")
         _validate_unique_ids((claim.claim_id for claim in self.claims), "claim_id")
-        _validate_unique_ids((catalyst.catalyst_id for catalyst in self.catalysts), "catalyst_id")
+        _validate_unique_ids(
+            (catalyst.catalyst_id for catalyst in self.catalysts),
+            "catalyst_id",
+        )
         _validate_refs(self.forecast_refs, "forecast_refs")
         _validate_refs(self.scenario_refs, "scenario_refs")
         _validate_refs(self.opportunity_set_refs, "opportunity_set_refs")
@@ -372,9 +376,8 @@ def _validate_text_tuple(values: tuple[str, ...], field: str) -> None:
         _require_text(value, field)
 
 
-def _validate_unique_ids(values: object, field: str) -> None:
-    items = tuple(cast(object, values))
-    normalized = tuple(str(item).strip() for item in items)
+def _validate_unique_ids(values: Iterable[str], field: str) -> None:
+    normalized = tuple(value.strip() for value in values)
     if any(not item for item in normalized):
         raise ValueError(f"{field} cannot be empty")
     if len(set(normalized)) != len(normalized):
