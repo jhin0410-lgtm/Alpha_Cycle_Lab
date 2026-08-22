@@ -26,7 +26,10 @@ def _uncertainty() -> ThesisUncertainty:
     return ThesisUncertainty(
         evidence=UncertaintyDimension(UncertaintyLevel.LOW, "Primary-source evidence is bound."),
         model=UncertaintyDimension(UncertaintyLevel.HIGH, "Forecast history is still shallow."),
-        regime=UncertaintyDimension(UncertaintyLevel.HIGH, "Current scale may be structurally new."),
+        regime=UncertaintyDimension(
+            UncertaintyLevel.HIGH,
+            "Current scale may be structurally new.",
+        ),
         expectation=UncertaintyDimension(
             UncertaintyLevel.UNKNOWN,
             "Certified point-in-time consensus is not yet available.",
