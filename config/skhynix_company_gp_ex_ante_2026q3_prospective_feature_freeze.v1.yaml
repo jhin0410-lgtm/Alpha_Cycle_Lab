@@ -1,0 +1,64 @@
+schema_version: 1
+freeze:
+  freeze_id: skhynix_company_gp_ex_ante_2026q3_prospective_feature_vector
+  freeze_version: 1.0-frozen-before-2026q3-origin
+  status: frozen_before_2026q3_forecast_origin
+  ticker: "000660"
+  target_metric: company_gross_profit_krw_million
+  target_period: 2026Q3
+  source_period: 2026Q2
+
+  locked_inputs:
+    forecast_protocol_path: config/skhynix_company_gp_ex_ante_forecast_protocol.v1.yaml
+    selected_estimator_path: data/private/research/skhynix-company-gp-ex-ante-selected-estimator/latest_selected_estimator.json
+    historical_execution_v2_path: config/skhynix_company_gp_ex_ante_historical_evaluation_execution.v2.yaml
+
+  selected_predictor_inheritance:
+    required_selected_candidate_id: lagged_gp_affine_ols
+    required_predictors:
+      - lagged_company_gross_profit
+    predictor_definition: previous_reported_quarter_company_gross_profit_krw_million
+    source_period_rule: immediately_preceding_calendar_quarter
+    predictor_change_allowed: false
+    feature_addition_allowed: false
+    feature_substitution_allowed: false
+
+  source_policy:
+    provider: opendart
+    endpoint: fnlttSinglAcntAll
+    fs_div: CFS
+    business_year: 2026
+    report_code: "11012"
+    current_term_amount_field: thstrm_amount
+    account_alias_policy_source: historical_execution_v2
+    allowed_statement_divisions_source: historical_execution_v2
+    require_revenue_minus_cost_equals_gross_profit: true
+    require_same_receipt_for_selected_accounts: true
+    require_source_available_not_after_forecast_origin: true
+    require_source_available_not_after_raw_capture_time: true
+    raw_payload_capture_before_feature_extraction: true
+    raw_payload_refresh_after_first_capture_allowed: false
+    account_name_fuzzy_matching_allowed: false
+    arithmetic_target_reconstruction_allowed: false
+    source_fallback_allowed: false
+    correction_search_or_selection_allowed: false
+
+  timing_policy:
+    forecast_origin_source: frozen_forecast_protocol
+    first_live_capture_must_occur_not_after_forecast_origin: true
+    early_lock_is_final_for_2026q3: true
+    information_arriving_after_first_live_capture_allowed: false
+    fallback_period_if_origin_missed_without_capture: 2026Q4
+
+  protected_boundary:
+    prospective_feature_vector_frozen_before_run: false
+    prospective_forecast_run: false
+    2026q1_used_for_selection: false
+    2026q3_target_read: false
+    2026q3_source_outcome_loaded: false
+    2026q3_evaluated: false
+    numeric_forward_forecast_enabled: false
+    fair_value_estimate_enabled: false
+    target_price_enabled: false
+    decision_score_enabled: false
+    investment_action_enabled: false
