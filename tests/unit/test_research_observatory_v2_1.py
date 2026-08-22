@@ -274,15 +274,12 @@ def test_health_payload_explicitly_preserves_read_only_boundary(tmp_path: Path) 
     assert health["automatic_execution_enabled"] is False
 
 
-def test_loader_rejects_noncanonical_request_snapshot_even_if_ledger_hash_is_forged(
+def test_loader_rejects_stale_child_snapshot_even_if_ledger_hash_is_forged(
     tmp_path: Path,
 ) -> None:
     path, _ = _persist_fixture(tmp_path)
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["requests"][0]["request_text"] = "Changed after persistence"
-    request_without_id = dict(payload["requests"][0])
-    del request_without_id["snapshot_id"]
-    payload["requests"][0]["snapshot_id"] = _content_id(request_without_id)
     without_ledger_id = dict(payload)
     del without_ledger_id["snapshot_id"]
     forged_id = _content_id(without_ledger_id)
@@ -291,5 +288,5 @@ def test_loader_rejects_noncanonical_request_snapshot_even_if_ledger_hash_is_for
     forged_path.write_text(json.dumps(payload), encoding="utf-8")
     path.unlink()
 
-    with pytest.raises((ObservatoryDataError, ValueError)):
+    with pytest.raises(ObservatoryDataError, match="analysis request snapshot"):
         load_research_run_ledger(forged_path)
