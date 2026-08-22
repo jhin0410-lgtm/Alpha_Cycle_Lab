@@ -463,19 +463,24 @@ def test_ledger_recomputes_cohorts_and_rejects_stale_summary() -> None:
         built_at=datetime(2026, 11, 16, 17, 0, tzinfo=SEOUL),
     )
     cohort = ledger.cohort_summaries[0]
-    first_dimension = cohort.dimension_summaries[0]
-    counts = first_dimension.status_counts
+    sector_index = next(
+        index
+        for index, item in enumerate(cohort.dimension_summaries)
+        if item.layer is AttributionLayer.SECTOR_THEME
+        and item.domain is AttributionDomain.INDUSTRY_TRANSMISSION
+    )
+    sector_dimension = cohort.dimension_summaries[sector_index]
+    counts = sector_dimension.status_counts
     swapped = CompetenceStatusCounts(
         consistent_count=counts.inconsistent_count,
         inconsistent_count=counts.consistent_count,
         mixed_count=counts.mixed_count,
         insufficient_count=counts.insufficient_count,
     )
-    stale_dimension = replace(first_dimension, status_counts=swapped)
-    stale_cohort = replace(
-        cohort,
-        dimension_summaries=(stale_dimension, *cohort.dimension_summaries[1:]),
-    )
+    stale_dimension = replace(sector_dimension, status_counts=swapped)
+    stale_dimensions = list(cohort.dimension_summaries)
+    stale_dimensions[sector_index] = stale_dimension
+    stale_cohort = replace(cohort, dimension_summaries=tuple(stale_dimensions))
 
     with pytest.raises(ValueError, match="drifted from observations"):
         replace(ledger, cohort_summaries=(stale_cohort,))
