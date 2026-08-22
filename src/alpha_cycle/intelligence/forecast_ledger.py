@@ -1,8 +1,8 @@
 """Prospective numeric forecast ledger for Alpha Cycle Lab Decision System v2.1.
 
-The ledger separates immutable forecast registration, later outcome observation, and later
-evaluation. It can also reference forecasts that were already frozen prospectively by another
-research contract without pretending the generic ledger existed at the original forecast time.
+The ledger separates immutable forecast registration, later target-level outcome observation,
+and later evaluation. It can reference forecasts already frozen by another research contract
+without pretending the generic ledger existed at the original forecast time.
 """
 
 from __future__ import annotations
@@ -153,6 +153,15 @@ class ForecastRegistrationSnapshot:
             raise ValueError("forecast registration requires source_evidence_ids")
         _validate_sha(self.guardrail_evidence_id, "guardrail_evidence_id")
 
+    @property
+    def target_key(self) -> tuple[str, str, date, str]:
+        return (
+            self.security_id,
+            self.target_variable,
+            self.target_date,
+            self.unit,
+        )
+
     def payload_without_id(self) -> dict[str, object]:
         return {
             "schema_version": FORECAST_LEDGER_SCHEMA_VERSION,
@@ -200,9 +209,8 @@ class ForecastRegistrationSnapshot:
 
 @dataclass(frozen=True)
 class ForecastOutcomeSnapshot:
-    """Later observed actual bound to one immutable forecast registration."""
+    """One target-level actual that can score every comparable forecast registration."""
 
-    registration_snapshot_id: str
     captured_at: datetime
     outcome_observed_at: datetime
     security_id: str
@@ -213,7 +221,6 @@ class ForecastOutcomeSnapshot:
     source_evidence_ids: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        _validate_sha(self.registration_snapshot_id, "registration_snapshot_id")
         _require_aware(self.captured_at, "captured_at")
         _require_aware(self.outcome_observed_at, "outcome_observed_at")
         if self.captured_at < self.outcome_observed_at:
@@ -228,10 +235,18 @@ class ForecastOutcomeSnapshot:
         if not self.source_evidence_ids:
             raise ValueError("forecast outcome requires source_evidence_ids")
 
+    @property
+    def target_key(self) -> tuple[str, str, date, str]:
+        return (
+            self.security_id,
+            self.target_variable,
+            self.target_date,
+            self.unit,
+        )
+
     def payload_without_id(self) -> dict[str, object]:
         return {
             "schema_version": FORECAST_LEDGER_SCHEMA_VERSION,
-            "registration_snapshot_id": self.registration_snapshot_id,
             "captured_at": self.captured_at.isoformat(),
             "outcome_observed_at": self.outcome_observed_at.isoformat(),
             "security_id": self.security_id,
@@ -240,7 +255,7 @@ class ForecastOutcomeSnapshot:
             "actual_value": float(self.actual_value),
             "unit": self.unit,
             "source_evidence_ids": list(self.source_evidence_ids),
-            "registration_mutated": False,
+            "forecast_registration_specific": False,
             "order_api_enabled": False,
         }
 
@@ -437,10 +452,9 @@ def build_forecast_outcome(
     actual_value: float,
     source_evidence_ids: tuple[str, ...],
 ) -> ForecastOutcomeSnapshot:
-    """Build a later actual without mutating the registration snapshot."""
+    """Build a target-level actual without mutating the registration snapshot."""
 
-    outcome = ForecastOutcomeSnapshot(
-        registration_snapshot_id=registration.snapshot_id,
+    return ForecastOutcomeSnapshot(
         captured_at=captured_at,
         outcome_observed_at=outcome_observed_at,
         security_id=registration.security_id,
@@ -450,7 +464,6 @@ def build_forecast_outcome(
         unit=registration.unit,
         source_evidence_ids=source_evidence_ids,
     )
-    return outcome
 
 
 def build_forecast_evaluation(
@@ -462,16 +475,8 @@ def build_forecast_evaluation(
 ) -> ForecastEvaluationSnapshot:
     """Evaluate one numeric point forecast using only its preregistered rule."""
 
-    if outcome.registration_snapshot_id != registration.snapshot_id:
-        raise ValueError("outcome does not belong to forecast registration")
-    if outcome.security_id != registration.security_id:
-        raise ValueError("outcome security_id differs from registration")
-    if outcome.target_variable != registration.target_variable:
-        raise ValueError("outcome target_variable differs from registration")
-    if outcome.target_date != registration.target_date:
-        raise ValueError("outcome target_date differs from registration")
-    if outcome.unit != registration.unit:
-        raise ValueError("outcome unit differs from registration")
+    if outcome.target_key != registration.target_key:
+        raise ValueError("outcome target identity differs from forecast registration")
     _require_aware(evaluated_at, "evaluated_at")
     if evaluated_at < outcome.captured_at:
         raise ValueError("forecast evaluation cannot precede outcome capture")
@@ -504,7 +509,9 @@ def build_forecast_evaluation(
     information_gain = DiagnosticAvailability.NOT_EVALUATED_WITHOUT_BASELINE
     if baseline_evaluation is not None:
         if baseline_evaluation.outcome_snapshot_id != outcome.snapshot_id:
-            raise ValueError("baseline evaluation must use the same outcome snapshot")
+            raise ValueError("baseline evaluation must use the same target outcome snapshot")
+        if baseline_evaluation.registration_snapshot_id not in registration.baseline_refs:
+            raise ValueError("baseline evaluation is not declared in registration.baseline_refs")
         baseline_refs = (baseline_evaluation.snapshot_id,)
         advantage = baseline_evaluation.accuracy.absolute_error - absolute
         information_gain = DiagnosticAvailability.OBSERVED
@@ -581,8 +588,10 @@ def persist_forecast_outcome(
         output_root=output_root,
         object_type="outcome",
         manifest_extra={
-            "registration_snapshot_id": snapshot.registration_snapshot_id,
-            "registration_mutated": False,
+            "security_id": snapshot.security_id,
+            "target_variable": snapshot.target_variable,
+            "target_date": snapshot.target_date.isoformat(),
+            "forecast_registration_specific": False,
         },
     )
 
