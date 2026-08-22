@@ -518,7 +518,9 @@ def build_competence_observation(
         if evaluation.domain is not hypothesis.domain:
             raise ValueError("competence evaluation domain differs from frozen hypothesis")
         if evaluation.expected_direction is not hypothesis.expected_direction:
-            raise ValueError("competence evaluation expected direction differs from frozen hypothesis")
+            raise ValueError(
+                "competence evaluation expected direction differs from frozen hypothesis"
+            )
         recomputed_status = _mechanical_status(
             hypothesis.expected_direction.value,
             evaluation.observed_directions,
