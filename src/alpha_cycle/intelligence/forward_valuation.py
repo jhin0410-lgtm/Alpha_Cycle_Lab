@@ -1,7 +1,7 @@
 """Certified forward valuation state for Alpha Cycle Lab decision-system v2.
 
 Forward valuation may use only expectations that already passed the provider-agnostic
-ExpectationStateSnapshot contract.  Existing trailing valuation evidence supplies the
+ExpectationStateSnapshot contract. Existing trailing valuation evidence supplies the
 point-in-time market-cap state; this module never substitutes trailing actual earnings for
 missing forward expectations and does not produce fair value or target prices.
 """
@@ -81,8 +81,11 @@ class ForwardValuationObservation:
             if self.multiple <= 0:
                 raise ValueError("forward valuation multiple must be positive")
         if self.status is ForwardValuationStatus.AVAILABLE:
-            if self.market_cap_krw is None or self.multiple is None or self.valuation_metric is None:
-                raise ValueError("available forward valuation requires market cap, metric, and multiple")
+            required = (self.market_cap_krw, self.multiple, self.valuation_metric)
+            if any(value is None for value in required):
+                raise ValueError(
+                    "available forward valuation requires market cap, metric, and multiple"
+                )
         elif self.multiple is not None:
             raise ValueError("unavailable forward valuation cannot expose a multiple")
 
@@ -183,15 +186,20 @@ def build_forward_valuation_state(
     warnings: list[str] = []
     if any(row.status is ForwardValuationStatus.MARKET_CAP_UNAVAILABLE for row in rows):
         warnings.append(
-            "One or more forward expectations lack a complete point-in-time market capitalization."
+            "One or more forward expectations lack a complete point-in-time market "
+            "capitalization."
         )
-    if any(row.status is ForwardValuationStatus.UNSUPPORTED_EXPECTATION_METRIC for row in rows):
+    if any(
+        row.status is ForwardValuationStatus.UNSUPPORTED_EXPECTATION_METRIC for row in rows
+    ):
         warnings.append(
-            "Some certified expectations are preserved but do not map to an enabled forward multiple."
+            "Some certified expectations are preserved but do not map to an enabled "
+            "forward multiple."
         )
     if any(row.status is ForwardValuationStatus.NON_POSITIVE_EXPECTATION for row in rows):
         warnings.append(
-            "Some forward multiples are unavailable because the certified denominator is non-positive."
+            "Some forward multiples are unavailable because the certified denominator "
+            "is non-positive."
         )
     return ForwardValuationStateSnapshot(
         captured_at=capture,
@@ -326,16 +334,14 @@ def _market_cap_lookup(frame: pd.DataFrame) -> dict[str, float | None]:
     if missing:
         raise ValueError("valuation_metrics missing columns: " + ",".join(sorted(missing)))
     output: dict[str, float | None] = {}
-    for raw in frame.loc[:, ["ticker", "market_cap_complete", "market_cap"]].to_dict(
-        orient="records"
-    ):
+    columns = ["ticker", "market_cap_complete", "market_cap"]
+    for raw in frame.loc[:, columns].to_dict(orient="records"):
         ticker = str(raw["ticker"]).strip()
         _require_text(ticker, "valuation ticker")
         if ticker in output:
             raise ValueError(f"duplicate valuation ticker: {ticker}")
         complete = bool(raw["market_cap_complete"])
-        market_cap_raw = raw["market_cap"]
-        market_cap = _optional_number(market_cap_raw)
+        market_cap = _optional_number(raw["market_cap"])
         if complete and market_cap is None:
             raise ValueError(f"complete market cap is missing for ticker: {ticker}")
         if market_cap is not None and market_cap <= 0:
@@ -355,7 +361,9 @@ def _to_krw(value: float, unit: str) -> float:
     try:
         factor = factors[unit]
     except KeyError as exc:
-        raise ValueError(f"unsupported expectation currency/unit for valuation: {unit}") from exc
+        raise ValueError(
+            f"unsupported expectation currency/unit for valuation: {unit}"
+        ) from exc
     result = float(value) * factor
     _require_finite(result, "expectation_value_krw")
     return result
