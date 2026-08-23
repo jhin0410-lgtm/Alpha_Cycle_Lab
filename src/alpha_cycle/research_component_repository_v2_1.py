@@ -206,6 +206,11 @@ def _scan_repository[T: _Component](
 ) -> tuple[T, ...]:
     if not root.exists():
         return ()
+    if root.is_symlink():
+        raise ResearchComponentRepositoryError(
+            f"{object_name} repository root cannot be a symlink"
+        )
+    resolved_root = root.resolve()
     loaded: list[T] = []
     by_id: dict[str, _ArtifactRef] = {}
     directories = sorted(
@@ -214,8 +219,29 @@ def _scan_repository[T: _Component](
         if path.is_dir() and not path.name.startswith(".")
     )
     for directory in directories:
-        manifest = _load_object(directory / "manifest.json")
-        payload = _load_object(directory / f"{object_name}.json")
+        if directory.is_symlink():
+            raise ResearchComponentRepositoryError(
+                f"{object_name} snapshot directory cannot be a symlink"
+            )
+        resolved_directory = directory.resolve()
+        if resolved_directory.parent != resolved_root:
+            raise ResearchComponentRepositoryError(
+                f"{object_name} snapshot directory escapes repository root"
+            )
+        manifest_path = directory / "manifest.json"
+        payload_path = directory / f"{object_name}.json"
+        _require_repository_child_file(
+            manifest_path,
+            directory=resolved_directory,
+            object_name=object_name,
+        )
+        _require_repository_child_file(
+            payload_path,
+            directory=resolved_directory,
+            object_name=object_name,
+        )
+        manifest = _load_object(manifest_path)
+        payload = _load_object(payload_path)
         if _required_int(manifest, "schema_version") != _COMPONENT_SCHEMA_VERSION:
             raise ResearchComponentRepositoryError(
                 f"unsupported {object_name} manifest schema"
@@ -246,20 +272,47 @@ def _scan_repository[T: _Component](
         by_id[declared] = _ArtifactRef(
             snapshot_id=declared,
             captured_at=snapshot.captured_at,
-            directory=directory,
+            directory=resolved_directory,
         )
         if snapshot.captured_at <= as_of:
             loaded.append(snapshot)
 
     pointer_path = root / pointer_name
     if pointer_path.exists():
+        _require_repository_child_file(
+            pointer_path,
+            directory=resolved_root,
+            object_name=object_name,
+        )
         _validate_pointer(
             pointer_path,
-            root=root,
+            root=resolved_root,
             object_name=object_name,
             by_id=by_id,
         )
     return tuple(loaded)
+
+
+def _require_repository_child_file(
+    path: Path,
+    *,
+    directory: Path,
+    object_name: str,
+) -> None:
+    if path.is_symlink():
+        raise ResearchComponentRepositoryError(
+            f"{object_name} repository file cannot be a symlink: {path.name}"
+        )
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ResearchComponentRepositoryError(
+            f"cannot resolve {object_name} repository file: {path}"
+        ) from exc
+    if resolved.parent != directory:
+        raise ResearchComponentRepositoryError(
+            f"{object_name} repository file escapes snapshot directory"
+        )
 
 
 def _validate_pointer(
@@ -297,11 +350,12 @@ def _validate_pointer(
     pointer_target = Path(_required_text(payload, "snapshot_path"))
     if not pointer_target.is_absolute():
         pointer_target = (Path.cwd() / pointer_target).resolve()
-    if pointer_target.resolve() != artifact.directory.resolve():
+    resolved_target = pointer_target.resolve()
+    if resolved_target != artifact.directory:
         raise ResearchComponentRepositoryError(
             f"{object_name} pointer path disagrees with snapshot"
         )
-    if artifact.directory.parent.resolve() != root.resolve():
+    if resolved_target.parent != root:
         raise ResearchComponentRepositoryError(
             f"{object_name} pointer escapes repository root"
         )
