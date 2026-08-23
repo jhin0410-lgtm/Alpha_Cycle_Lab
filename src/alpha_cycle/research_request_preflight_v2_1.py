@@ -85,7 +85,7 @@ def preflight_pending_request_theses(
 
         theses: list[InvestmentThesisSnapshot] = []
         blockers: list[ResearchRoundBlocker] = []
-        for security_id in request.security_ids:
+        for security_id in _unique_security_ids(request.security_ids):
             thesis = find_latest_investment_thesis(
                 root,
                 security_id=security_id,
@@ -132,6 +132,11 @@ def preflight_pending_request_theses(
                 run_path=None,
                 ledger_path=None,
                 changed_history=False,
+            )
+
+        if processed_at <= ledger.built_at:
+            raise ValueError(
+                "processed_at must be later than the latest ledger built_at when appending history"
             )
 
         run = build_pre_orchestration_blocked_run(
@@ -185,3 +190,15 @@ def _latest_run_for_request(
         item for item in ledger.runs if item.request_snapshot_id == request_snapshot_id
     )
     return matching[-1] if matching else None
+
+
+def _unique_security_ids(security_ids: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for security_id in security_ids:
+        key = security_id.strip()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(security_id)
+    return tuple(unique)
