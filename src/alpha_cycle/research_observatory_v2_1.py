@@ -292,11 +292,14 @@ def build_research_inbox(
             rows.append(_inbox_row_from_run(security_id, request, orchestrated))
             continue
 
+        matching_run = latest_runs_by_request.get(request.snapshot_id)
         current_preflight = active_preflights.get(request.snapshot_id)
-        if current_preflight is not None:
-            historical_run = latest_runs_by_request.get(request.snapshot_id)
+        if current_preflight is not None and (
+            matching_run is None
+            or current_preflight.selected_at >= matching_run.completed_at
+        ):
             prior_security_run = latest_runs_by_security.get(security_id)
-            visible_run = historical_run or prior_security_run
+            visible_run = matching_run or prior_security_run
             rows.append(
                 ResearchInboxRow(
                     security_id=security_id,
@@ -319,7 +322,6 @@ def build_research_inbox(
             )
             continue
 
-        matching_run = latest_runs_by_request.get(request.snapshot_id)
         if matching_run is None:
             prior_run = latest_runs_by_security.get(security_id)
             rows.append(
@@ -597,6 +599,7 @@ def _optional_text(payload: dict[str, Any], field: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ObservatoryDataError(f"{field} must be null or non-empty text")
     return value
+
 
 def _required_int(payload: dict[str, Any], field: str) -> int:
     value = payload.get(field)
