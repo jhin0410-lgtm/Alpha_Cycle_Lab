@@ -7,7 +7,9 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-_LOCK_NAME = ".research_run_ledger.lock"
+# Keep the pre-#301 intake lock filename so already-running old intake processes and
+# new intake/preflight processes still serialize against the same filesystem lock.
+_LOCK_NAME = ".research_request_intake.lock"
 
 
 @contextmanager
