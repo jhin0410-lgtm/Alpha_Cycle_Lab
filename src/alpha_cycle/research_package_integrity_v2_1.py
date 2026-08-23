@@ -9,7 +9,11 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import cast
+from zoneinfo import ZoneInfo
 
+from alpha_cycle.intelligence.decision_guardrails_v2_1 import (
+    load_decision_system_v21_guardrails,
+)
 from alpha_cycle.intelligence.decision_thesis_v2 import (
     InvestmentThesisSnapshot,
     ThesisStatus,
@@ -29,7 +33,12 @@ from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
     ResearchRoundRunSnapshot,
     ResearchRunLedgerSnapshot,
 )
-from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingReadinessSnapshot
+from alpha_cycle.intelligence.underwriter_v2_1 import (
+    SUPPLEMENTAL_DEEP_ELEMENTS,
+    UnderwritingLane,
+    UnderwritingReadiness,
+    UnderwritingReadinessSnapshot,
+)
 from alpha_cycle.investment_thesis_repository_v2_1 import InvestmentThesisRepositoryError
 from alpha_cycle.research_preflight_state_v2_1 import CurrentResearchThesisPreflightState
 
@@ -43,6 +52,14 @@ _PUBLICATION_REPOSITORIES = (
     "research_round_run_v2_1",
     "research_run_ledger_v2_1",
 )
+_READY_UNDERWRITING_STATES = frozenset(
+    {
+        UnderwritingReadiness.FAST_LANE_READY_FOR_HUMAN_REVIEW,
+        UnderwritingReadiness.DEEP_LANE_READY_FOR_HUMAN_REVIEW,
+        UnderwritingReadiness.DEEP_LANE_READY_WITH_EPISTEMIC_FLAGS,
+    }
+)
+_KST = ZoneInfo("Asia/Seoul")
 
 
 class ResearchPackageIntegrityError(ValueError):
@@ -58,7 +75,7 @@ def require_trusted_artifact_root(root: Path) -> Path:
         raise ResearchPackageIntegrityError("artifact_root must be a directory")
     lexical = Path(os.path.abspath(root))
     resolved = root.resolve()
-    if root.exists() and lexical != resolved:
+    if lexical != resolved:
         raise ResearchPackageIntegrityError(
             "artifact_root cannot traverse a symlinked path component"
         )
@@ -127,17 +144,34 @@ def decision_view_matches_underwriting_tournament(
     view: DecisionViewSnapshot,
     underwriting: UnderwritingReadinessSnapshot,
 ) -> bool:
-    """Bind a Decision View to the exact parallel forecast identity in the tournament."""
+    """Bind a Decision View to a genuine, exact parallel forecast tournament identity."""
 
     tournament = underwriting.forecast_tournament
     snapshot_ids = tuple(tournament.forecast_snapshot_ids)
     forecast_ids = tuple(tournament.forecast_ids)
-    if len(snapshot_ids) != len(forecast_ids):
+    if len(snapshot_ids) != len(forecast_ids) or len(snapshot_ids) < 2:
+        return False
+    if len(set(snapshot_ids)) != len(snapshot_ids):
+        return False
+    if len(set(forecast_ids)) != len(forecast_ids):
+        return False
+    if not (2 <= tournament.distinct_forecaster_count <= len(snapshot_ids)):
+        return False
+    if not (1 <= tournament.dependency_cluster_count <= len(snapshot_ids)):
+        return False
+    if tournament.primary_error_metric is None:
+        return False
+    if tournament.information_cutoff is None:
+        return False
+    if tournament.information_cutoff > view.captured_at:
+        return False
+    if view.information_cutoff > view.captured_at:
         return False
     selected_pair = (view.selected_forecast_snapshot_id, view.selected_forecast_id)
     tournament_pairs = tuple(zip(snapshot_ids, forecast_ids, strict=True))
     return bool(
         tournament.comparable
+        and not tournament.blockers
         and tournament.security_id == view.security_id
         and tournament.target_variable == view.target_variable
         and tournament.target_date == view.target_date
@@ -166,6 +200,8 @@ def package_integrity_blocker_codes(
         blockers.append("thesis_payoff_capture_order_mismatch")
     if underwriting is not None and underwriting.captured_at < thesis.captured_at:
         blockers.append("thesis_underwriting_capture_order_mismatch")
+    if underwriting is not None and not _underwriting_ready_contract_is_valid(underwriting):
+        blockers.append("underwriting_ready_evidence_contract_mismatch")
     if (
         underwriting is not None
         and payoff is not None
@@ -185,7 +221,7 @@ def validate_publication_layout(
     run: ResearchRoundRunSnapshot,
     ledger: ResearchRunLedgerSnapshot,
 ) -> None:
-    """Reject symlink/path escapes for every repository touched by assembler publication."""
+    """Reject symlink/path escapes and destructive deterministic-file collisions."""
 
     resolved_root = require_trusted_artifact_root(root)
     repositories: dict[str, Path] = {}
@@ -249,6 +285,10 @@ def validate_publication_layout(
     )
     for path, repository, label in final_paths:
         _require_safe_file_slot(path, repository, label)
+        if path.exists():
+            raise ResearchPackageIntegrityError(
+                f"{label} already exists; refusing destructive publication collision"
+            )
 
 
 def validate_existing_opportunity_artifacts(
@@ -309,12 +349,40 @@ def validate_persisted_opportunity_set(
     )
 
 
+def _underwriting_ready_contract_is_valid(
+    underwriting: UnderwritingReadinessSnapshot,
+) -> bool:
+    if underwriting.readiness not in _READY_UNDERWRITING_STATES:
+        return True
+    active = load_decision_system_v21_guardrails()
+    if underwriting.lane is UnderwritingLane.FAST:
+        if underwriting.readiness is not UnderwritingReadiness.FAST_LANE_READY_FOR_HUMAN_REVIEW:
+            return False
+        required = tuple(active.fast_lane_required_elements)
+    elif underwriting.lane is UnderwritingLane.DEEP:
+        if underwriting.readiness not in {
+            UnderwritingReadiness.DEEP_LANE_READY_FOR_HUMAN_REVIEW,
+            UnderwritingReadiness.DEEP_LANE_READY_WITH_EPISTEMIC_FLAGS,
+        }:
+            return False
+        required = tuple(active.deep_lane_required_elements) + SUPPLEMENTAL_DEEP_ELEMENTS
+    else:
+        return False
+    return bool(
+        tuple(underwriting.required_elements_satisfied) == required
+        and not underwriting.required_elements_missing
+        and not underwriting.blockers
+    )
+
+
 def _gap_observations_match_view(
     view: DecisionViewSnapshot,
     gap: DecisionExpectationGapSnapshot,
 ) -> bool:
     for consensus_observation in gap.consensus_gaps:
         if consensus_observation.observed_at > gap.captured_at:
+            return False
+        if consensus_observation.observed_at.astimezone(_KST).date() > gap.evaluation_date:
             return False
         if consensus_observation.unit != view.unit:
             return False
