@@ -598,7 +598,6 @@ def _optional_text(payload: dict[str, Any], field: str) -> str | None:
         raise ObservatoryDataError(f"{field} must be null or non-empty text")
     return value
 
-
 def _required_int(payload: dict[str, Any], field: str) -> int:
     value = payload.get(field)
     if not isinstance(value, int) or isinstance(value, bool):
@@ -612,7 +611,7 @@ def _optional_number(payload: dict[str, Any], field: str) -> float | None:
         return None
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ObservatoryDataError(f"{field} must be numeric or null")
-    return float(value)
+    return cast(float, value)
 
 
 def _require_bool(payload: dict[str, Any], field: str, *, expected: bool) -> None:
