@@ -17,6 +17,7 @@ from alpha_cycle.intelligence.decision_guardrails_v2_1 import (
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
 from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
     AnalysisRequestSnapshot,
+    ResearchRoundRunSnapshot,
     ResearchRunLedgerSnapshot,
     build_research_run_ledger,
     persist_analysis_request,
@@ -87,7 +88,7 @@ def record_analysis_request(
     existing = load_latest_observatory_state(artifact_root)
     if existing is None:
         requests: tuple[AnalysisRequestSnapshot, ...] = ()
-        runs = ()
+        runs: tuple[ResearchRoundRunSnapshot, ...] = ()
     else:
         requests = existing.ledger.requests
         runs = existing.ledger.runs
@@ -101,7 +102,11 @@ def record_analysis_request(
         built_at=recorded_at,
     )
     request_path = persist_analysis_request(request, output_root=artifact_root)
-    ledger_path = persist_research_run_ledger(ledger, output_root=artifact_root)
+    try:
+        ledger_path = persist_research_run_ledger(ledger, output_root=artifact_root)
+    except BaseException:
+        request_path.unlink(missing_ok=True)
+        raise
     return ResearchRequestReceipt(
         request=request,
         ledger=ledger,
