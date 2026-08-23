@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import date, datetime
@@ -66,6 +67,12 @@ def load_investment_thesis(path: str | Path) -> InvestmentThesisSnapshot:
         raise InvestmentThesisRepositoryError(
             "investment thesis filename does not match declared snapshot_id"
         )
+    payload_without_id = dict(payload)
+    del payload_without_id["snapshot_id"]
+    if _sha(payload_without_id) != declared:
+        raise InvestmentThesisRepositoryError(
+            "investment thesis snapshot_id does not match persisted payload"
+        )
     value = _parse_thesis(payload)
     if value.snapshot_id != declared:
         raise InvestmentThesisRepositoryError(
@@ -89,9 +96,11 @@ def find_latest_investment_thesis(
     if not directory.exists():
         return None
 
+    snapshots_by_id: dict[str, InvestmentThesisSnapshot] = {}
     candidates: list[InvestmentThesisSnapshot] = []
     for path in sorted(directory.glob("*.json")):
         value = load_investment_thesis(path)
+        snapshots_by_id[value.snapshot_id] = value
         if (
             value.security_id == security_id
             and value.horizon_trading_days == horizon_trading_days
@@ -100,10 +109,56 @@ def find_latest_investment_thesis(
             candidates.append(value)
     if not candidates:
         return None
+    for candidate in candidates:
+        _validate_lineage(candidate, snapshots_by_id)
     return max(
         candidates,
         key=lambda item: (item.captured_at, item.snapshot_version, item.snapshot_id),
     )
+
+
+def _validate_lineage(
+    snapshot: InvestmentThesisSnapshot,
+    snapshots_by_id: dict[str, InvestmentThesisSnapshot],
+) -> None:
+    current = snapshot
+    seen: set[str] = set()
+    while current.snapshot_version > 1:
+        if current.snapshot_id in seen:
+            raise InvestmentThesisRepositoryError("investment thesis lineage contains a cycle")
+        seen.add(current.snapshot_id)
+        parent_id = current.parent_snapshot_id
+        if parent_id is None:
+            raise InvestmentThesisRepositoryError(
+                "investment thesis lineage is missing a required parent_snapshot_id"
+            )
+        parent = snapshots_by_id.get(parent_id)
+        if parent is None:
+            raise InvestmentThesisRepositoryError(
+                "investment thesis parent artifact is missing from the repository"
+            )
+        if (
+            parent.thesis_id != current.thesis_id
+            or parent.security_id != current.security_id
+            or parent.horizon_trading_days != current.horizon_trading_days
+        ):
+            raise InvestmentThesisRepositoryError(
+                "investment thesis parent artifact belongs to a different thesis identity"
+            )
+        if parent.snapshot_version != current.snapshot_version - 1:
+            raise InvestmentThesisRepositoryError(
+                "investment thesis parent version does not immediately precede child version"
+            )
+        if parent.captured_at > current.captured_at:
+            raise InvestmentThesisRepositoryError(
+                "investment thesis parent cannot be captured after its child"
+            )
+        current = parent
+
+    if current.snapshot_version != 1 or current.parent_snapshot_id is not None:
+        raise InvestmentThesisRepositoryError(
+            "investment thesis lineage must terminate at a parentless version-1 snapshot"
+        )
 
 
 def _parse_thesis(payload: dict[str, Any]) -> InvestmentThesisSnapshot:
@@ -271,3 +326,14 @@ def _enum[EnumT: StrEnum](
         return enum_type(raw)
     except ValueError as exc:
         raise InvestmentThesisRepositoryError(f"invalid {field}: {raw}") from exc
+
+
+def _sha(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
