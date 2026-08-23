@@ -38,6 +38,7 @@ RESEARCH_OBSERVATORY_SCHEMA_VERSION = 1
 _LEDGER_DIRECTORY = "research_run_ledger_v2_1"
 _PEEK_LINE_LIMIT = 32
 _THESIS_PREFLIGHT_BLOCKED_FLAG = "typed_thesis_preflight_blocked"
+_PACKAGE_ASSEMBLER_BLOCKED_FLAG = "typed_research_package_assembler_blocked"
 
 
 class ObservatoryDataError(ValueError):
@@ -250,6 +251,7 @@ def build_research_inbox(
     latest_runs_by_request: dict[str, ResearchRoundRunSnapshot] = {}
     latest_runs_by_security: dict[str, ResearchRoundRunSnapshot] = {}
     latest_orchestrated_by_request: dict[str, ResearchRoundRunSnapshot] = {}
+    latest_package_blocked_by_request: dict[str, ResearchRoundRunSnapshot] = {}
     request_by_snapshot = {item.snapshot_id: item for item in ledger.requests}
     active_preflights = current_preflights or {}
 
@@ -280,6 +282,18 @@ def build_research_inbox(
             current_orchestrated = latest_orchestrated_by_request.get(run.request_snapshot_id)
             if current_orchestrated is None or _run_key(run) > _run_key(current_orchestrated):
                 latest_orchestrated_by_request[run.request_snapshot_id] = run
+        if (
+            run.kind is ResearchRunKind.PRE_ORCHESTRATION_BLOCKED
+            and _PACKAGE_ASSEMBLER_BLOCKED_FLAG in run.flags
+        ):
+            current_package_blocked = latest_package_blocked_by_request.get(
+                run.request_snapshot_id
+            )
+            if (
+                current_package_blocked is None
+                or _run_key(run) > _run_key(current_package_blocked)
+            ):
+                latest_package_blocked_by_request[run.request_snapshot_id] = run
         for security_id in run.security_ids:
             current_security_run = latest_runs_by_security.get(security_id)
             if current_security_run is None or _run_key(run) > _run_key(current_security_run):
@@ -291,6 +305,11 @@ def build_research_inbox(
         orchestrated = latest_orchestrated_by_request.get(request.snapshot_id)
         if orchestrated is not None:
             rows.append(_inbox_row_from_run(security_id, request, orchestrated))
+            continue
+
+        package_blocked = latest_package_blocked_by_request.get(request.snapshot_id)
+        if package_blocked is not None:
+            rows.append(_inbox_row_from_run(security_id, request, package_blocked))
             continue
 
         matching_run = latest_runs_by_request.get(request.snapshot_id)
