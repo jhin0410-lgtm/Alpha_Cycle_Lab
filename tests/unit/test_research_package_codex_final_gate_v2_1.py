@@ -178,8 +178,12 @@ def test_deep_flags_require_flagged_readiness_state() -> None:
 def test_persisted_tournament_must_prove_distinct_forecaster_descriptors(
     tmp_path: Path,
 ) -> None:
-    first = _registration("forecast-a", model_family="same-model", cluster="a", value=20.0)
-    second = _registration("forecast-b", model_family="same-model", cluster="b", value=19.0)
+    first = _registration(
+        "forecast-a", model_family="same-model", cluster="a", value=20.0
+    )
+    second = _registration(
+        "forecast-b", model_family="same-model", cluster="b", value=19.0
+    )
     persist_forecast_registration(first, output_root=tmp_path)
     persist_forecast_registration(second, output_root=tmp_path)
     view = _view(first, second)
@@ -198,8 +202,12 @@ def test_persisted_tournament_must_prove_distinct_forecaster_descriptors(
 
 
 def test_persisted_tournament_rejects_impossible_chronology() -> None:
-    first = _registration("forecast-a", model_family="model-a", cluster="a", value=20.0)
-    second = _registration("forecast-b", model_family="model-b", cluster="b", value=19.0)
+    first = _registration(
+        "forecast-a", model_family="model-a", cluster="a", value=20.0
+    )
+    second = _registration(
+        "forecast-b", model_family="model-b", cluster="b", value=19.0
+    )
     view = _view(first, second)
     tournament = _tournament(first, second)
     future_cutoff = view.forecast_origin + timedelta(minutes=1)
@@ -209,13 +217,18 @@ def test_persisted_tournament_rejects_impossible_chronology() -> None:
     assert decision_view_matches_underwriting_tournament(view, underwriting) is False
 
 
-def test_source_ledger_symlink_is_rejected_before_observatory_read(tmp_path: Path) -> None:
+def test_source_ledger_symlink_is_rejected_before_observatory_read(
+    tmp_path: Path,
+) -> None:
     ledger_root = tmp_path / "research_run_ledger_v2_1"
     ledger_root.mkdir()
     outside = tmp_path / "outside-ledger.json"
     outside.write_text("{}", encoding="utf-8")
     (ledger_root / f"{A}.json").symlink_to(outside)
-    with pytest.raises(ResearchPackageIntegrityError, match="ledger artifact cannot be a symlink"):
+    with pytest.raises(
+        ResearchPackageIntegrityError,
+        match="ledger artifact cannot be a symlink",
+    ):
         require_trusted_artifact_root(tmp_path)
 
 
@@ -226,8 +239,7 @@ def test_research_round_eexist_never_deletes_preexisting_artifact(tmp_path: Path
     )
     path = tmp_path / "research_round_v2_1" / f"{A}.json"
     path.parent.mkdir(parents=True)
-    original = b"pre-existing-round
-"
+    original = b"pre-existing-round\n"
     path.write_bytes(original)
     with pytest.raises(FileExistsError):
         persist_research_round(snapshot, output_root=tmp_path)
