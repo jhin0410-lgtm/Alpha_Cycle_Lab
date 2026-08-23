@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import os
 from datetime import date, datetime
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from alpha_cycle.intelligence.decision_thesis_v2 import (
     CatalystClock,
@@ -21,6 +22,7 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
 )
 
 _THESIS_DIRECTORY = "investment_thesis_v2_1"
+_EnumT = TypeVar("_EnumT", bound=StrEnum)
 
 
 class InvestmentThesisRepositoryError(ValueError):
@@ -99,7 +101,10 @@ def find_latest_investment_thesis(
             candidates.append(value)
     if not candidates:
         return None
-    return max(candidates, key=lambda item: (item.captured_at, item.snapshot_version, item.snapshot_id))
+    return max(
+        candidates,
+        key=lambda item: (item.captured_at, item.snapshot_version, item.snapshot_id),
+    )
 
 
 def _parse_thesis(payload: dict[str, Any]) -> InvestmentThesisSnapshot:
@@ -154,16 +159,22 @@ def _parse_catalyst(payload: dict[str, Any]) -> CatalystClock:
     earliest_raw = payload.get("earliest_date")
     latest_raw = payload.get("latest_date")
     condition_raw = payload.get("condition")
+    earliest_date = (
+        None
+        if earliest_raw is None
+        else _date(_text(earliest_raw, "earliest_date"), "earliest_date")
+    )
+    latest_date = (
+        None
+        if latest_raw is None
+        else _date(_text(latest_raw, "latest_date"), "latest_date")
+    )
     return CatalystClock(
         catalyst_id=_required_text(payload, "catalyst_id"),
         statement=_required_text(payload, "statement"),
         evidence_refs=_text_tuple(payload, "evidence_refs"),
-        earliest_date=(
-            None if earliest_raw is None else _date(_text(earliest_raw, "earliest_date"), "earliest_date")
-        ),
-        latest_date=(
-            None if latest_raw is None else _date(_text(latest_raw, "latest_date"), "latest_date")
-        ),
+        earliest_date=earliest_date,
+        latest_date=latest_date,
         condition=None if condition_raw is None else _text(condition_raw, "condition"),
     )
 
@@ -251,7 +262,11 @@ def _date(value: str, field: str) -> date:
         raise InvestmentThesisRepositoryError(f"{field} must be an ISO date") from exc
 
 
-def _enum(enum_type: type[Any], payload: dict[str, Any], field: str) -> Any:
+def _enum(
+    enum_type: type[_EnumT],
+    payload: dict[str, Any],
+    field: str,
+) -> _EnumT:
     raw = _required_text(payload, field)
     try:
         return enum_type(raw)
