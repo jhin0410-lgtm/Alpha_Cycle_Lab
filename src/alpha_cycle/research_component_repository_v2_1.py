@@ -45,8 +45,11 @@ class ResearchComponentRepositoryError(ValueError):
 
 
 class _Component(Protocol):
-    captured_at: datetime
-    security_id: str
+    @property
+    def captured_at(self) -> datetime: ...
+
+    @property
+    def security_id(self) -> str: ...
 
     @property
     def snapshot_id(self) -> str: ...
