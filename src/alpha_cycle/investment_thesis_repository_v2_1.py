@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import tempfile
+from collections import defaultdict
 from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -40,22 +42,28 @@ def persist_investment_thesis(
     payload = dict(snapshot.payload_without_id())
     payload["snapshot_id"] = snapshot.snapshot_id
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    fd: int | None = None
-    created = False
+
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{snapshot.snapshot_id}.",
+        suffix=".tmp",
+        dir=root,
+    )
+    temp_path = Path(temp_name)
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        created = True
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            fd = None
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-    except BaseException:
-        if fd is not None:
-            os.close(fd)
-        if created:
-            path.unlink(missing_ok=True)
-        raise
+        # Hard-link publication is atomic and preserves O_EXCL-like no-overwrite semantics:
+        # readers scanning *.json never see an empty or partially written thesis artifact.
+        os.link(temp_path, path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            # A completed final hard link is authoritative; a hidden non-JSON temp residue is
+            # non-discoverable and must not turn successful immutable publication into failure.
+            pass
     return path
 
 
@@ -109,12 +117,49 @@ def find_latest_investment_thesis(
             candidates.append(value)
     if not candidates:
         return None
+
+    families: dict[tuple[str, str, int], list[InvestmentThesisSnapshot]] = defaultdict(list)
     for candidate in candidates:
-        _validate_lineage(candidate, snapshots_by_id)
+        families[_lineage_identity(candidate)].append(candidate)
+    for family in families.values():
+        _validate_unforked_family(family)
+        for candidate in family:
+            _validate_lineage(candidate, snapshots_by_id)
+
     return max(
         candidates,
         key=lambda item: (item.captured_at, item.snapshot_version, item.snapshot_id),
     )
+
+
+def _lineage_identity(snapshot: InvestmentThesisSnapshot) -> tuple[str, str, int]:
+    return (
+        snapshot.thesis_id,
+        snapshot.security_id,
+        snapshot.horizon_trading_days,
+    )
+
+
+def _validate_unforked_family(family: list[InvestmentThesisSnapshot]) -> None:
+    versions: dict[int, str] = {}
+    successors: dict[str, str] = {}
+    for snapshot in family:
+        prior_version_snapshot = versions.get(snapshot.snapshot_version)
+        if prior_version_snapshot is not None and prior_version_snapshot != snapshot.snapshot_id:
+            raise InvestmentThesisRepositoryError(
+                "investment thesis lineage is forked at the same snapshot version"
+            )
+        versions[snapshot.snapshot_version] = snapshot.snapshot_id
+
+        parent_id = snapshot.parent_snapshot_id
+        if parent_id is None:
+            continue
+        prior_successor = successors.get(parent_id)
+        if prior_successor is not None and prior_successor != snapshot.snapshot_id:
+            raise InvestmentThesisRepositoryError(
+                "investment thesis lineage has multiple successors for one parent"
+            )
+        successors[parent_id] = snapshot.snapshot_id
 
 
 def _validate_lineage(
@@ -137,11 +182,7 @@ def _validate_lineage(
             raise InvestmentThesisRepositoryError(
                 "investment thesis parent artifact is missing from the repository"
             )
-        if (
-            parent.thesis_id != current.thesis_id
-            or parent.security_id != current.security_id
-            or parent.horizon_trading_days != current.horizon_trading_days
-        ):
+        if _lineage_identity(parent) != _lineage_identity(current):
             raise InvestmentThesisRepositoryError(
                 "investment thesis parent artifact belongs to a different thesis identity"
             )
