@@ -30,6 +30,7 @@ from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 
 RESEARCH_OBSERVATORY_SCHEMA_VERSION = 1
 _LEDGER_DIRECTORY = "research_run_ledger_v2_1"
+_PEEK_LINE_LIMIT = 32
 
 
 class ObservatoryDataError(ValueError):
@@ -151,7 +152,7 @@ class ResearchObservatoryState:
 
 
 def load_latest_observatory_state(artifact_root: str | Path) -> ResearchObservatoryState | None:
-    """Load the newest valid ledger by embedded built_at, not filesystem modification time."""
+    """Load only the newest ledger body after cheaply peeking each embedded built_at."""
 
     directory = Path(artifact_root) / _LEDGER_DIRECTORY
     if not directory.exists():
@@ -159,11 +160,15 @@ def load_latest_observatory_state(artifact_root: str | Path) -> ResearchObservat
     paths = tuple(sorted(directory.glob("*.json")))
     if not paths:
         return None
-    ledgers = tuple((path, load_research_run_ledger(path)) for path in paths)
-    source_path, ledger = max(
-        ledgers,
-        key=lambda item: (item[1].built_at, item[1].snapshot_id),
+
+    candidates = tuple((path, _peek_built_at(path)) for path in paths)
+    source_path, peeked_built_at = max(
+        candidates,
+        key=lambda item: (item[1], item[0].stem),
     )
+    ledger = load_research_run_ledger(source_path)
+    if ledger.built_at != peeked_built_at:
+        raise ObservatoryDataError("peeked built_at changed during ledger validation")
     return build_observatory_state(source_path, ledger)
 
 
@@ -223,6 +228,7 @@ def build_research_inbox(
 ) -> tuple[ResearchInboxRow, ...]:
     latest_requests: dict[str, AnalysisRequestSnapshot] = {}
     latest_runs_by_request: dict[str, ResearchRoundRunSnapshot] = {}
+    latest_runs_by_security: dict[str, ResearchRoundRunSnapshot] = {}
 
     for request in ledger.requests:
         for security_id in request.security_ids:
@@ -234,17 +240,24 @@ def build_research_inbox(
         current_run = latest_runs_by_request.get(run.request_snapshot_id)
         if current_run is None or _run_key(run) > _run_key(current_run):
             latest_runs_by_request[run.request_snapshot_id] = run
+        for security_id in run.security_ids:
+            current_security_run = latest_runs_by_security.get(security_id)
+            if current_security_run is None or _run_key(run) > _run_key(current_security_run):
+                latest_runs_by_security[security_id] = run
 
     rows: list[ResearchInboxRow] = []
     for security_id in sorted(latest_requests):
         request = latest_requests[security_id]
         matching_run = latest_runs_by_request.get(request.snapshot_id)
         if matching_run is None:
+            prior_run = latest_runs_by_security.get(security_id)
             rows.append(
                 ResearchInboxRow(
                     security_id=security_id,
                     latest_request_at=request.requested_at,
-                    latest_run_completed_at=None,
+                    latest_run_completed_at=(
+                        prior_run.completed_at if prior_run is not None else None
+                    ),
                     requested_lane=request.requested_lane,
                     mode=request.mode,
                     state="request_pending",
@@ -451,6 +464,33 @@ def _run_key(item: ResearchRoundRunSnapshot) -> tuple[datetime, str, str]:
     return (item.completed_at, item.run_id, item.snapshot_id)
 
 
+def _peek_built_at(path: Path) -> datetime:
+    """Read only the tiny sorted JSON header needed to select the newest ledger."""
+
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if line_number > _PEEK_LINE_LIMIT:
+                    break
+                stripped = line.strip()
+                if not stripped.startswith('"built_at"'):
+                    continue
+                _, raw_value = stripped.split(":", maxsplit=1)
+                raw_value = raw_value.rstrip(",")
+                try:
+                    value = json.loads(raw_value)
+                except json.JSONDecodeError as exc:
+                    raise ObservatoryDataError(
+                        f"ledger built_at header is invalid: {path}"
+                    ) from exc
+                if not isinstance(value, str):
+                    raise ObservatoryDataError(f"ledger built_at must be text: {path}")
+                return _datetime(value, "built_at")
+    except OSError as exc:
+        raise ObservatoryDataError(f"cannot read observatory artifact header: {path}") from exc
+    raise ObservatoryDataError(f"ledger built_at header not found near file start: {path}")
+
+
 def _load_object(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -501,7 +541,7 @@ def _optional_number(payload: dict[str, Any], field: str) -> float | None:
         return None
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ObservatoryDataError(f"{field} must be numeric or null")
-    return float(value)
+    return cast(float, value)
 
 
 def _require_bool(payload: dict[str, Any], field: str, *, expected: bool) -> None:
