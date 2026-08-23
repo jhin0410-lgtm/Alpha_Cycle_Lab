@@ -24,7 +24,7 @@ The thesis is resolved through the content-addressed repository introduced in #3
 
 ## Trust boundary
 
-The component repository does not trust a mutable `latest_*` pointer as evidence. It scans immutable snapshot directories and validates:
+The package assembler treats persisted state as untrusted input until it is revalidated. The component repository scans immutable snapshot directories and validates:
 
 1. the complete persisted payload hash against the declared `snapshot_id`;
 2. typed reconstruction against the same content identity;
@@ -34,24 +34,20 @@ The component repository does not trust a mutable `latest_*` pointer as evidence
 6. duplicate snapshot identities;
 7. the mutable latest pointer, when present, against an actually validated immutable snapshot;
 8. `captured_at <= research_cutoff_at` before a snapshot becomes PIT-selectable;
-9. resolved-root containment and rejection of symlinked component repositories, snapshot directories, files and pointers;
-10. reader-CWD-independent normalization of persisted relative pointer paths.
+9. repository, snapshot, payload, manifest and pointer containment with symlink rejection;
+10. reader-CWD-independent relative-pointer normalization.
 
-The assembler additionally validates the investment-thesis repository root and its JSON entries before the thesis index is consumed. Symlinked or out-of-root thesis evidence fails closed.
+The thesis and preflight repositories are also containment-checked before use. A missing `artifact_root` beneath a symlinked ancestor is rejected before any lock or publication can create directories through the alias.
 
 Unknown payload fields therefore change the raw content address rather than being silently ignored. Unknown manifest or pointer fields fail closed under the schema-v1 contract.
 
 ## Request, PIT and cross-component binding
 
-Assembly requires the current #301 thesis-preflight state to be present, typed, bound to the exact request, and ready. The PIT-selected thesis identities must still match the identities recorded by that preflight.
+Assembly requires the current #301 thesis-preflight state to be present, typed, bound to the exact request, and ready. The mutable preflight selection must satisfy:
 
-The operational preflight selection must satisfy:
+`research_cutoff_at <= selected_at <= processed_at`.
 
-```text
-research_cutoff_at <= selected_at <= processed_at
-```
-
-Request security IDs are canonicalized at immutable intake, and legacy non-canonical IDs fail closed at assembly.
+The PIT-selected thesis identities must still match the identities recorded by that preflight.
 
 Per security, selection requires the request-compatible:
 
@@ -61,40 +57,28 @@ Per security, selection requires the request-compatible:
 - Decision View security/evaluation-date/guardrail;
 - Expectation Gap bound to the selected Decision View, security, evaluation date, guardrail and target variable/date/unit.
 
-The package also checks:
+Persisted builder outputs are additionally checked for canonical invariants that their dataclasses alone do not enforce:
 
-- terminal thesis states (`INVALIDATED`, `REPLACED`, `CLOSED`) cannot produce a package;
-- thesis-derived capture order, including thesis before payoff/underwriting and referenced payoff before underwriting;
-- Decision View capture before its derived Expectation Gap;
-- Decision View target and tournament identity against underwriting;
-- the exact parallel `(forecast_snapshot_id, forecast_id)` pair selected from the underwriting tournament;
-- consensus-gap observation unit, selected decision value, observation timing, and absolute/relative arithmetic;
-- price-implied gap decision-value conversion and arithmetic when price-implied observations exist;
-- explicit underwriting references to payoff, expectation state and price-implied requirement against selected package objects where those references are present.
+- terminal theses cannot enter a ready package;
+- thesis/payoff/underwriting and Decision View/Expectation Gap capture ordering is causal;
+- ready underwriting carries the complete active lane-specific required-element set;
+- a comparable forecast tournament contains at least two unique forecast identities with consistent distinct-forecaster/dependency counts;
+- the selected forecast `(snapshot_id, forecast_id)` is the exact paired identity in that tournament;
+- forecast `information_cutoff` cannot postdate the Decision View capture;
+- consensus observations cannot postdate the Korea-local evaluation date;
+- expectation-gap observation values, units and arithmetic remain bound to the selected Decision View.
 
 ## Fail-closed orchestration
 
-If a required component is absent or incompatible, the assembler records a schema-v1 `PRE_ORCHESTRATION_BLOCKED` run with structured package blockers.
+If a required component is absent or incompatible, the assembler records a schema-v1 `PRE_ORCHESTRATION_BLOCKED` run with structured package blockers. Repeating the exact blocker state is historically idempotent while a newer operational preflight state can still produce a fresh blocker run so the Observatory does not hide a current package failure.
 
-Repeated identical package blockers remain idempotent only while no newer thesis-preflight selection has occurred. A newer preflight followed by another failed package assembly republishes current blocked operational state. Observatory preserves outstanding `typed_research_package_assembler_blocked` state across later thesis-preflight transitions; only a later package/orchestrated state may supersede it. A thesis-ready pointer may supersede only a blocker flagged `typed_thesis_preflight_blocked`.
+The assembler calls `run_research_round(...)` only after every requested security has a complete typed package. The orchestrator remains authoritative for opportunity-candidate, opportunity-set and research-round construction. A package being complete does **not** imply an investable or even non-blocked research-round result.
 
-The assembler calls `run_research_round(...)` only after every requested security has a complete typed package. The orchestrator remains authoritative for research logic. Package completeness does **not** imply an investable or non-blocked research-round result.
+## Publication transaction
 
-## Transactional publication
+Generated opportunity candidates and the opportunity set are persisted and validated before round/run/ledger publication. Existing deterministic opportunity artifacts are fully checked against the generated payload, content address and canonical manifest before reuse.
 
-A completed orchestration is not published piecemeal as trusted state.
-
-Before publication the assembler validates every output repository and deterministic path for containment and rejects symlinked artifact roots, opportunity repositories, round/run/ledger repositories, snapshot directories, pointer paths, rollback paths and final artifact slots.
-
-Generated opportunity candidates and the opportunity set are persisted before the research round, run and ledger. If a deterministic opportunity directory already exists, its complete payload, content address and canonical manifest are validated before reuse. Newly persisted opportunity artifacts and pointers are revalidated before the round/run/ledger are committed.
-
-Publication order is:
-
-```text
-opportunity candidates -> opportunity set -> research round -> run -> ledger
-```
-
-The ledger is published last. A downstream failure rolls back newly created opportunity directories, restores prior pointers, and removes newly published round/run artifacts. Rollback refuses to traverse symlinked snapshot directories.
+All opportunity/round/run/ledger output repositories and pointer paths are checked for symlink and containment escapes before writes. Pre-existing deterministic round/run/ledger final paths are rejected before the legacy writers are invoked, preventing destructive collision cleanup. Publication is ledger-last; downstream failure rolls back only artifacts created by the current transaction.
 
 ## Safety boundary
 
@@ -120,8 +104,6 @@ The assembler consumes the existing writer layouts:
 <artifact-root>/decision_view/<timestamp>__<sha12>/...
 <artifact-root>/decision_expectation_gap/<timestamp>__<sha12>/...
 ```
-
-Downstream orchestration additionally persists canonical opportunity candidate/set artifacts before the round/run/ledger.
 
 `latest_*` JSON files are validated pointers only; they do not determine PIT selection.
 
