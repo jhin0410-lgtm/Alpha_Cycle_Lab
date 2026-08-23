@@ -12,34 +12,49 @@ import alpha_cycle.research_package_assembler_v2_1 as assembler
 NOW = datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
 
 
-def _fake_opportunity_persist(object_name: str):
-    def persist(snapshot: SimpleNamespace, *, output_root: str | Path) -> Path:
-        root = Path(output_root)
-        snapshot_id = str(snapshot.snapshot_id)
-        captured_at = snapshot.captured_at
-        directory = assembler._opportunity_snapshot_directory(
-            root,
-            object_name=object_name,
-            captured_at=captured_at,
-            snapshot_id=snapshot_id,
-        )
-        directory.mkdir(parents=True)
-        (directory / f"{object_name}.json").write_text("{}\n", encoding="utf-8")
-        pointer = root / object_name / f"latest_{object_name}.json"
-        pointer.write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "object_type": object_name,
-                    "snapshot_id": snapshot_id,
-                    "snapshot_path": str(directory),
-                }
-            ),
-            encoding="utf-8",
-        )
-        return pointer
-
-    return persist
+def _fake_owned_opportunity_persist(snapshot: SimpleNamespace, *, output_root: Path):
+    object_name = (
+        "opportunity_candidate"
+        if str(snapshot.snapshot_id).startswith("a")
+        else "opportunity_set"
+    )
+    root = Path(output_root) / object_name
+    root_created = not root.exists()
+    root.mkdir(parents=True, exist_ok=True)
+    snapshot_id = str(snapshot.snapshot_id)
+    directory = assembler._opportunity_snapshot_directory(
+        Path(output_root),
+        object_name=object_name,
+        captured_at=snapshot.captured_at,
+        snapshot_id=snapshot_id,
+    )
+    directory.mkdir()
+    (directory / f"{object_name}.json").write_text("{}\n", encoding="utf-8")
+    pointer = root / f"latest_{object_name}.json"
+    pointer_before = pointer.read_bytes() if pointer.exists() else None
+    pointer_after = json.dumps(
+        {
+            "schema_version": 1,
+            "object_type": object_name,
+            "snapshot_id": snapshot_id,
+            "snapshot_path": str(directory),
+        },
+        sort_keys=True,
+    ).encode("utf-8")
+    pointer.write_bytes(pointer_after)
+    stat = pointer.stat()
+    return assembler._OwnedOpportunityPublication(
+        root=root,
+        directory=directory,
+        directory_created=True,
+        root_created=root_created,
+        pointer=pointer,
+        pointer_before=pointer_before,
+        pointer_after=pointer_after,
+        pointer_inode=stat.st_ino,
+        pointer_mtime_ns=stat.st_mtime_ns,
+        pointer_size=stat.st_size,
+    )
 
 
 def _ignore_validation(*args, **kwargs) -> None:
@@ -78,13 +93,8 @@ def test_ledger_publish_failure_rolls_back_all_new_downstream_artifacts(
     )
     monkeypatch.setattr(
         assembler,
-        "persist_opportunity_candidate",
-        _fake_opportunity_persist("opportunity_candidate"),
-    )
-    monkeypatch.setattr(
-        assembler,
-        "persist_opportunity_set",
-        _fake_opportunity_persist("opportunity_set"),
+        "_persist_owned_opportunity_snapshot",
+        _fake_owned_opportunity_persist,
     )
 
     def persist_round(snapshot: object, *, output_root: str | Path) -> Path:
