@@ -319,7 +319,7 @@ def _assemble_security_package(
     request: AnalysisRequestSnapshot,
     component_index: ResearchComponentRepositoryIndex,
     guardrail_evidence_id: str,
-    artifact_root: Path,
+    artifact_root: Path | None = None,
     blockers: list[ResearchRoundBlocker],
 ) -> ResearchSecurityPackage | None:
     underwriting = component_index.latest_underwriting(
