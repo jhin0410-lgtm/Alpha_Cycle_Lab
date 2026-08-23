@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
-from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 import alpha_cycle.research_package_assembler_v2_1 as assembler
+from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 
 NOW = datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
 
