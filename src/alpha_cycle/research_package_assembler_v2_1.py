@@ -1,0 +1,427 @@
+"""Fail-closed persisted research-package assembly for Decision System v2.1.
+
+This module does not create research evidence.  It reconstructs already-persisted typed objects,
+checks their point-in-time/request bindings, and delegates the actual research-round logic to the
+existing `run_research_round` orchestrator only after a complete package exists.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from alpha_cycle.intelligence.decision_guardrails_v2_1 import load_decision_system_v21_guardrails
+from alpha_cycle.intelligence.decision_thesis_v2 import InvestmentThesisSnapshot
+from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import (
+    ResearchRoundArtifacts,
+    ResearchRoundBlocker,
+    ResearchSecurityPackage,
+    persist_research_round,
+    run_research_round,
+)
+from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
+    AnalysisRequestSnapshot,
+    ResearchRoundRunSnapshot,
+    ResearchRunKind,
+    ResearchRunLedgerSnapshot,
+    bind_orchestrated_run,
+    build_pre_orchestration_blocked_run,
+    build_research_run_ledger,
+    persist_research_run,
+    persist_research_run_ledger,
+)
+from alpha_cycle.investment_thesis_repository_v2_1 import (
+    InvestmentThesisRepositoryError,
+    build_investment_thesis_repository_index,
+)
+from alpha_cycle.research_component_repository_v2_1 import (
+    ResearchComponentRepositoryError,
+    build_research_component_repository_index,
+)
+from alpha_cycle.research_ledger_write_lock_v2_1 import exclusive_research_ledger_write_lock
+from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
+from alpha_cycle.research_preflight_state_v2_1 import (
+    ResearchPreflightStateError,
+    ResearchThesisPreflightStateSnapshot,
+    load_current_research_thesis_preflight_states,
+    validate_preflight_state_request_binding,
+)
+
+
+@dataclass(frozen=True)
+class ResearchPackageAssemblyReceipt:
+    request: AnalysisRequestSnapshot
+    thesis_preflight: ResearchThesisPreflightStateSnapshot
+    packages: tuple[ResearchSecurityPackage, ...]
+    blockers: tuple[ResearchRoundBlocker, ...]
+    orchestrated: ResearchRoundArtifacts | None
+    run: ResearchRoundRunSnapshot | None
+    ledger: ResearchRunLedgerSnapshot
+    research_round_path: Path | None
+    run_path: Path | None
+    ledger_path: Path | None
+    changed_history: bool
+
+    @property
+    def full_package_ready(self) -> bool:
+        return not self.blockers and len(self.packages) == len(self.request.security_ids)
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "request_id": self.request.request_id,
+            "request_snapshot_id": self.request.snapshot_id,
+            "research_cutoff_at": self.thesis_preflight.research_cutoff_at.isoformat(),
+            "package_security_ids": [item.security_id for item in self.packages],
+            "blockers": [item.payload() for item in self.blockers],
+            "full_package_ready": self.full_package_ready,
+            "orchestrator_executed": self.orchestrated is not None,
+            "research_round_snapshot_id": (
+                self.orchestrated.snapshot.snapshot_id if self.orchestrated is not None else None
+            ),
+            "run_snapshot_id": self.run.snapshot_id if self.run is not None else None,
+            "ledger_snapshot_id": self.ledger.snapshot_id,
+            "research_round_path": str(self.research_round_path) if self.research_round_path else None,
+            "run_path": str(self.run_path) if self.run_path else None,
+            "ledger_path": str(self.ledger_path) if self.ledger_path else None,
+            "changed_history": self.changed_history,
+            "investment_conclusion_created": False,
+            "target_price_enabled": False,
+            "optimal_position_size_enabled": False,
+            "portfolio_recommendation_enabled": False,
+            "automatic_execution_enabled": False,
+        }
+
+
+def assemble_and_run_research_package(
+    *,
+    request_id: str,
+    round_id: str,
+    run_id: str,
+    processed_at: datetime,
+    artifact_root: str | Path,
+) -> ResearchPackageAssemblyReceipt:
+    """Assemble one complete persisted package per request security and run only if complete."""
+
+    _require_aware(processed_at, "processed_at")
+    root = Path(artifact_root)
+    with exclusive_research_ledger_write_lock(root):
+        observatory = load_latest_observatory_state(root)
+        if observatory is None:
+            raise ValueError("no Research Run Ledger exists; record an analysis request first")
+        ledger = observatory.ledger
+        request = _find_request(ledger, request_id)
+        if processed_at <= ledger.built_at:
+            raise ValueError("processed_at must be later than the latest ledger built_at")
+        if processed_at < request.requested_at:
+            raise ValueError("processed_at cannot precede the analysis request")
+        if any(item.run_id == run_id for item in ledger.runs):
+            raise ValueError(f"run_id already exists in the latest ledger: {run_id}")
+        if any(
+            item.request_snapshot_id == request.snapshot_id
+            and item.kind is ResearchRunKind.ORCHESTRATED
+            for item in ledger.runs
+        ):
+            raise ValueError("analysis request already has an orchestrated run")
+
+        preflight = _current_ready_preflight(root, request)
+        cutoff = preflight.research_cutoff_at
+        if cutoff > processed_at:
+            raise ValueError("current thesis preflight cutoff cannot be after processing time")
+        active = load_decision_system_v21_guardrails()
+        if request.guardrail_evidence_id != active.evidence_id:
+            raise ValueError("analysis request guardrail evidence is no longer active")
+
+        try:
+            thesis_index = build_investment_thesis_repository_index(root, as_of=cutoff)
+            component_index = build_research_component_repository_index(root, as_of=cutoff)
+        except (InvestmentThesisRepositoryError, ResearchComponentRepositoryError) as exc:
+            raise ValueError("persisted research-package repository failed validation") from exc
+
+        packages: list[ResearchSecurityPackage] = []
+        blockers: list[ResearchRoundBlocker] = []
+        resolved_thesis_ids: list[str] = []
+        for security_id in request.security_ids:
+            thesis = thesis_index.find_latest(
+                security_id=security_id,
+                horizon_trading_days=request.horizon_trading_days,
+            )
+            if thesis is None:
+                _block(blockers, "thesis", "investment_thesis_snapshot_missing", security_id)
+                continue
+            resolved_thesis_ids.append(thesis.snapshot_id)
+            package = _assemble_security_package(
+                security_id,
+                thesis=thesis,
+                request=request,
+                component_index=component_index,
+                guardrail_evidence_id=active.evidence_id,
+                blockers=blockers,
+            )
+            if package is not None:
+                packages.append(package)
+
+        if tuple(resolved_thesis_ids) != preflight.thesis_snapshot_ids:
+            raise ValueError(
+                "current thesis preflight no longer matches the PIT-selected thesis snapshots"
+            )
+        if len(request.security_ids) < 2:
+            _block(
+                blockers,
+                "research_package",
+                "cross_sectional_package_requires_two_securities",
+                None,
+            )
+
+        blockers_tuple = tuple(blockers)
+        packages_tuple = tuple(packages)
+        if blockers_tuple:
+            run = _record_package_blockers(
+                request=request,
+                run_id=run_id,
+                processed_at=processed_at,
+                blockers=blockers_tuple,
+                ledger=ledger,
+                root=root,
+            )
+            next_ledger, run_path, ledger_path, changed = run
+            return ResearchPackageAssemblyReceipt(
+                request=request,
+                thesis_preflight=preflight,
+                packages=packages_tuple,
+                blockers=blockers_tuple,
+                orchestrated=None,
+                run=(next_ledger.runs[-1] if changed else _matching_package_blocked_run(ledger, request.snapshot_id, blockers_tuple)),
+                ledger=next_ledger,
+                research_round_path=None,
+                run_path=run_path,
+                ledger_path=ledger_path,
+                changed_history=changed,
+            )
+
+        if len(packages_tuple) != len(request.security_ids):
+            raise ValueError("package coverage mismatch without structured blockers")
+        artifacts = run_research_round(
+            packages_tuple,
+            round_id=round_id,
+            mode=request.mode,
+            captured_at=cutoff,
+            evaluation_date=request.evaluation_date,
+            horizon_trading_days=request.horizon_trading_days,
+            guardrails=active,
+        )
+        round_path = persist_research_round(artifacts.snapshot, output_root=root)
+        run = bind_orchestrated_run(
+            request,
+            artifacts.snapshot,
+            run_id=run_id,
+            started_at=processed_at,
+            completed_at=processed_at,
+        )
+        run_path = persist_research_run(run, output_root=root)
+        next_ledger = build_research_run_ledger(
+            ledger.requests,
+            (*ledger.runs, run),
+            built_at=processed_at,
+        )
+        try:
+            ledger_path = persist_research_run_ledger(next_ledger, output_root=root)
+        except BaseException:
+            run_path.unlink(missing_ok=True)
+            round_path.unlink(missing_ok=True)
+            raise
+        return ResearchPackageAssemblyReceipt(
+            request=request,
+            thesis_preflight=preflight,
+            packages=packages_tuple,
+            blockers=(),
+            orchestrated=artifacts,
+            run=run,
+            ledger=next_ledger,
+            research_round_path=round_path,
+            run_path=run_path,
+            ledger_path=ledger_path,
+            changed_history=True,
+        )
+
+
+def _assemble_security_package(
+    security_id: str,
+    *,
+    thesis: InvestmentThesisSnapshot,
+    request: AnalysisRequestSnapshot,
+    component_index,
+    guardrail_evidence_id: str,
+    blockers: list[ResearchRoundBlocker],
+) -> ResearchSecurityPackage | None:
+    underwriting = component_index.latest_underwriting(
+        security_id,
+        thesis_snapshot_id=thesis.snapshot_id,
+        evaluation_date=request.evaluation_date,
+        lane=request.requested_lane,
+        guardrail_evidence_id=guardrail_evidence_id,
+    )
+    if underwriting is None:
+        _block(blockers, "underwriter", "underwriting_snapshot_missing_or_incompatible", security_id)
+    payoff = component_index.latest_payoff(
+        security_id,
+        thesis_snapshot_id=thesis.snapshot_id,
+        horizon_trading_days=request.horizon_trading_days,
+        guardrail_evidence_id=guardrail_evidence_id,
+    )
+    if payoff is None:
+        _block(blockers, "payoff_surface", "payoff_surface_missing_or_incompatible", security_id)
+    view = component_index.latest_decision_view(
+        security_id,
+        evaluation_date=request.evaluation_date,
+        guardrail_evidence_id=guardrail_evidence_id,
+    )
+    if view is None:
+        _block(blockers, "decision_view", "decision_view_missing_or_incompatible", security_id)
+    gap = None
+    if view is not None:
+        gap = component_index.latest_expectation_gap(
+            security_id,
+            decision_view_snapshot_id=view.snapshot_id,
+            evaluation_date=request.evaluation_date,
+            guardrail_evidence_id=guardrail_evidence_id,
+        )
+    if gap is None:
+        _block(blockers, "expectation_gap", "expectation_gap_missing_or_incompatible", security_id)
+
+    if underwriting is not None and payoff is not None:
+        if (
+            underwriting.payoff_surface_snapshot_id is not None
+            and underwriting.payoff_surface_snapshot_id != payoff.snapshot_id
+        ):
+            _block(blockers, "research_package", "underwriting_payoff_binding_mismatch", security_id)
+    if underwriting is not None and gap is not None:
+        if (
+            underwriting.expectation_state_snapshot_id is not None
+            and underwriting.expectation_state_snapshot_id != gap.expectation_state_snapshot_id
+        ):
+            _block(blockers, "research_package", "underwriting_expectation_binding_mismatch", security_id)
+        if (
+            underwriting.price_implied_requirement_snapshot_id is not None
+            and underwriting.price_implied_requirement_snapshot_id
+            != gap.price_implied_requirement_snapshot_id
+        ):
+            _block(blockers, "research_package", "underwriting_price_implied_binding_mismatch", security_id)
+    if view is not None and gap is not None and (
+        gap.target_variable != view.target_variable
+        or gap.target_date != view.target_date
+        or gap.unit != view.unit
+    ):
+        _block(blockers, "research_package", "decision_gap_target_binding_mismatch", security_id)
+
+    if any(item.security_id == security_id for item in blockers):
+        return None
+    if underwriting is None or payoff is None or view is None or gap is None:
+        return None
+    return ResearchSecurityPackage(
+        thesis=thesis,
+        underwriting=underwriting,
+        payoff_surface=payoff,
+        decision_view=view,
+        expectation_gap=gap,
+    )
+
+
+def _current_ready_preflight(
+    root: Path,
+    request: AnalysisRequestSnapshot,
+) -> ResearchThesisPreflightStateSnapshot:
+    try:
+        current = load_current_research_thesis_preflight_states(root).get(request.snapshot_id)
+    except ResearchPreflightStateError as exc:
+        raise ValueError("current thesis preflight state failed validation") from exc
+    if current is None:
+        raise ValueError("analysis request has no current typed-thesis preflight state")
+    try:
+        validate_preflight_state_request_binding(current.state, request)
+    except ResearchPreflightStateError as exc:
+        raise ValueError("current thesis preflight does not bind to analysis request") from exc
+    if not current.state.ready_for_package_assembly:
+        raise ValueError("typed-thesis preflight is not ready for package assembly")
+    return current.state
+
+
+def _record_package_blockers(
+    *,
+    request: AnalysisRequestSnapshot,
+    run_id: str,
+    processed_at: datetime,
+    blockers: tuple[ResearchRoundBlocker, ...],
+    ledger: ResearchRunLedgerSnapshot,
+    root: Path,
+) -> tuple[ResearchRunLedgerSnapshot, Path | None, Path | None, bool]:
+    prior = _matching_package_blocked_run(ledger, request.snapshot_id, blockers)
+    if prior is not None:
+        return ledger, None, None, False
+    run = build_pre_orchestration_blocked_run(
+        request,
+        run_id=run_id,
+        started_at=processed_at,
+        completed_at=processed_at,
+        blockers=blockers,
+        flags=("typed_research_package_assembler_blocked",),
+    )
+    next_ledger = build_research_run_ledger(
+        ledger.requests,
+        (*ledger.runs, run),
+        built_at=processed_at,
+    )
+    run_path = persist_research_run(run, output_root=root)
+    try:
+        ledger_path = persist_research_run_ledger(next_ledger, output_root=root)
+    except BaseException:
+        run_path.unlink(missing_ok=True)
+        raise
+    return next_ledger, run_path, ledger_path, True
+
+
+def _matching_package_blocked_run(
+    ledger: ResearchRunLedgerSnapshot,
+    request_snapshot_id: str,
+    blockers: tuple[ResearchRoundBlocker, ...],
+) -> ResearchRoundRunSnapshot | None:
+    matching = tuple(
+        item
+        for item in ledger.runs
+        if item.request_snapshot_id == request_snapshot_id
+        and item.kind is ResearchRunKind.PRE_ORCHESTRATION_BLOCKED
+        and item.flags == ("typed_research_package_assembler_blocked",)
+        and item.blockers == blockers
+    )
+    return matching[-1] if matching else None
+
+
+def _find_request(ledger: ResearchRunLedgerSnapshot, request_id: str) -> AnalysisRequestSnapshot:
+    matches = tuple(item for item in ledger.requests if item.request_id == request_id)
+    if len(matches) != 1:
+        raise ValueError(f"request_id must resolve exactly once in latest ledger: {request_id}")
+    return matches[0]
+
+
+def _block(
+    blockers: list[ResearchRoundBlocker],
+    component: str,
+    code: str,
+    security_id: str | None,
+) -> None:
+    value = ResearchRoundBlocker(
+        component=component,
+        code=code,
+        detail=code.replace("_", " "),
+        security_id=security_id,
+    )
+    if value not in blockers:
+        blockers.append(value)
+
+
+def _require_aware(value: datetime, field: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field} must be timezone-aware")
+
+
+__all__ = ["ResearchPackageAssemblyReceipt", "assemble_and_run_research_package"]
