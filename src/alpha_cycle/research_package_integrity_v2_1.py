@@ -313,26 +313,31 @@ def _gap_observations_match_view(
     view: DecisionViewSnapshot,
     gap: DecisionExpectationGapSnapshot,
 ) -> bool:
-    for observation in gap.consensus_gaps:
-        if observation.observed_at > gap.captured_at:
+    for consensus_observation in gap.consensus_gaps:
+        if consensus_observation.observed_at > gap.captured_at:
             return False
-        if observation.unit != view.unit:
+        if consensus_observation.unit != view.unit:
             return False
-        if not _numbers_match(observation.decision_value, view.selected_forecast_value):
+        if not _numbers_match(
+            consensus_observation.decision_value,
+            view.selected_forecast_value,
+        ):
             return False
-        expected_absolute = observation.decision_value - observation.consensus_value
-        if not _numbers_match(observation.absolute_gap, expected_absolute):
+        expected_absolute = (
+            consensus_observation.decision_value - consensus_observation.consensus_value
+        )
+        if not _numbers_match(consensus_observation.absolute_gap, expected_absolute):
             return False
         expected_relative = (
             None
-            if observation.consensus_value == 0
-            else expected_absolute / abs(observation.consensus_value)
+            if consensus_observation.consensus_value == 0
+            else expected_absolute / abs(consensus_observation.consensus_value)
         )
         if expected_relative is None:
-            if observation.relative_gap is not None:
+            if consensus_observation.relative_gap is not None:
                 return False
-        elif observation.relative_gap is None or not _numbers_match(
-            observation.relative_gap,
+        elif consensus_observation.relative_gap is None or not _numbers_match(
+            consensus_observation.relative_gap,
             expected_relative,
         ):
             return False
@@ -341,14 +346,19 @@ def _gap_observations_match_view(
         decision_value_krw = _to_krw(view.selected_forecast_value, view.unit)
         if decision_value_krw is None:
             return False
-        for observation in gap.price_implied_gaps:
-            if not _numbers_match(observation.decision_value_krw, decision_value_krw):
+        for price_observation in gap.price_implied_gaps:
+            if not _numbers_match(
+                price_observation.decision_value_krw,
+                decision_value_krw,
+            ):
                 return False
-            expected_absolute = observation.decision_value_krw - observation.implied_value_krw
-            if not _numbers_match(observation.absolute_gap_krw, expected_absolute):
+            expected_absolute = (
+                price_observation.decision_value_krw - price_observation.implied_value_krw
+            )
+            if not _numbers_match(price_observation.absolute_gap_krw, expected_absolute):
                 return False
-            expected_relative = expected_absolute / observation.implied_value_krw
-            if not _numbers_match(observation.relative_gap, expected_relative):
+            expected_relative = expected_absolute / price_observation.implied_value_krw
+            if not _numbers_match(price_observation.relative_gap, expected_relative):
                 return False
     return True
 
