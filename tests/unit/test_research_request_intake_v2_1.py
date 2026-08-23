@@ -11,6 +11,7 @@ from alpha_cycle.research_request_intake_v2_1 import record_analysis_request
 
 NOW = datetime(2026, 8, 23, 6, 0, tzinfo=UTC)
 EVALUATION_DATE = date(2026, 8, 23)
+LOCK_NAME = ".research_request_intake.lock"
 
 
 def _record(tmp_path, *, request_id: str, offset: int = 0):
@@ -35,7 +36,7 @@ def test_first_request_creates_pending_ledger_and_observatory_state(tmp_path) ->
 
     assert receipt.request_path.exists()
     assert receipt.ledger_path.exists()
-    assert not (tmp_path / ".research_request_intake.lock").exists()
+    assert not (tmp_path / LOCK_NAME).exists()
     assert receipt.ledger.summary.request_count == 1
     assert receipt.ledger.summary.run_count == 0
     assert receipt.payload()["state"] == "request_pending"
@@ -75,8 +76,8 @@ def test_duplicate_request_id_is_rejected_before_new_persistence(tmp_path) -> No
     assert set((tmp_path / "research_run_ledger_v2_1").glob("*.json")) == ledger_files_before
 
 
-def test_existing_intake_lock_fails_closed_before_history_forks(tmp_path) -> None:
-    lock_path = tmp_path / ".research_request_intake.lock"
+def test_existing_shared_ledger_lock_fails_closed_before_history_forks(tmp_path) -> None:
+    lock_path = tmp_path / LOCK_NAME
     lock_path.write_text("stale or active lock\n", encoding="utf-8")
 
     with pytest.raises(FileExistsError):
