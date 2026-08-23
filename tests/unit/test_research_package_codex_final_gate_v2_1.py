@@ -9,6 +9,7 @@ import pytest
 from alpha_cycle.intelligence.decision_guardrails_v2_1 import (
     load_decision_system_v21_guardrails,
 )
+from alpha_cycle.intelligence.decision_thesis_v2 import ThesisStatus
 from alpha_cycle.intelligence.forecast_ledger import (
     ForecasterKind,
     ForecastRegistrationMode,
@@ -49,7 +50,7 @@ DEEP_REQUIRED = (
 
 def _thesis() -> SimpleNamespace:
     return SimpleNamespace(
-        status=SimpleNamespace(value="underwriting"),
+        status=ThesisStatus.UNDERWRITING,
         captured_at=NOW,
         catalysts=("earnings",),
         kill_conditions=("kill",),
