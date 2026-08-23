@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from alpha_cycle.intelligence.decision_thesis_v2 import InvestmentThesisSnapshot
@@ -17,7 +17,6 @@ from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
     ResearchRunKind,
     ResearchRunLedgerSnapshot,
     build_pre_orchestration_blocked_run,
-    build_pre_orchestration_ready_run,
     build_research_run_ledger,
     persist_research_run,
     persist_research_run_ledger,
@@ -29,6 +28,14 @@ from alpha_cycle.research_ledger_write_lock_v2_1 import (
     exclusive_research_ledger_write_lock,
 )
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
+from alpha_cycle.research_preflight_state_v2_1 import (
+    ResearchThesisPreflightStateSnapshot,
+    build_research_thesis_preflight_state,
+    canonical_utc,
+    load_current_research_thesis_preflight_states,
+    persist_research_thesis_preflight_state,
+    publish_current_research_thesis_preflight_state,
+)
 
 
 @dataclass(frozen=True)
@@ -37,15 +44,19 @@ class ResearchThesisPreflightReceipt:
     research_cutoff_at: datetime
     thesis_snapshots: tuple[InvestmentThesisSnapshot, ...]
     blockers: tuple[ResearchRoundBlocker, ...]
+    preflight_state: ResearchThesisPreflightStateSnapshot
     run: ResearchRoundRunSnapshot | None
     ledger: ResearchRunLedgerSnapshot
+    preflight_state_path: Path
+    preflight_current_pointer_path: Path
     run_path: Path | None
     ledger_path: Path | None
     changed_history: bool
+    changed_current_state: bool
 
     @property
     def ready_for_package_assembly(self) -> bool:
-        return not self.blockers
+        return self.preflight_state.ready_for_package_assembly
 
     def payload(self) -> dict[str, object]:
         return {
@@ -54,12 +65,17 @@ class ResearchThesisPreflightReceipt:
             "research_cutoff_at": self.research_cutoff_at.isoformat(),
             "thesis_snapshot_ids": [item.snapshot_id for item in self.thesis_snapshots],
             "blockers": [item.payload() for item in self.blockers],
+            "preflight_state_snapshot_id": self.preflight_state.snapshot_id,
             "run_snapshot_id": self.run.snapshot_id if self.run is not None else None,
             "ledger_snapshot_id": self.ledger.snapshot_id,
+            "preflight_state_path": str(self.preflight_state_path),
+            "preflight_current_pointer_path": str(self.preflight_current_pointer_path),
             "run_path": str(self.run_path) if self.run_path is not None else None,
             "ledger_path": str(self.ledger_path) if self.ledger_path is not None else None,
             "changed_history": self.changed_history,
+            "changed_current_state": self.changed_current_state,
             "ready_for_package_assembly": self.ready_for_package_assembly,
+            "ledger_schema_changed": False,
             "orchestrator_executed": False,
             "investment_conclusion_created": False,
             "automatic_execution_enabled": False,
@@ -74,7 +90,7 @@ def preflight_pending_request_theses(
     artifact_root: str | Path,
     research_cutoff_at: datetime | None = None,
 ) -> ResearchThesisPreflightReceipt:
-    """Resolve typed theses and append only meaningful pre-orchestration transitions."""
+    """Resolve typed theses, dedupe blocker metrics, and publish current preflight state."""
 
     _require_aware(processed_at, "processed_at")
     if research_cutoff_at is not None:
@@ -82,15 +98,23 @@ def preflight_pending_request_theses(
     root = Path(artifact_root)
 
     with exclusive_research_ledger_write_lock(root):
-        state = load_latest_observatory_state(root)
-        if state is None:
+        observatory = load_latest_observatory_state(root)
+        if observatory is None:
             raise ValueError("no Research Run Ledger exists; record an analysis request first")
-        ledger = state.ledger
+        ledger = observatory.ledger
         request = _find_request(ledger, request_id)
         if processed_at < request.requested_at:
             raise ValueError("processed_at cannot precede the analysis request")
         if any(item.run_id == run_id for item in ledger.runs):
             raise ValueError(f"run_id already exists in the latest ledger: {run_id}")
+        if any(
+            item.request_snapshot_id == request.snapshot_id
+            and item.kind is ResearchRunKind.ORCHESTRATED
+            for item in ledger.runs
+        ):
+            raise ValueError(
+                "analysis request already has an orchestrated run; record a new request for another preflight"
+            )
 
         cutoff = _resolve_research_cutoff(
             request,
@@ -98,9 +122,7 @@ def preflight_pending_request_theses(
             research_cutoff_at=research_cutoff_at,
         )
 
-        # Build one validated point-in-time repository index while the shared write lock is held,
-        # then resolve every requested security from memory. This avoids N full repository scans
-        # for an N-security request and keeps intake lock hold time proportional to repository size.
+        # One validated PIT repository scan per preflight, regardless of security count.
         thesis_index = build_investment_thesis_repository_index(root, as_of=cutoff)
         theses: list[InvestmentThesisSnapshot] = []
         blockers: list[ResearchRoundBlocker] = []
@@ -126,80 +148,92 @@ def preflight_pending_request_theses(
 
         blockers_tuple = tuple(blockers)
         theses_tuple = tuple(theses)
-        preflight_flags = _preflight_flags(
+        current_snapshot = build_research_thesis_preflight_state(
             request,
-            cutoff,
-            ready=not blockers_tuple,
-        )
-
-        # Idempotence is defined over the full immutable request history, not merely its latest
-        # run. This matters for REPLAY cutoff A -> B -> A: revisiting A must reuse the prior A
-        # preflight event instead of inflating run/blocker metrics with a duplicate event.
-        prior = _matching_preflight_run(
-            ledger,
-            request_snapshot_id=request.snapshot_id,
+            research_cutoff_at=cutoff,
+            thesis_snapshot_ids=tuple(item.snapshot_id for item in theses_tuple),
             blockers=blockers_tuple,
-            flags=preflight_flags,
         )
-        if prior is not None:
-            return ResearchThesisPreflightReceipt(
-                request=request,
-                research_cutoff_at=cutoff,
-                thesis_snapshots=theses_tuple,
-                blockers=blockers_tuple,
-                run=prior,
-                ledger=ledger,
-                run_path=None,
-                ledger_path=None,
-                changed_history=False,
-            )
+        prior_current = load_current_research_thesis_preflight_states(root).get(
+            request.snapshot_id
+        )
+        changed_current_state = (
+            prior_current is None
+            or prior_current.state.snapshot_id != current_snapshot.snapshot_id
+        )
+        state_path = persist_research_thesis_preflight_state(
+            current_snapshot,
+            output_root=root,
+        )
 
-        if processed_at <= ledger.built_at:
-            raise ValueError(
-                "processed_at must be later than the latest ledger built_at when appending history"
-            )
-
+        # Ledger schema v1 remains unchanged. Only blocked pre-orchestration attempts are metrics
+        # events; ready/current operational state lives in the separate typed state projection.
+        run: ResearchRoundRunSnapshot | None = None
+        run_path: Path | None = None
+        ledger_path: Path | None = None
+        changed_history = False
+        next_ledger = ledger
         if blockers_tuple:
-            run = build_pre_orchestration_blocked_run(
-                request,
-                run_id=run_id,
-                started_at=processed_at,
-                completed_at=processed_at,
+            preflight_flags = _blocked_preflight_flags(request, cutoff)
+            prior_run = _matching_blocked_preflight_run(
+                ledger,
+                request_snapshot_id=request.snapshot_id,
                 blockers=blockers_tuple,
                 flags=preflight_flags,
             )
-        else:
-            # Readiness here means only that the typed thesis prerequisite has cleared. It does
-            # not claim an orchestrated ResearchRoundSnapshot or any investment conclusion.
-            run = build_pre_orchestration_ready_run(
-                request,
-                run_id=run_id,
-                started_at=processed_at,
-                completed_at=processed_at,
-                flags=preflight_flags,
-            )
+            if prior_run is not None:
+                run = prior_run
+            else:
+                if processed_at <= ledger.built_at:
+                    raise ValueError(
+                        "processed_at must be later than the latest ledger built_at when appending history"
+                    )
+                run = build_pre_orchestration_blocked_run(
+                    request,
+                    run_id=run_id,
+                    started_at=processed_at,
+                    completed_at=processed_at,
+                    blockers=blockers_tuple,
+                    flags=preflight_flags,
+                )
+                next_ledger = build_research_run_ledger(
+                    ledger.requests,
+                    (*ledger.runs, run),
+                    built_at=processed_at,
+                )
+                run_path = persist_research_run(run, output_root=root)
+                try:
+                    ledger_path = persist_research_run_ledger(
+                        next_ledger,
+                        output_root=root,
+                    )
+                except BaseException:
+                    run_path.unlink(missing_ok=True)
+                    raise
+                changed_history = True
 
-        next_ledger = build_research_run_ledger(
-            ledger.requests,
-            (*ledger.runs, run),
-            built_at=processed_at,
+        # Publish operational state last. A failed history write can leave an unreferenced immutable
+        # state artifact, but can never make the current pointer claim a transition that did not
+        # complete. Revisited historical cutoffs update this pointer without duplicating metrics.
+        pointer_path = publish_current_research_thesis_preflight_state(
+            current_snapshot,
+            selected_at=processed_at,
+            output_root=root,
         )
-        run_path = persist_research_run(run, output_root=root)
-        try:
-            ledger_path = persist_research_run_ledger(next_ledger, output_root=root)
-        except BaseException:
-            run_path.unlink(missing_ok=True)
-            raise
         return ResearchThesisPreflightReceipt(
             request=request,
-            research_cutoff_at=cutoff,
+            research_cutoff_at=current_snapshot.research_cutoff_at,
             thesis_snapshots=theses_tuple,
             blockers=blockers_tuple,
+            preflight_state=current_snapshot,
             run=run,
             ledger=next_ledger,
+            preflight_state_path=state_path,
+            preflight_current_pointer_path=pointer_path,
             run_path=run_path,
             ledger_path=ledger_path,
-            changed_history=True,
+            changed_history=changed_history,
+            changed_current_state=changed_current_state,
         )
 
 
@@ -221,17 +255,14 @@ def _resolve_research_cutoff(
     return cutoff
 
 
-def _preflight_flags(
+def _blocked_preflight_flags(
     request: AnalysisRequestSnapshot,
     cutoff: datetime,
-    *,
-    ready: bool,
 ) -> tuple[str, ...]:
-    flags = [
-        "typed_thesis_preflight_ready" if ready else "typed_thesis_preflight_blocked"
-    ]
+    flags = ["typed_thesis_preflight_blocked"]
     if request.mode is ResearchRoundMode.REPLAY:
-        flags.append(f"typed_thesis_replay_cutoff:{cutoff.isoformat()}")
+        canonical = canonical_utc(cutoff)
+        flags.append(f"typed_thesis_replay_cutoff:{canonical.isoformat()}")
     return tuple(flags)
 
 
@@ -247,22 +278,18 @@ def _find_request(
     return matches[0]
 
 
-def _matching_preflight_run(
+def _matching_blocked_preflight_run(
     ledger: ResearchRunLedgerSnapshot,
     *,
     request_snapshot_id: str,
     blockers: tuple[ResearchRoundBlocker, ...],
     flags: tuple[str, ...],
 ) -> ResearchRoundRunSnapshot | None:
-    preflight_kinds = {
-        ResearchRunKind.PRE_ORCHESTRATION_BLOCKED,
-        ResearchRunKind.PRE_ORCHESTRATION_READY,
-    }
     matching = tuple(
         item
         for item in ledger.runs
         if item.request_snapshot_id == request_snapshot_id
-        and item.kind in preflight_kinds
+        and item.kind is ResearchRunKind.PRE_ORCHESTRATION_BLOCKED
         and item.blockers == blockers
         and item.flags == flags
     )
