@@ -42,6 +42,10 @@ def _fake_opportunity_persist(object_name: str):
     return persist
 
 
+def _ignore_validation(*args, **kwargs) -> None:
+    del args, kwargs
+
+
 def test_ledger_publish_failure_rolls_back_all_new_downstream_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -56,6 +60,22 @@ def test_ledger_publish_failure_rolls_back_all_new_downstream_artifacts(
     round_path = tmp_path / "research_round_v2_1" / "round.json"
     run_path = tmp_path / "research_round_run_v2_1" / "run.json"
 
+    monkeypatch.setattr(assembler, "validate_publication_layout", _ignore_validation)
+    monkeypatch.setattr(
+        assembler,
+        "validate_existing_opportunity_artifacts",
+        _ignore_validation,
+    )
+    monkeypatch.setattr(
+        assembler,
+        "validate_persisted_opportunity_candidate",
+        _ignore_validation,
+    )
+    monkeypatch.setattr(
+        assembler,
+        "validate_persisted_opportunity_set",
+        _ignore_validation,
+    )
     monkeypatch.setattr(
         assembler,
         "persist_opportunity_candidate",
