@@ -157,7 +157,7 @@ def package_integrity_blocker_codes(
     view: DecisionViewSnapshot | None,
     gap: DecisionExpectationGapSnapshot | None,
 ) -> tuple[str, ...]:
-    """Return deterministic fail-closed blockers for persisted-only bypasses of canonical builders."""
+    """Return deterministic fail-closed blockers for persisted-only builder bypasses."""
 
     blockers: list[str] = []
     if thesis.status in _TERMINAL_THESIS_STATUSES:
