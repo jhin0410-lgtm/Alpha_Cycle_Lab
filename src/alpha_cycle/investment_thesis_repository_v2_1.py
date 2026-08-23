@@ -261,11 +261,11 @@ def _date(value: str, field: str) -> date:
         raise InvestmentThesisRepositoryError(f"{field} must be an ISO date") from exc
 
 
-def _enum[_EnumT: StrEnum](
-    enum_type: type[_EnumT],
+def _enum[EnumT: StrEnum](
+    enum_type: type[EnumT],
     payload: dict[str, Any],
     field: str,
-) -> _EnumT:
+) -> EnumT:
     raw = _required_text(payload, field)
     try:
         return enum_type(raw)
