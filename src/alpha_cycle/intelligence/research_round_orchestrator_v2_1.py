@@ -851,8 +851,10 @@ def persist_research_round(
     payload["snapshot_id"] = snapshot.snapshot_id
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     fd: int | None = None
+    created = False
     try:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        created = True
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = None
             handle.write(encoded)
@@ -861,7 +863,8 @@ def persist_research_round(
     except BaseException:
         if fd is not None:
             os.close(fd)
-        path.unlink(missing_ok=True)
+        if created:
+            path.unlink(missing_ok=True)
         raise
     return path
 

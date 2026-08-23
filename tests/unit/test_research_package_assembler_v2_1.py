@@ -24,10 +24,18 @@ from alpha_cycle.intelligence.decision_view_v2_1 import (
     ConsensusGapObservation,
     DecisionExpectationGapSnapshot,
     DecisionViewSnapshot,
+    PriceImpliedGapObservation,
     persist_decision_expectation_gap,
     persist_decision_view,
 )
-from alpha_cycle.intelligence.forecast_ledger import ForecasterKind
+from alpha_cycle.intelligence.forecast_ledger import (
+    ForecasterKind,
+    ForecastRegistrationMode,
+    ForecastRegistrationSnapshot,
+    OrdinalAssessment,
+    PrimaryErrorMetric,
+    persist_forecast_registration,
+)
 from alpha_cycle.intelligence.payoff_surface import (
     PayoffScenario,
     PayoffSurfaceSnapshot,
@@ -64,6 +72,10 @@ C = "c" * 64
 D = "d" * 64
 E = "e" * 64
 F = "f" * 64
+CAUSAL_GRAPH_ID = "1" * 64
+FORWARD_VALUATION_ID = "2" * 64
+PRICE_IMPLIED_ID = "3" * 64
+EPISTEMIC_DEFENSE_ID = "4" * 64
 
 
 def _uncertainty() -> ThesisUncertainty:
@@ -135,8 +147,67 @@ def _scenario(label: ScenarioLabel, lower: float, upper: float) -> PayoffScenari
     )
 
 
+def _registration(
+    thesis: InvestmentThesisSnapshot,
+    *,
+    forecast_id: str,
+    model_family: str,
+    forecaster_kind: ForecasterKind,
+    dependency_cluster_id: str,
+    forecast_value: float,
+) -> ForecastRegistrationSnapshot:
+    return ForecastRegistrationSnapshot(
+        forecast_id=forecast_id,
+        registered_at=NOW - timedelta(hours=2, minutes=30),
+        ledger_recorded_at=NOW - timedelta(hours=2, minutes=20),
+        forecast_origin=NOW - timedelta(hours=2),
+        information_cutoff=NOW - timedelta(hours=3),
+        security_id=thesis.security_id,
+        target_variable="net_income",
+        target_date=TARGET,
+        horizon_label="fixture-forward-target",
+        forecast_value=forecast_value,
+        unit="KRW_million",
+        range_lower=None,
+        range_upper=None,
+        direction=None,
+        direction_reference_value=None,
+        direction_flat_tolerance=0.0,
+        confidence=OrdinalAssessment.MEDIUM,
+        confidence_rationale="Persisted package fixture forecast.",
+        forecaster_kind=forecaster_kind,
+        model_family=model_family,
+        driver_refs=("driver:fixture",),
+        regime_tags=("fixture-regime",),
+        decision_relevance=OrdinalAssessment.HIGH,
+        difficulty=OrdinalAssessment.MEDIUM,
+        baseline_refs=(),
+        dependency_cluster_id=dependency_cluster_id,
+        source_evidence_ids=(A,),
+        registration_mode=ForecastRegistrationMode.NATIVE_PROSPECTIVE,
+        primary_error_metric=PrimaryErrorMetric.ABSOLUTE_ERROR,
+        guardrail_evidence_id=GUARDRAIL,
+    )
+
+
 def _components(thesis: InvestmentThesisSnapshot, offset: int):
     security_id = thesis.security_id
+    selected_registration = _registration(
+        thesis,
+        forecast_id=f"a-{security_id}",
+        model_family="fixture-model",
+        forecaster_kind=ForecasterKind.MODEL,
+        dependency_cluster_id=f"model-{security_id}",
+        forecast_value=20_000_000.0 + offset,
+    )
+    benchmark_registration = _registration(
+        thesis,
+        forecast_id=f"b-{security_id}",
+        model_family="fixture-benchmark",
+        forecaster_kind=ForecasterKind.BENCHMARK,
+        dependency_cluster_id=f"benchmark-{security_id}",
+        forecast_value=18_000_000.0 + offset,
+    )
     payoff = PayoffSurfaceSnapshot(
         captured_at=NOW + timedelta(seconds=20 + offset),
         thesis_snapshot_id=thesis.snapshot_id,
@@ -158,14 +229,17 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         target_variable="net_income",
         target_date=TARGET,
         unit="KRW_million",
-        selected_forecast_snapshot_id=D,
-        selected_forecast_id=f"a-{security_id}",
-        selected_forecaster_kind=ForecasterKind.MODEL,
-        selected_model_family="fixture-model",
-        selected_forecast_value=20_000_000.0 + offset,
+        selected_forecast_snapshot_id=selected_registration.snapshot_id,
+        selected_forecast_id=selected_registration.forecast_id,
+        selected_forecaster_kind=selected_registration.forecaster_kind,
+        selected_model_family=selected_registration.model_family,
+        selected_forecast_value=selected_registration.forecast_value,
         forecast_origin=NOW - timedelta(hours=2),
         information_cutoff=NOW - timedelta(hours=3),
-        tournament_forecast_snapshot_ids=(D, E),
+        tournament_forecast_snapshot_ids=(
+            selected_registration.snapshot_id,
+            benchmark_registration.snapshot_id,
+        ),
         tournament_dependency_overlap=False,
         guardrail_evidence_id=GUARDRAIL,
     )
@@ -174,7 +248,7 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         evaluation_date=EVAL,
         decision_view_snapshot_id=view.snapshot_id,
         expectation_state_snapshot_id=F,
-        price_implied_requirement_snapshot_id=None,
+        price_implied_requirement_snapshot_id=PRICE_IMPLIED_ID,
         security_id=security_id,
         target_variable=view.target_variable,
         target_date=view.target_date,
@@ -192,14 +266,34 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
                 / 18_000_000.0,
             ),
         ),
-        price_implied_gaps=(),
-        flags=("price_implied_comparison_not_supplied",),
+        price_implied_gaps=(
+            PriceImpliedGapObservation(
+                reference_id="fixture-price-reference",
+                reference_kind="forward_multiple",
+                reference_multiple=10.0,
+                decision_value_krw=view.selected_forecast_value * 1_000_000.0,
+                implied_value_krw=18_000_000.0 * 1_000_000.0,
+                absolute_gap_krw=(
+                    view.selected_forecast_value - 18_000_000.0
+                ) * 1_000_000.0,
+                relative_gap=(
+                    view.selected_forecast_value - 18_000_000.0
+                ) / 18_000_000.0,
+            ),
+        ),
+        flags=(),
         guardrail_evidence_id=GUARDRAIL,
     )
     tournament = ForecastTournamentAssessment(
         comparable=True,
-        forecast_snapshot_ids=(D, E),
-        forecast_ids=(f"a-{security_id}", f"b-{security_id}"),
+        forecast_snapshot_ids=(
+            selected_registration.snapshot_id,
+            benchmark_registration.snapshot_id,
+        ),
+        forecast_ids=(
+            selected_registration.forecast_id,
+            benchmark_registration.forecast_id,
+        ),
         security_id=security_id,
         target_variable=view.target_variable,
         target_date=view.target_date,
@@ -221,19 +315,25 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         readiness=UnderwritingReadiness.DEEP_LANE_READY_FOR_HUMAN_REVIEW,
         guardrail_evidence_id=GUARDRAIL,
         context_snapshot_id=C,
-        causal_graph_snapshot_id=None,
+        causal_graph_snapshot_id=CAUSAL_GRAPH_ID,
         forecast_tournament=tournament,
         expectation_state_snapshot_id=F,
-        forward_valuation_snapshot_id=None,
-        price_implied_requirement_snapshot_id=None,
+        forward_valuation_snapshot_id=FORWARD_VALUATION_ID,
+        price_implied_requirement_snapshot_id=PRICE_IMPLIED_ID,
         payoff_surface_snapshot_id=payoff.snapshot_id,
-        epistemic_defense_snapshot_id=None,
+        epistemic_defense_snapshot_id=EPISTEMIC_DEFENSE_ID,
         required_elements_satisfied=DEEP_REQUIRED_ELEMENTS,
         required_elements_missing=(),
         blockers=(),
         flags=(),
     )
-    return payoff, view, gap, underwriting
+    return (
+        payoff,
+        view,
+        gap,
+        underwriting,
+        (selected_registration, benchmark_registration),
+    )
 
 
 def _prepare_ready_request(tmp_path: Path):
@@ -269,7 +369,7 @@ def _persist_components(
     mismatch_first_tournament: bool = False,
 ) -> None:
     for index, thesis in enumerate(theses):
-        payoff, view, gap, underwriting = _components(thesis, index)
+        payoff, view, gap, underwriting, registrations = _components(thesis, index)
         if mismatch_first_tournament and index == 0:
             underwriting = replace(
                 underwriting,
@@ -278,6 +378,8 @@ def _persist_components(
                     target_variable="revenue",
                 ),
             )
+        for registration in registrations:
+            persist_forecast_registration(registration, output_root=tmp_path)
         persist_payoff_surface(payoff, output_root=tmp_path / "payoff_surface")
         persist_decision_view(view, output_root=tmp_path)
         persist_decision_expectation_gap(gap, output_root=tmp_path)

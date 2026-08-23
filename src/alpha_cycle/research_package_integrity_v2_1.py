@@ -6,7 +6,7 @@ import hashlib
 import json
 import math
 import os
-from datetime import datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 from zoneinfo import ZoneInfo
@@ -21,6 +21,10 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
 from alpha_cycle.intelligence.decision_view_v2_1 import (
     DecisionExpectationGapSnapshot,
     DecisionViewSnapshot,
+)
+from alpha_cycle.intelligence.forecast_ledger import (
+    FORECAST_LEDGER_SCHEMA_VERSION,
+    ForecastRegistrationMode,
 )
 from alpha_cycle.intelligence.opportunity_set_v2_1 import (
     OPPORTUNITY_SET_SCHEMA_VERSION,
@@ -79,7 +83,46 @@ def require_trusted_artifact_root(root: Path) -> Path:
         raise ResearchPackageIntegrityError(
             "artifact_root cannot traverse a symlinked path component"
         )
+    _validate_source_ledger_repository(root, resolved_root=resolved)
     return resolved
+
+
+def _validate_source_ledger_repository(root: Path, *, resolved_root: Path) -> None:
+    repository = root / "research_run_ledger_v2_1"
+    if repository.is_symlink():
+        raise ResearchPackageIntegrityError(
+            "research_run_ledger_v2_1 repository cannot be a symlink"
+        )
+    if not repository.exists():
+        return
+    if not repository.is_dir():
+        raise ResearchPackageIntegrityError(
+            "research_run_ledger_v2_1 repository must be a directory"
+        )
+    resolved_repository = repository.resolve()
+    if resolved_repository.parent != resolved_root:
+        raise ResearchPackageIntegrityError(
+            "research_run_ledger_v2_1 repository escapes artifact_root"
+        )
+    for path in sorted(repository.glob("*.json")):
+        if path.is_symlink():
+            raise ResearchPackageIntegrityError(
+                "research run ledger artifact cannot be a symlink"
+            )
+        if not path.is_file():
+            raise ResearchPackageIntegrityError(
+                "research run ledger artifact must be a regular file"
+            )
+        try:
+            resolved_path = path.resolve(strict=True)
+        except OSError as exc:
+            raise ResearchPackageIntegrityError(
+                f"cannot resolve research run ledger artifact: {path}"
+            ) from exc
+        if resolved_path.parent != resolved_repository:
+            raise ResearchPackageIntegrityError(
+                "research run ledger artifact escapes repository root"
+            )
 
 
 def validate_thesis_repository_layout(root: Path) -> None:
@@ -143,8 +186,10 @@ def validate_preflight_selection_timing(
 def decision_view_matches_underwriting_tournament(
     view: DecisionViewSnapshot,
     underwriting: UnderwritingReadinessSnapshot,
+    *,
+    artifact_root: str | Path | None = None,
 ) -> bool:
-    """Bind a Decision View to a genuine, exact parallel forecast tournament identity."""
+    """Bind a Decision View to a genuine persisted forecast tournament identity."""
 
     tournament = underwriting.forecast_tournament
     snapshot_ids = tuple(tournament.forecast_snapshot_ids)
@@ -161,15 +206,25 @@ def decision_view_matches_underwriting_tournament(
         return False
     if tournament.primary_error_metric is None:
         return False
-    if tournament.information_cutoff is None:
+    if tournament.information_cutoff is None or tournament.forecast_origin is None:
+        return False
+    if tournament.target_date is None:
+        return False
+    if tournament.information_cutoff > tournament.forecast_origin:
+        return False
+    if tournament.forecast_origin.date() >= tournament.target_date:
         return False
     if tournament.information_cutoff > view.captured_at:
         return False
+    if view.information_cutoff > view.forecast_origin:
+        return False
     if view.information_cutoff > view.captured_at:
+        return False
+    if view.forecast_origin.date() >= view.target_date:
         return False
     selected_pair = (view.selected_forecast_snapshot_id, view.selected_forecast_id)
     tournament_pairs = tuple(zip(snapshot_ids, forecast_ids, strict=True))
-    return bool(
+    base_match = bool(
         tournament.comparable
         and not tournament.blockers
         and tournament.security_id == view.security_id
@@ -182,6 +237,207 @@ def decision_view_matches_underwriting_tournament(
         == tuple(sorted(view.tournament_forecast_snapshot_ids))
         and selected_pair in tournament_pairs
     )
+    if not base_match:
+        return False
+    if artifact_root is None:
+        return True
+    return _persisted_tournament_registrations_match(
+        Path(artifact_root),
+        view=view,
+        underwriting=underwriting,
+        snapshot_ids=snapshot_ids,
+        forecast_ids=forecast_ids,
+    )
+
+
+def _persisted_tournament_registrations_match(
+    root: Path,
+    *,
+    view: DecisionViewSnapshot,
+    underwriting: UnderwritingReadinessSnapshot,
+    snapshot_ids: tuple[str, ...],
+    forecast_ids: tuple[str, ...],
+) -> bool:
+    registrations = _load_persisted_forecast_registrations(root, snapshot_ids)
+    if len(registrations) != len(snapshot_ids):
+        return False
+    descriptors: set[tuple[str, str]] = set()
+    clusters: set[str] = set()
+    tournament = underwriting.forecast_tournament
+    for payload, expected_snapshot_id, expected_forecast_id in zip(
+        registrations,
+        snapshot_ids,
+        forecast_ids,
+        strict=True,
+    ):
+        if _sha(payload) != expected_snapshot_id:
+            return False
+        if payload.get("forecast_id") != expected_forecast_id:
+            return False
+        if payload.get("security_id") != view.security_id:
+            return False
+        if payload.get("target_variable") != view.target_variable:
+            return False
+        if payload.get("target_date") != view.target_date.isoformat():
+            return False
+        if payload.get("unit") != view.unit:
+            return False
+        if payload.get("primary_error_metric") != tournament.primary_error_metric:
+            return False
+        if payload.get("guardrail_evidence_id") != underwriting.guardrail_evidence_id:
+            return False
+        try:
+            information_cutoff = _payload_datetime(payload, "information_cutoff")
+            registered_at = _payload_datetime(payload, "registered_at")
+            ledger_recorded_at = _payload_datetime(payload, "ledger_recorded_at")
+            forecast_origin = _payload_datetime(payload, "forecast_origin")
+            target_date = date.fromisoformat(str(payload.get("target_date")))
+        except (TypeError, ValueError):
+            return False
+        if not (
+            information_cutoff <= registered_at <= ledger_recorded_at
+            and registered_at <= forecast_origin
+            and information_cutoff == view.information_cutoff
+            and forecast_origin == view.forecast_origin
+            and target_date == view.target_date
+            and forecast_origin.date() < target_date
+            and ledger_recorded_at <= view.captured_at
+        ):
+            return False
+        if (
+            payload.get("registration_mode")
+            == ForecastRegistrationMode.NATIVE_PROSPECTIVE.value
+            and ledger_recorded_at > forecast_origin
+        ):
+            return False
+        forecaster_kind = payload.get("forecaster_kind")
+        model_family = payload.get("model_family")
+        dependency_cluster = payload.get("dependency_cluster_id")
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (forecaster_kind, model_family, dependency_cluster)
+        ):
+            return False
+        descriptors.add((str(forecaster_kind), str(model_family)))
+        clusters.add(str(dependency_cluster))
+
+    if len(descriptors) < 2:
+        return False
+    if len(descriptors) != tournament.distinct_forecaster_count:
+        return False
+    if len(clusters) != tournament.dependency_cluster_count:
+        return False
+    dependency_overlap = len(clusters) < len(registrations)
+    if view.tournament_dependency_overlap is not dependency_overlap:
+        return False
+    expected_tournament_flags = (
+        ("forecast_dependency_overlap",) if dependency_overlap else ()
+    )
+    if tuple(tournament.flags) != expected_tournament_flags:
+        return False
+
+    try:
+        selected_index = snapshot_ids.index(view.selected_forecast_snapshot_id)
+    except ValueError:
+        return False
+    selected = registrations[selected_index]
+    if selected.get("forecast_id") != view.selected_forecast_id:
+        return False
+    if selected.get("forecaster_kind") != view.selected_forecaster_kind.value:
+        return False
+    if selected.get("model_family") != view.selected_model_family:
+        return False
+    selected_value = selected.get("forecast_value")
+    if not isinstance(selected_value, (int, float)) or isinstance(selected_value, bool):
+        return False
+    return _numbers_match(float(selected_value), view.selected_forecast_value)
+
+
+def _load_persisted_forecast_registrations(
+    root: Path,
+    snapshot_ids: tuple[str, ...],
+) -> tuple[dict[str, object], ...]:
+    resolved_root = require_trusted_artifact_root(root)
+    repository = root / "registration"
+    _require_safe_repository(
+        repository,
+        resolved_root=resolved_root,
+        label="forecast registration",
+    )
+    if not repository.exists():
+        return ()
+    loaded: list[dict[str, object]] = []
+    for snapshot_id in snapshot_ids:
+        matches = tuple(
+            path
+            for path in repository.iterdir()
+            if path.is_dir()
+            and not path.name.startswith(".")
+            and path.name.endswith(f"__{snapshot_id[:12]}")
+        )
+        if len(matches) != 1:
+            return ()
+        directory = matches[0]
+        _require_safe_directory_slot(
+            directory,
+            repository,
+            "forecast registration",
+        )
+        payload_path = directory / "forecast_registration.json"
+        manifest_path = directory / "manifest.json"
+        _require_safe_file_slot(
+            payload_path,
+            directory,
+            "forecast registration payload",
+        )
+        _require_safe_file_slot(
+            manifest_path,
+            directory,
+            "forecast registration manifest",
+        )
+        payload = _load_json_object(payload_path)
+        manifest = _load_json_object(manifest_path)
+        if _sha(payload) != snapshot_id:
+            return ()
+        try:
+            ledger_recorded_at = _payload_datetime(payload, "ledger_recorded_at")
+        except ValueError:
+            return ()
+        expected_directory = (
+            ledger_recorded_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+            + f"__{snapshot_id[:12]}"
+        )
+        if directory.name != expected_directory:
+            return ()
+        expected_manifest = {
+            "schema_version": FORECAST_LEDGER_SCHEMA_VERSION,
+            "object_type": "registration",
+            "snapshot_id": snapshot_id,
+            "captured_at": ledger_recorded_at.isoformat(),
+            "immutable": True,
+            "order_api_enabled": False,
+            "files": ["forecast_registration.json"],
+            "forecast_id": payload.get("forecast_id"),
+            "registration_mode": payload.get("registration_mode"),
+            "dependency_cluster_id": payload.get("dependency_cluster_id"),
+            "guardrail_evidence_id": payload.get("guardrail_evidence_id"),
+            "outcome_observed": False,
+            "evaluation_run": False,
+        }
+        if manifest != expected_manifest:
+            return ()
+        loaded.append(payload)
+    return tuple(loaded)
+
+
+def _payload_datetime(payload: dict[str, object], field: str) -> datetime:
+    raw = payload.get(field)
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"{field} must be non-empty text")
+    value = datetime.fromisoformat(raw)
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field} must be timezone-aware")
+    return value
 
 
 def package_integrity_blocker_codes(
@@ -200,7 +456,9 @@ def package_integrity_blocker_codes(
         blockers.append("thesis_payoff_capture_order_mismatch")
     if underwriting is not None and underwriting.captured_at < thesis.captured_at:
         blockers.append("thesis_underwriting_capture_order_mismatch")
-    if underwriting is not None and not _underwriting_ready_contract_is_valid(underwriting):
+    if underwriting is not None and not _underwriting_ready_contract_is_valid(
+        thesis, underwriting, payoff
+    ):
         blockers.append("underwriting_ready_evidence_contract_mismatch")
     if (
         underwriting is not None
@@ -350,7 +608,9 @@ def validate_persisted_opportunity_set(
 
 
 def _underwriting_ready_contract_is_valid(
+    thesis: InvestmentThesisSnapshot,
     underwriting: UnderwritingReadinessSnapshot,
+    payoff: PayoffSurfaceSnapshot | None,
 ) -> bool:
     if underwriting.readiness not in _READY_UNDERWRITING_STATES:
         return True
@@ -359,20 +619,44 @@ def _underwriting_ready_contract_is_valid(
         if underwriting.readiness is not UnderwritingReadiness.FAST_LANE_READY_FOR_HUMAN_REVIEW:
             return False
         required = tuple(active.fast_lane_required_elements)
-    elif underwriting.lane is UnderwritingLane.DEEP:
-        if underwriting.readiness not in {
-            UnderwritingReadiness.DEEP_LANE_READY_FOR_HUMAN_REVIEW,
-            UnderwritingReadiness.DEEP_LANE_READY_WITH_EPISTEMIC_FLAGS,
-        }:
-            return False
-        required = tuple(active.deep_lane_required_elements) + SUPPLEMENTAL_DEEP_ELEMENTS
-    else:
+        return bool(
+            tuple(underwriting.required_elements_satisfied) == required
+            and not underwriting.required_elements_missing
+            and not underwriting.blockers
+        )
+    if underwriting.lane is not UnderwritingLane.DEEP:
         return False
-    return bool(
-        tuple(underwriting.required_elements_satisfied) == required
-        and not underwriting.required_elements_missing
-        and not underwriting.blockers
+    required = tuple(active.deep_lane_required_elements) + SUPPLEMENTAL_DEEP_ELEMENTS
+    if tuple(underwriting.required_elements_satisfied) != required:
+        return False
+    if underwriting.required_elements_missing or underwriting.blockers:
+        return False
+    if underwriting.flags:
+        if underwriting.readiness is not UnderwritingReadiness.DEEP_LANE_READY_WITH_EPISTEMIC_FLAGS:
+            return False
+    elif underwriting.readiness is not UnderwritingReadiness.DEEP_LANE_READY_FOR_HUMAN_REVIEW:
+        return False
+    required_snapshot_ids = (
+        underwriting.causal_graph_snapshot_id,
+        underwriting.expectation_state_snapshot_id,
+        underwriting.forward_valuation_snapshot_id,
+        underwriting.price_implied_requirement_snapshot_id,
+        underwriting.payoff_surface_snapshot_id,
+        underwriting.epistemic_defense_snapshot_id,
     )
+    if any(value is None for value in required_snapshot_ids):
+        return False
+    if payoff is None or underwriting.payoff_surface_snapshot_id != payoff.snapshot_id:
+        return False
+    if not thesis.catalysts or not thesis.kill_conditions:
+        return False
+    if not thesis.opportunity_set_refs or not thesis.portfolio_overlap:
+        return False
+    if not underwriting.forecast_tournament.comparable:
+        return False
+    if not set(underwriting.forecast_tournament.flags).issubset(set(underwriting.flags)):
+        return False
+    return True
 
 
 def _gap_observations_match_view(

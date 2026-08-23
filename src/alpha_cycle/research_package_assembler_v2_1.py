@@ -214,6 +214,7 @@ def assemble_and_run_research_package(
                 request=request,
                 component_index=component_index,
                 guardrail_evidence_id=active.evidence_id,
+                artifact_root=root,
                 blockers=blockers,
             )
             if package is not None:
@@ -318,6 +319,7 @@ def _assemble_security_package(
     request: AnalysisRequestSnapshot,
     component_index: ResearchComponentRepositoryIndex,
     guardrail_evidence_id: str,
+    artifact_root: Path,
     blockers: list[ResearchRoundBlocker],
 ) -> ResearchSecurityPackage | None:
     underwriting = component_index.latest_underwriting(
@@ -390,7 +392,9 @@ def _assemble_security_package(
                 security_id,
             )
     if underwriting is not None and view is not None:
-        if not decision_view_matches_underwriting_tournament(view, underwriting):
+        if not decision_view_matches_underwriting_tournament(
+            view, underwriting, artifact_root=artifact_root
+        ):
             _block(
                 blockers,
                 "research_package",
