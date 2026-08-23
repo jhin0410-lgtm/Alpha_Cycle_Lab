@@ -47,7 +47,7 @@ Assembly requires the current #301 thesis-preflight state to be present, typed, 
 
 `research_cutoff_at <= selected_at <= processed_at`.
 
-The PIT-selected thesis identities must still match the identities recorded by that preflight.
+If a thesis selected by that ready preflight is no longer reconstructable, the failed assembly is persisted as a structured current package blocker instead of leaving the Observatory at a stale `pre_orchestration_ready` state.
 
 Per security, selection requires the request-compatible:
 
@@ -63,8 +63,10 @@ Persisted builder outputs are additionally checked for canonical invariants that
 - thesis/payoff/underwriting and Decision View/Expectation Gap capture ordering is causal;
 - ready underwriting carries the complete active lane-specific required-element set;
 - a comparable forecast tournament contains at least two unique forecast identities with consistent distinct-forecaster/dependency counts;
+- each persisted forecast registration is reconstructed as a canonical `ForecastRegistrationSnapshot`, and the reconstructed canonical payload must exactly match the persisted payload before tournament use;
 - the selected forecast `(snapshot_id, forecast_id)` is the exact paired identity in that tournament;
 - forecast `information_cutoff` cannot postdate the Decision View capture;
+- the persisted Decision View selection rule is content-address validated, reconstructed as a canonical typed rule, preregistered before every tournament forecast, and required to resolve uniquely to the selected forecaster identity;
 - consensus observations cannot postdate the Korea-local evaluation date;
 - expectation-gap observation values, units and arithmetic remain bound to the selected Decision View.
 
@@ -78,7 +80,9 @@ The assembler calls `run_research_round(...)` only after every requested securit
 
 Generated opportunity candidates and the opportunity set are persisted and validated before round/run/ledger publication. Existing deterministic opportunity artifacts are fully checked against the generated payload, content address and canonical manifest before reuse.
 
-All opportunity/round/run/ledger output repositories and pointer paths are checked for symlink and containment escapes before writes. Pre-existing deterministic round/run/ledger final paths are rejected before the legacy writers are invoked, preventing destructive collision cleanup. Publication is ledger-last; downstream failure rolls back only artifacts created by the current transaction.
+All opportunity/round/run/ledger output repositories and pointer paths are checked for symlink and containment escapes before writes. Pre-existing deterministic round/run/ledger final paths are rejected before the legacy writers are invoked, preventing destructive collision cleanup.
+
+Opportunity rollback is ownership-aware and monotonic: it removes only immutable snapshot directories that this publication call actually created, and it never restores an older pointer over a concurrently changed pointer version. If ownership is ambiguous after a concurrent publisher wins a race, valid immutable state is preserved instead of deleted. Publication remains ledger-last.
 
 ## Safety boundary
 
