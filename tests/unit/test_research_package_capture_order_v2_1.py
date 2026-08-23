@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import alpha_cycle.research_package_assembler_v2_1 as assembler
+from alpha_cycle.intelligence.decision_thesis_v2 import ThesisStatus
 from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 
 NOW = datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
@@ -31,6 +32,8 @@ class _ComponentIndex:
             target_variable="net_income",
             target_date=date(2026, 12, 31),
             unit="KRW_million",
+            consensus_gaps=(),
+            price_implied_gaps=(),
         )
 
 
@@ -38,7 +41,11 @@ def test_expectation_gap_cannot_precede_its_decision_view() -> None:
     blockers = []
     package = assembler._assemble_security_package(
         "000660",
-        thesis=SimpleNamespace(snapshot_id="a" * 64),
+        thesis=SimpleNamespace(
+            snapshot_id="a" * 64,
+            captured_at=NOW,
+            status=ThesisStatus.UNDERWRITING,
+        ),
         request=SimpleNamespace(
             evaluation_date=date(2026, 8, 23),
             requested_lane=UnderwritingLane.DEEP,
