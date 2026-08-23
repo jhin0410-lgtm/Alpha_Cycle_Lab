@@ -7,7 +7,10 @@ from datetime import datetime
 from pathlib import Path
 
 from alpha_cycle.intelligence.decision_thesis_v2 import InvestmentThesisSnapshot
-from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundBlocker
+from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import (
+    ResearchRoundBlocker,
+    ResearchRoundMode,
+)
 from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
     AnalysisRequestSnapshot,
     ResearchRoundRunSnapshot,
@@ -29,6 +32,7 @@ from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
 @dataclass(frozen=True)
 class ResearchThesisPreflightReceipt:
     request: AnalysisRequestSnapshot
+    research_cutoff_at: datetime
     thesis_snapshots: tuple[InvestmentThesisSnapshot, ...]
     blockers: tuple[ResearchRoundBlocker, ...]
     run: ResearchRoundRunSnapshot | None
@@ -45,6 +49,7 @@ class ResearchThesisPreflightReceipt:
         return {
             "request_id": self.request.request_id,
             "request_snapshot_id": self.request.snapshot_id,
+            "research_cutoff_at": self.research_cutoff_at.isoformat(),
             "thesis_snapshot_ids": [item.snapshot_id for item in self.thesis_snapshots],
             "blockers": [item.payload() for item in self.blockers],
             "run_snapshot_id": self.run.snapshot_id if self.run is not None else None,
@@ -65,11 +70,13 @@ def preflight_pending_request_theses(
     run_id: str,
     processed_at: datetime,
     artifact_root: str | Path,
+    research_cutoff_at: datetime | None = None,
 ) -> ResearchThesisPreflightReceipt:
     """Resolve typed theses or append an explicit pre-orchestration blocker run."""
 
-    if processed_at.tzinfo is None or processed_at.utcoffset() is None:
-        raise ValueError("processed_at must be timezone-aware")
+    _require_aware(processed_at, "processed_at")
+    if research_cutoff_at is not None:
+        _require_aware(research_cutoff_at, "research_cutoff_at")
     root = Path(artifact_root)
 
     with exclusive_research_ledger_write_lock(root):
@@ -83,6 +90,13 @@ def preflight_pending_request_theses(
         if any(item.run_id == run_id for item in ledger.runs):
             raise ValueError(f"run_id already exists in the latest ledger: {run_id}")
 
+        cutoff = _resolve_research_cutoff(
+            request,
+            processed_at=processed_at,
+            research_cutoff_at=research_cutoff_at,
+        )
+        preflight_flags = _preflight_flags(request, cutoff)
+
         theses: list[InvestmentThesisSnapshot] = []
         blockers: list[ResearchRoundBlocker] = []
         for security_id in _unique_security_ids(request.security_ids):
@@ -90,7 +104,7 @@ def preflight_pending_request_theses(
                 root,
                 security_id=security_id,
                 horizon_trading_days=request.horizon_trading_days,
-                as_of=processed_at,
+                as_of=cutoff,
             )
             if thesis is None:
                 blockers.append(
@@ -99,7 +113,7 @@ def preflight_pending_request_theses(
                         code="investment_thesis_snapshot_missing",
                         detail=(
                             "no validated persisted InvestmentThesisSnapshot exists for the "
-                            "requested security and trading-day horizon at the preflight cutoff"
+                            "requested security and trading-day horizon at the research cutoff"
                         ),
                         security_id=security_id,
                     )
@@ -112,6 +126,7 @@ def preflight_pending_request_theses(
         if not blockers_tuple:
             return ResearchThesisPreflightReceipt(
                 request=request,
+                research_cutoff_at=cutoff,
                 thesis_snapshots=theses_tuple,
                 blockers=(),
                 run=None,
@@ -122,9 +137,14 @@ def preflight_pending_request_theses(
             )
 
         prior = _latest_run_for_request(ledger, request.snapshot_id)
-        if prior is not None and prior.blockers == blockers_tuple:
+        if (
+            prior is not None
+            and prior.blockers == blockers_tuple
+            and all(flag in prior.flags for flag in preflight_flags)
+        ):
             return ResearchThesisPreflightReceipt(
                 request=request,
+                research_cutoff_at=cutoff,
                 thesis_snapshots=theses_tuple,
                 blockers=blockers_tuple,
                 run=prior,
@@ -145,7 +165,7 @@ def preflight_pending_request_theses(
             started_at=processed_at,
             completed_at=processed_at,
             blockers=blockers_tuple,
-            flags=("typed_thesis_preflight_blocked",),
+            flags=preflight_flags,
         )
         next_ledger = build_research_run_ledger(
             ledger.requests,
@@ -160,6 +180,7 @@ def preflight_pending_request_theses(
             raise
         return ResearchThesisPreflightReceipt(
             request=request,
+            research_cutoff_at=cutoff,
             thesis_snapshots=theses_tuple,
             blockers=blockers_tuple,
             run=run,
@@ -168,6 +189,34 @@ def preflight_pending_request_theses(
             ledger_path=ledger_path,
             changed_history=True,
         )
+
+
+def _resolve_research_cutoff(
+    request: AnalysisRequestSnapshot,
+    *,
+    processed_at: datetime,
+    research_cutoff_at: datetime | None,
+) -> datetime:
+    if request.mode is ResearchRoundMode.REPLAY and research_cutoff_at is None:
+        raise ValueError("replay thesis preflight requires an explicit research_cutoff_at")
+    cutoff = research_cutoff_at or processed_at
+    if cutoff > processed_at:
+        raise ValueError("research_cutoff_at cannot be later than processed_at")
+    if request.mode is ResearchRoundMode.PROSPECTIVE and cutoff < request.requested_at:
+        raise ValueError(
+            "prospective research_cutoff_at cannot precede the analysis request"
+        )
+    return cutoff
+
+
+def _preflight_flags(
+    request: AnalysisRequestSnapshot,
+    cutoff: datetime,
+) -> tuple[str, ...]:
+    flags = ["typed_thesis_preflight_blocked"]
+    if request.mode is ResearchRoundMode.REPLAY:
+        flags.append(f"typed_thesis_replay_cutoff:{cutoff.isoformat()}")
+    return tuple(flags)
 
 
 def _find_request(
@@ -202,3 +251,8 @@ def _unique_security_ids(security_ids: tuple[str, ...]) -> tuple[str, ...]:
         seen.add(key)
         unique.append(security_id)
     return tuple(unique)
+
+
+def _require_aware(value: datetime, field: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field} must be timezone-aware")
