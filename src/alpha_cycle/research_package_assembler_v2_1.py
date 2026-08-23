@@ -404,17 +404,25 @@ def _assemble_security_package(
                 "underwriting_price_implied_binding_mismatch",
                 security_id,
             )
-    if view is not None and gap is not None and (
-        gap.target_variable != view.target_variable
-        or gap.target_date != view.target_date
-        or gap.unit != view.unit
-    ):
-        _block(
-            blockers,
-            "research_package",
-            "decision_gap_target_binding_mismatch",
-            security_id,
-        )
+    if view is not None and gap is not None:
+        if gap.captured_at < view.captured_at:
+            _block(
+                blockers,
+                "research_package",
+                "decision_gap_capture_order_mismatch",
+                security_id,
+            )
+        if (
+            gap.target_variable != view.target_variable
+            or gap.target_date != view.target_date
+            or gap.unit != view.unit
+        ):
+            _block(
+                blockers,
+                "research_package",
+                "decision_gap_target_binding_mismatch",
+                security_id,
+            )
 
     if any(item.security_id == security_id for item in blockers):
         return None
