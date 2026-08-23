@@ -162,12 +162,12 @@ def persist_research_thesis_preflight_state(
             os.fsync(handle.fileno())
         try:
             os.link(temp_path, path)
-        except FileExistsError:
+        except FileExistsError as exc:
             existing = load_research_thesis_preflight_state(path)
             if existing != snapshot:
                 raise ResearchPreflightStateError(
                     "concurrent preflight-state publication conflicts with content address"
-                )
+                ) from exc
     finally:
         temp_path.unlink(missing_ok=True)
     return path
