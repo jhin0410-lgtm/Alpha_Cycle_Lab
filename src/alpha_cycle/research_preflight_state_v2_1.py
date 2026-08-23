@@ -95,6 +95,18 @@ class CurrentResearchThesisPreflightState:
         _require_utc(self.selected_at, "selected_at")
 
 
+@dataclass(frozen=True)
+class _CurrentPointer:
+    request_snapshot_id: str
+    state_snapshot_id: str
+    selected_at: datetime
+
+    def __post_init__(self) -> None:
+        _validate_sha(self.request_snapshot_id, "request_snapshot_id")
+        _validate_sha(self.state_snapshot_id, "state_snapshot_id")
+        _require_utc(self.selected_at, "selected_at")
+
+
 def build_research_thesis_preflight_state(
     request: AnalysisRequestSnapshot,
     *,
@@ -179,6 +191,13 @@ def publish_current_research_thesis_preflight_state(
             raise ResearchPreflightStateError(
                 "preflight-current selected_at cannot move backward"
             )
+        if (
+            prior.selected_at == selected
+            and prior.state_snapshot_id != snapshot.snapshot_id
+        ):
+            raise ResearchPreflightStateError(
+                "one preflight-current selected_at cannot select different states"
+            )
     payload = {
         "schema_version": RESEARCH_PREFLIGHT_STATE_SCHEMA_VERSION,
         "request_snapshot_id": snapshot.request_snapshot_id,
@@ -239,9 +258,9 @@ def load_current_research_thesis_preflight_states(
     for pointer_path in sorted(pointer_directory.glob("*.json")):
         pointer = _load_pointer(pointer_path)
         state = load_research_thesis_preflight_state(
-            state_directory / f"{pointer.state.snapshot_id}.json"
+            state_directory / f"{pointer.state_snapshot_id}.json"
         )
-        if state.request_snapshot_id != pointer.state.request_snapshot_id:
+        if state.request_snapshot_id != pointer.request_snapshot_id:
             raise ResearchPreflightStateError(
                 "preflight-current pointer references a different request"
             )
@@ -275,12 +294,6 @@ def canonical_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-@dataclass(frozen=True)
-class _CurrentPointer:
-    selected_at: datetime
-    state: ResearchThesisPreflightStateSnapshot
-
-
 def _load_pointer(path: Path) -> _CurrentPointer:
     payload = _load_object(path)
     if frozenset(payload) != _POINTER_KEYS:
@@ -289,36 +302,16 @@ def _load_pointer(path: Path) -> _CurrentPointer:
         raise ResearchPreflightStateError("unsupported preflight-current pointer schema version")
     request_snapshot_id = _required_text(payload, "request_snapshot_id")
     state_snapshot_id = _required_text(payload, "state_snapshot_id")
-    _validate_sha(request_snapshot_id, "request_snapshot_id")
-    _validate_sha(state_snapshot_id, "state_snapshot_id")
     if path.stem != request_snapshot_id:
         raise ResearchPreflightStateError(
             "preflight-current pointer filename does not match request_snapshot_id"
         )
     selected_at = _datetime(_required_text(payload, "selected_at"), "selected_at")
-    _require_utc(selected_at, "selected_at")
-    # The state object is a lightweight locator here; the caller reloads it from the state store.
-    placeholder = ResearchThesisPreflightStateSnapshot(
+    return _CurrentPointer(
         request_snapshot_id=request_snapshot_id,
-        request_id="pointer-placeholder",
-        mode=ResearchRoundMode.PROSPECTIVE,
-        evaluation_date=date(1970, 1, 1),
-        horizon_trading_days=60,
-        security_ids=("pointer-placeholder",),
-        research_cutoff_at=datetime(1970, 1, 1, tzinfo=UTC),
-        thesis_snapshot_ids=(),
-        blockers=(),
-        guardrail_evidence_id="0" * 64,
+        state_snapshot_id=state_snapshot_id,
+        selected_at=selected_at,
     )
-    object.__setattr__(placeholder, "_pointer_state_snapshot_id", state_snapshot_id)
-    return _CurrentPointer(selected_at=selected_at, state=placeholder)
-
-
-def _pointer_state_snapshot_id(pointer: _CurrentPointer) -> str:
-    value = getattr(pointer.state, "_pointer_state_snapshot_id", None)
-    if not isinstance(value, str):
-        raise ResearchPreflightStateError("preflight-current pointer state id is unavailable")
-    return value
 
 
 def _parse_state(payload: dict[str, Any]) -> ResearchThesisPreflightStateSnapshot:
