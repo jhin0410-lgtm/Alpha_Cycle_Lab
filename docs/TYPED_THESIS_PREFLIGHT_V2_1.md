@@ -22,9 +22,9 @@ The loader reconstructs all nested typed objects:
 - `ThesisStatus`;
 - forecast/scenario/evidence references and thesis lineage.
 
-A JSON file is not accepted merely because it has the right filename. The declared snapshot identity, filename, reconstructed typed object, and canonical `snapshot_id` must agree.
+A JSON file is not accepted merely because it has the right filename. The complete persisted payload excluding `snapshot_id` is hashed first, then the declared snapshot identity, filename, reconstructed typed object, and canonical `snapshot_id` must all agree. Unknown or silently ignored fields therefore cannot preserve the original content-addressed identity.
 
-Latest-thesis lookup uses embedded `captured_at`, snapshot lineage/version, and content identity. Filesystem modification time is never treated as research chronology. Future thesis snapshots are excluded from an earlier preflight cutoff.
+Latest-thesis lookup uses embedded `captured_at`, snapshot lineage/version, and content identity. Version 2+ snapshots are admitted only when the referenced parent artifact exists, matches the same thesis/security/horizon, and immediately precedes the child version. Filesystem modification time is never treated as research chronology. Future thesis snapshots are excluded from an earlier preflight cutoff.
 
 Runtime path:
 
@@ -42,17 +42,20 @@ Runtime path:
 4. finds the newest valid typed thesis for every requested security/horizon as of `processed_at`;
 5. emits one structured blocker per missing security;
 6. appends a `PRE_ORCHESTRATION_BLOCKED` run and a new immutable ledger snapshot when blockers changed;
-7. avoids duplicating an identical blocker state on repeated preflight;
-8. returns `ready_for_package_assembly=True` only when every requested thesis is present.
+7. refuses to append blocker history unless the new ledger `built_at` would be strictly later than the current ledger head;
+8. avoids duplicating an identical blocker state on repeated preflight;
+9. returns `ready_for_package_assembly=True` only when every requested thesis is present.
+
+Duplicate security IDs are rejected at new request intake, and preflight also deduplicates legacy request security IDs defensively before resolving theses or blockers.
 
 Passing this preflight **does not** mean the research round is ready or investable. It only means the thesis layer is available for the next typed package assembly step.
 
 ## Shared write serialization
 
-Research request intake and preflight now use the same local lock:
+Research request intake and preflight use the same local lock. The shared implementation intentionally retains the pre-#301 filename so an already-running #300 intake process and new #301 code cannot acquire different locks during a rolling upgrade:
 
 ```text
-<artifact-root>/.research_run_ledger.lock
+<artifact-root>/.research_request_intake.lock
 ```
 
 This prevents an intake writer and a processor writer from reading the same old ledger and creating competing append histories.
