@@ -39,10 +39,15 @@ def _request() -> AnalysisRequestSnapshot:
     )
 
 
-def _blocked_run(request: AnalysisRequestSnapshot, at: datetime):
+def _blocked_run(
+    request: AnalysisRequestSnapshot,
+    at: datetime,
+    *,
+    flags: tuple[str, ...] = ("typed_research_package_assembler_blocked",),
+):
     return build_pre_orchestration_blocked_run(
         request,
-        run_id=f"package-blocked-{at.minute}",
+        run_id=f"blocked-{at.minute}-{flags[0]}",
         started_at=at,
         completed_at=at,
         blockers=(
@@ -53,7 +58,7 @@ def _blocked_run(request: AnalysisRequestSnapshot, at: datetime):
                 security_id="000660",
             ),
         ),
-        flags=("typed_research_package_assembler_blocked",),
+        flags=flags,
     )
 
 
@@ -92,10 +97,36 @@ def test_later_package_blocker_wins_over_older_thesis_ready_pointer() -> None:
     assert rows[0].latest_run_completed_at == blocked_at
 
 
-def test_later_thesis_ready_pointer_can_clear_an_older_preflight_blocker() -> None:
+def test_newer_thesis_ready_pointer_cannot_clear_package_assembler_blocker() -> None:
     request = _request()
     blocked_at = NOW + timedelta(minutes=1)
     run = _blocked_run(request, blocked_at)
+    ledger = build_research_run_ledger(
+        (request,),
+        (run,),
+        built_at=blocked_at,
+    )
+    current = _ready_preflight(request, NOW + timedelta(minutes=2))
+
+    rows = build_research_inbox(
+        ledger,
+        current_preflights={request.snapshot_id: current},
+    )
+
+    assert len(rows) == 1
+    assert rows[0].state == "pre_orchestration_blocked"
+    assert rows[0].blocker_count == 1
+    assert rows[0].latest_run_completed_at == blocked_at
+
+
+def test_later_thesis_ready_pointer_can_clear_older_thesis_preflight_blocker() -> None:
+    request = _request()
+    blocked_at = NOW + timedelta(minutes=1)
+    run = _blocked_run(
+        request,
+        blocked_at,
+        flags=("typed_thesis_preflight_blocked",),
+    )
     ledger = build_research_run_ledger(
         (request,),
         (run,),
