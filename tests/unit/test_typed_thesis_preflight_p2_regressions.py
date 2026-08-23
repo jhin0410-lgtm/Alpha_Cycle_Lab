@@ -117,6 +117,17 @@ def test_unknown_thesis_field_cannot_bypass_content_address_tamper_detection(tmp
         load_investment_thesis(path)
 
 
+def test_nested_unknown_thesis_field_also_changes_content_address(tmp_path) -> None:
+    thesis = _thesis()
+    path = persist_investment_thesis(thesis, artifact_root=tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["claims"][0]["unknown_claim_field"] = "must-not-be-ignored"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(InvestmentThesisRepositoryError, match="persisted payload"):
+        load_investment_thesis(path)
+
+
 def test_backdated_preflight_cannot_append_ledger_older_than_current_head(tmp_path) -> None:
     receipt = _record_request(tmp_path, recorded_at=NOW + timedelta(seconds=10))
 
