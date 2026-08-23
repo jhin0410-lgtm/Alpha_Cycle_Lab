@@ -19,12 +19,20 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
     ThesisStatus,
 )
 from alpha_cycle.intelligence.decision_view_v2_1 import (
+    DECISION_VIEW_SCHEMA_VERSION,
     DecisionExpectationGapSnapshot,
+    DecisionViewSelectionMethod,
+    DecisionViewSelectionRuleSnapshot,
     DecisionViewSnapshot,
 )
 from alpha_cycle.intelligence.forecast_ledger import (
     FORECAST_LEDGER_SCHEMA_VERSION,
+    ForecastDirection,
+    ForecasterKind,
     ForecastRegistrationMode,
+    ForecastRegistrationSnapshot,
+    OrdinalAssessment,
+    PrimaryErrorMetric,
 )
 from alpha_cycle.intelligence.opportunity_set_v2_1 import (
     OPPORTUNITY_SET_SCHEMA_VERSION,
@@ -261,65 +269,44 @@ def _persisted_tournament_registrations_match(
     registrations = _load_persisted_forecast_registrations(root, snapshot_ids)
     if len(registrations) != len(snapshot_ids):
         return False
-    descriptors: set[tuple[str, str]] = set()
+    descriptors: set[tuple[ForecasterKind, str]] = set()
     clusters: set[str] = set()
     tournament = underwriting.forecast_tournament
-    for payload, expected_snapshot_id, expected_forecast_id in zip(
+    for registration, expected_snapshot_id, expected_forecast_id in zip(
         registrations,
         snapshot_ids,
         forecast_ids,
         strict=True,
     ):
-        if _sha(payload) != expected_snapshot_id:
+        if registration.snapshot_id != expected_snapshot_id:
             return False
-        if payload.get("forecast_id") != expected_forecast_id:
+        if registration.forecast_id != expected_forecast_id:
             return False
-        if payload.get("security_id") != view.security_id:
+        if registration.security_id != view.security_id:
             return False
-        if payload.get("target_variable") != view.target_variable:
+        if registration.target_variable != view.target_variable:
             return False
-        if payload.get("target_date") != view.target_date.isoformat():
+        if registration.target_date != view.target_date:
             return False
-        if payload.get("unit") != view.unit:
+        if registration.unit != view.unit:
             return False
-        if payload.get("primary_error_metric") != tournament.primary_error_metric:
+        if registration.primary_error_metric.value != tournament.primary_error_metric:
             return False
-        if payload.get("guardrail_evidence_id") != underwriting.guardrail_evidence_id:
-            return False
-        try:
-            information_cutoff = _payload_datetime(payload, "information_cutoff")
-            registered_at = _payload_datetime(payload, "registered_at")
-            ledger_recorded_at = _payload_datetime(payload, "ledger_recorded_at")
-            forecast_origin = _payload_datetime(payload, "forecast_origin")
-            target_date = date.fromisoformat(str(payload.get("target_date")))
-        except (TypeError, ValueError):
+        if registration.guardrail_evidence_id != underwriting.guardrail_evidence_id:
             return False
         if not (
-            information_cutoff <= registered_at <= ledger_recorded_at
-            and registered_at <= forecast_origin
-            and information_cutoff == view.information_cutoff
-            and forecast_origin == view.forecast_origin
-            and target_date == view.target_date
-            and forecast_origin.date() < target_date
-            and ledger_recorded_at <= view.captured_at
+            registration.information_cutoff <= registration.registered_at
+            <= registration.ledger_recorded_at
+            and registration.registered_at <= registration.forecast_origin
+            and registration.information_cutoff == view.information_cutoff
+            and registration.forecast_origin == view.forecast_origin
+            and registration.target_date == view.target_date
+            and registration.forecast_origin.date() < registration.target_date
+            and registration.ledger_recorded_at <= view.captured_at
         ):
             return False
-        if (
-            payload.get("registration_mode")
-            == ForecastRegistrationMode.NATIVE_PROSPECTIVE.value
-            and ledger_recorded_at > forecast_origin
-        ):
-            return False
-        forecaster_kind = payload.get("forecaster_kind")
-        model_family = payload.get("model_family")
-        dependency_cluster = payload.get("dependency_cluster_id")
-        if not all(
-            isinstance(value, str) and value.strip()
-            for value in (forecaster_kind, model_family, dependency_cluster)
-        ):
-            return False
-        descriptors.add((str(forecaster_kind), str(model_family)))
-        clusters.add(str(dependency_cluster))
+        descriptors.add((registration.forecaster_kind, registration.model_family))
+        clusters.add(registration.dependency_cluster_id)
 
     if len(descriptors) < 2:
         return False
@@ -341,22 +328,56 @@ def _persisted_tournament_registrations_match(
     except ValueError:
         return False
     selected = registrations[selected_index]
-    if selected.get("forecast_id") != view.selected_forecast_id:
+    if selected.forecast_id != view.selected_forecast_id:
         return False
-    if selected.get("forecaster_kind") != view.selected_forecaster_kind.value:
+    if selected.forecaster_kind is not view.selected_forecaster_kind:
         return False
-    if selected.get("model_family") != view.selected_model_family:
+    if selected.model_family != view.selected_model_family:
         return False
-    selected_value = selected.get("forecast_value")
-    if not isinstance(selected_value, (int, float)) or isinstance(selected_value, bool):
+    if not _numbers_match(selected.forecast_value, view.selected_forecast_value):
         return False
-    return _numbers_match(float(selected_value), view.selected_forecast_value)
+
+    rule = _load_persisted_decision_view_selection_rule(
+        root,
+        view.selection_rule_snapshot_id,
+    )
+    if rule is None:
+        return False
+    if rule.guardrail_evidence_id != underwriting.guardrail_evidence_id:
+        return False
+    if (
+        rule.security_id != view.security_id
+        or rule.target_variable != view.target_variable
+        or rule.target_date != view.target_date
+        or rule.unit != view.unit
+    ):
+        return False
+    if rule.registered_at.date() > view.evaluation_date:
+        return False
+    if any(rule.registered_at >= item.registered_at for item in registrations):
+        return False
+    matching_rule_forecasts = tuple(
+        item
+        for item in registrations
+        if item.forecaster_kind is rule.selected_forecaster_kind
+        and item.model_family == rule.selected_model_family
+    )
+    if len(matching_rule_forecasts) != 1:
+        return False
+    pinned = matching_rule_forecasts[0]
+    return bool(
+        rule.selection_method is DecisionViewSelectionMethod.PINNED_FORECASTER_IDENTITY
+        and pinned.snapshot_id == view.selected_forecast_snapshot_id
+        and pinned.forecast_id == view.selected_forecast_id
+        and rule.selected_forecaster_kind is view.selected_forecaster_kind
+        and rule.selected_model_family == view.selected_model_family
+    )
 
 
 def _load_persisted_forecast_registrations(
     root: Path,
     snapshot_ids: tuple[str, ...],
-) -> tuple[dict[str, object], ...]:
+) -> tuple[ForecastRegistrationSnapshot, ...]:
     resolved_root = require_trusted_artifact_root(root)
     repository = root / "registration"
     _require_safe_repository(
@@ -366,7 +387,7 @@ def _load_persisted_forecast_registrations(
     )
     if not repository.exists():
         return ()
-    loaded: list[dict[str, object]] = []
+    loaded: list[ForecastRegistrationSnapshot] = []
     for snapshot_id in snapshot_ids:
         matches = tuple(
             path
@@ -397,12 +418,15 @@ def _load_persisted_forecast_registrations(
         )
         payload = _load_json_object(payload_path)
         manifest = _load_json_object(manifest_path)
-        if _sha(payload) != snapshot_id:
-            return ()
         try:
-            ledger_recorded_at = _payload_datetime(payload, "ledger_recorded_at")
-        except ValueError:
+            registration = _reconstruct_forecast_registration(payload)
+        except (KeyError, TypeError, ValueError):
             return ()
+        if registration.payload_without_id() != payload:
+            return ()
+        if registration.snapshot_id != snapshot_id or _sha(payload) != snapshot_id:
+            return ()
+        ledger_recorded_at = registration.ledger_recorded_at
         expected_directory = (
             ledger_recorded_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
             + f"__{snapshot_id[:12]}"
@@ -417,17 +441,181 @@ def _load_persisted_forecast_registrations(
             "immutable": True,
             "order_api_enabled": False,
             "files": ["forecast_registration.json"],
-            "forecast_id": payload.get("forecast_id"),
-            "registration_mode": payload.get("registration_mode"),
-            "dependency_cluster_id": payload.get("dependency_cluster_id"),
-            "guardrail_evidence_id": payload.get("guardrail_evidence_id"),
+            "forecast_id": registration.forecast_id,
+            "registration_mode": registration.registration_mode.value,
+            "dependency_cluster_id": registration.dependency_cluster_id,
+            "guardrail_evidence_id": registration.guardrail_evidence_id,
             "outcome_observed": False,
             "evaluation_run": False,
         }
         if manifest != expected_manifest:
             return ()
-        loaded.append(payload)
+        loaded.append(registration)
     return tuple(loaded)
+
+
+def _reconstruct_forecast_registration(
+    payload: dict[str, object],
+) -> ForecastRegistrationSnapshot:
+    direction_raw = payload.get("direction")
+    direction = (
+        None
+        if direction_raw is None
+        else ForecastDirection(_payload_text(payload, "direction"))
+    )
+    return ForecastRegistrationSnapshot(
+        forecast_id=_payload_text(payload, "forecast_id"),
+        registered_at=_payload_datetime(payload, "registered_at"),
+        ledger_recorded_at=_payload_datetime(payload, "ledger_recorded_at"),
+        forecast_origin=_payload_datetime(payload, "forecast_origin"),
+        information_cutoff=_payload_datetime(payload, "information_cutoff"),
+        security_id=_payload_text(payload, "security_id"),
+        target_variable=_payload_text(payload, "target_variable"),
+        target_date=_payload_date(payload, "target_date"),
+        horizon_label=_payload_text(payload, "horizon_label"),
+        forecast_value=_payload_float(payload, "forecast_value"),
+        unit=_payload_text(payload, "unit"),
+        range_lower=_payload_optional_float(payload, "range_lower"),
+        range_upper=_payload_optional_float(payload, "range_upper"),
+        direction=direction,
+        direction_reference_value=_payload_optional_float(
+            payload, "direction_reference_value"
+        ),
+        direction_flat_tolerance=_payload_float(payload, "direction_flat_tolerance"),
+        confidence=OrdinalAssessment(_payload_text(payload, "confidence")),
+        confidence_rationale=_payload_text(payload, "confidence_rationale"),
+        forecaster_kind=ForecasterKind(_payload_text(payload, "forecaster_kind")),
+        model_family=_payload_text(payload, "model_family"),
+        driver_refs=_payload_text_tuple(payload, "driver_refs"),
+        regime_tags=_payload_text_tuple(payload, "regime_tags"),
+        decision_relevance=OrdinalAssessment(
+            _payload_text(payload, "decision_relevance")
+        ),
+        difficulty=OrdinalAssessment(_payload_text(payload, "difficulty")),
+        baseline_refs=_payload_text_tuple(payload, "baseline_refs"),
+        dependency_cluster_id=_payload_text(payload, "dependency_cluster_id"),
+        source_evidence_ids=_payload_text_tuple(payload, "source_evidence_ids"),
+        registration_mode=ForecastRegistrationMode(
+            _payload_text(payload, "registration_mode")
+        ),
+        primary_error_metric=PrimaryErrorMetric(
+            _payload_text(payload, "primary_error_metric")
+        ),
+        guardrail_evidence_id=_payload_text(payload, "guardrail_evidence_id"),
+    )
+
+
+def _load_persisted_decision_view_selection_rule(
+    root: Path,
+    snapshot_id: str,
+) -> DecisionViewSelectionRuleSnapshot | None:
+    resolved_root = require_trusted_artifact_root(root)
+    repository = root / "decision_view_selection_rule"
+    _require_safe_repository(
+        repository,
+        resolved_root=resolved_root,
+        label="decision view selection rule",
+    )
+    if not repository.exists():
+        return None
+    matches = tuple(
+        path
+        for path in repository.iterdir()
+        if path.is_dir()
+        and not path.name.startswith(".")
+        and path.name.endswith(f"__{snapshot_id[:12]}")
+    )
+    if len(matches) != 1:
+        return None
+    directory = matches[0]
+    _require_safe_directory_slot(
+        directory,
+        repository,
+        "decision view selection rule",
+    )
+    payload_path = directory / "decision_view_selection_rule.json"
+    manifest_path = directory / "manifest.json"
+    _require_safe_file_slot(payload_path, directory, "decision view selection rule payload")
+    _require_safe_file_slot(manifest_path, directory, "decision view selection rule manifest")
+    payload = _load_json_object(payload_path)
+    manifest = _load_json_object(manifest_path)
+    try:
+        rule = DecisionViewSelectionRuleSnapshot(
+            rule_id=_payload_text(payload, "rule_id"),
+            registered_at=_payload_datetime(payload, "registered_at"),
+            security_id=_payload_text(payload, "security_id"),
+            target_variable=_payload_text(payload, "target_variable"),
+            target_date=_payload_date(payload, "target_date"),
+            unit=_payload_text(payload, "unit"),
+            selection_method=DecisionViewSelectionMethod(
+                _payload_text(payload, "selection_method")
+            ),
+            selected_forecaster_kind=ForecasterKind(
+                _payload_text(payload, "selected_forecaster_kind")
+            ),
+            selected_model_family=_payload_text(payload, "selected_model_family"),
+            rationale=_payload_text(payload, "rationale"),
+            source_evidence_ids=_payload_text_tuple(payload, "source_evidence_ids"),
+            guardrail_evidence_id=_payload_text(payload, "guardrail_evidence_id"),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    if rule.payload_without_id() != payload:
+        return None
+    if rule.snapshot_id != snapshot_id or _sha(payload) != snapshot_id:
+        return None
+    expected_directory = (
+        rule.registered_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        + f"__{snapshot_id[:12]}"
+    )
+    if directory.name != expected_directory:
+        return None
+    expected_manifest = {
+        "schema_version": DECISION_VIEW_SCHEMA_VERSION,
+        "object_type": "decision_view_selection_rule",
+        "snapshot_id": snapshot_id,
+        "captured_at": rule.registered_at.isoformat(),
+        "immutable": True,
+        "files": ["decision_view_selection_rule.json"],
+        "decision_score_enabled": False,
+        "target_price_enabled": False,
+        "automatic_execution_enabled": False,
+    }
+    return rule if manifest == expected_manifest else None
+
+
+def _payload_text(payload: dict[str, object], field: str) -> str:
+    raw = payload[field]
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError(f"{field} must be non-empty text")
+    return raw
+
+
+def _payload_text_tuple(payload: dict[str, object], field: str) -> tuple[str, ...]:
+    raw = payload[field]
+    if not isinstance(raw, list) or any(not isinstance(item, str) for item in raw):
+        raise ValueError(f"{field} must be a list of strings")
+    return tuple(raw)
+
+
+def _payload_date(payload: dict[str, object], field: str) -> date:
+    return date.fromisoformat(_payload_text(payload, field))
+
+
+def _payload_float(payload: dict[str, object], field: str) -> float:
+    raw = payload[field]
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        raise ValueError(f"{field} must be numeric")
+    return float(raw)
+
+
+def _payload_optional_float(payload: dict[str, object], field: str) -> float | None:
+    raw = payload[field]
+    if raw is None:
+        return None
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        raise ValueError(f"{field} must be numeric or null")
+    return float(raw)
 
 
 def _payload_datetime(payload: dict[str, object], field: str) -> datetime:

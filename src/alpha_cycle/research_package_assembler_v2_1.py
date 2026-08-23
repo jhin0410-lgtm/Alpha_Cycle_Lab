@@ -7,6 +7,8 @@ checks their PIT/request bindings, and delegates research logic to the existing
 
 from __future__ import annotations
 
+import json
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -17,8 +19,9 @@ from alpha_cycle.intelligence.decision_guardrails_v2_1 import (
 )
 from alpha_cycle.intelligence.decision_thesis_v2 import InvestmentThesisSnapshot
 from alpha_cycle.intelligence.opportunity_set_v2_1 import (
-    persist_opportunity_candidate,
-    persist_opportunity_set,
+    OPPORTUNITY_SET_SCHEMA_VERSION,
+    OpportunityCandidateSnapshot,
+    OpportunitySetSnapshot,
 )
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import (
     ResearchRoundArtifacts,
@@ -69,6 +72,20 @@ from alpha_cycle.research_preflight_state_v2_1 import (
     load_current_research_thesis_preflight_states,
     validate_preflight_state_request_binding,
 )
+
+
+@dataclass(frozen=True)
+class _OwnedOpportunityPublication:
+    root: Path
+    directory: Path
+    directory_created: bool
+    root_created: bool
+    pointer: Path
+    pointer_before: bytes | None
+    pointer_after: bytes
+    pointer_inode: int
+    pointer_mtime_ns: int
+    pointer_size: int
 
 
 @dataclass(frozen=True)
@@ -221,8 +238,11 @@ def assemble_and_run_research_package(
                 packages.append(package)
 
         if tuple(resolved_thesis_ids) != preflight.thesis_snapshot_ids:
-            raise ValueError(
-                "current thesis preflight no longer matches PIT-selected thesis snapshots"
+            _block(
+                blockers,
+                "thesis",
+                "preflight_thesis_identity_mismatch",
+                None,
             )
         if len(request.security_ids) < 2:
             _block(
@@ -600,54 +620,28 @@ def _publish_orchestrated_artifacts(
     validate_publication_layout(root, artifacts=artifacts, run=run, ledger=ledger)
     validate_existing_opportunity_artifacts(root, artifacts)
 
-    candidate_root = root / "opportunity_candidate"
-    candidate_pointer = candidate_root / "latest_opportunity_candidate.json"
-    candidate_root_existed = candidate_root.exists()
-    candidate_pointer_before = _optional_bytes(candidate_pointer)
-    candidate_new_directories = tuple(
-        directory
-        for item in artifacts.opportunity_candidates
-        if not (
-            directory := _opportunity_snapshot_directory(
-                root,
-                object_name="opportunity_candidate",
-                captured_at=item.captured_at,
-                snapshot_id=item.snapshot_id,
-            )
-        ).exists()
-    )
-
-    set_root = root / "opportunity_set"
-    set_pointer = set_root / "latest_opportunity_set.json"
-    set_root_existed = set_root.exists()
-    set_pointer_before = _optional_bytes(set_pointer)
-    set_new_directories: tuple[Path, ...] = ()
-    if artifacts.opportunity_set is not None:
-        directory = _opportunity_snapshot_directory(
-            root,
-            object_name="opportunity_set",
-            captured_at=artifacts.opportunity_set.captured_at,
-            snapshot_id=artifacts.opportunity_set.snapshot_id,
-        )
-        if not directory.exists():
-            set_new_directories = (directory,)
-
+    opportunity_publications: list[_OwnedOpportunityPublication] = []
     round_path: Path | None = None
     run_path: Path | None = None
     try:
         for candidate in artifacts.opportunity_candidates:
-            persist_opportunity_candidate(candidate, output_root=root)
+            publication = _persist_owned_opportunity_snapshot(candidate, output_root=root)
+            opportunity_publications.append(publication)
             validate_persisted_opportunity_candidate(
                 root,
                 candidate,
-                require_pointer=True,
+                require_pointer=_pointer_version_is_current(publication),
             )
         if artifacts.opportunity_set is not None:
-            persist_opportunity_set(artifacts.opportunity_set, output_root=root)
+            publication = _persist_owned_opportunity_snapshot(
+                artifacts.opportunity_set,
+                output_root=root,
+            )
+            opportunity_publications.append(publication)
             validate_persisted_opportunity_set(
                 root,
                 artifacts.opportunity_set,
-                require_pointer=True,
+                require_pointer=_pointer_version_is_current(publication),
             )
         round_path = persist_research_round(artifacts.snapshot, output_root=root)
         run_path = persist_research_run(run, output_root=root)
@@ -662,22 +656,8 @@ def _publish_orchestrated_artifacts(
                 path.unlink(missing_ok=True)
             except BaseException as cleanup_exc:
                 cleanup_errors.append(cleanup_exc)
-        _rollback_opportunity_repository(
-            root=candidate_root,
-            pointer=candidate_pointer,
-            pointer_before=candidate_pointer_before,
-            root_existed=candidate_root_existed,
-            new_directories=candidate_new_directories,
-            cleanup_errors=cleanup_errors,
-        )
-        _rollback_opportunity_repository(
-            root=set_root,
-            pointer=set_pointer,
-            pointer_before=set_pointer_before,
-            root_existed=set_root_existed,
-            new_directories=set_new_directories,
-            cleanup_errors=cleanup_errors,
-        )
+        for publication in reversed(opportunity_publications):
+            _rollback_owned_opportunity_publication(publication, cleanup_errors)
         if cleanup_errors:
             raise RuntimeError(
                 "orchestrated research publication failed and rollback was incomplete"
@@ -685,50 +665,179 @@ def _publish_orchestrated_artifacts(
         raise exc
 
 
-def _rollback_opportunity_repository(
+def _persist_owned_opportunity_snapshot(
+    snapshot: OpportunityCandidateSnapshot | OpportunitySetSnapshot,
     *,
-    root: Path,
-    pointer: Path,
-    pointer_before: bytes | None,
-    root_existed: bool,
-    new_directories: tuple[Path, ...],
-    cleanup_errors: list[BaseException],
-) -> None:
-    for directory in reversed(new_directories):
+    output_root: Path,
+) -> _OwnedOpportunityPublication:
+    if isinstance(snapshot, OpportunityCandidateSnapshot):
+        object_name = "opportunity_candidate"
+        manifest_extra: dict[str, object] = {
+            "security_id": snapshot.security_id,
+            "research_class": snapshot.research_class.value,
+            "capital_allocation_comparable": snapshot.capital_allocation_comparable,
+        }
+    else:
+        object_name = "opportunity_set"
+        manifest_extra = {
+            "evaluation_date": snapshot.evaluation_date.isoformat(),
+            "horizon_trading_days": snapshot.horizon_trading_days,
+            "candidate_count": len(snapshot.candidates),
+            "comparable_candidate_count": len(snapshot.comparable_security_ids),
+            "pareto_frontier_security_ids": list(snapshot.pareto_frontier_security_ids),
+            "unique_pareto_leader_security_id": snapshot.unique_pareto_leader_security_id,
+            "capital_allocation_recommendation_enabled": False,
+            "automatic_execution_enabled": False,
+        }
+    root = output_root / object_name
+    root_created = not root.exists()
+    root.mkdir(parents=True, exist_ok=True)
+    directory = _opportunity_snapshot_directory(
+        output_root,
+        object_name=object_name,
+        captured_at=snapshot.captured_at,
+        snapshot_id=snapshot.snapshot_id,
+    )
+    directory_created = False
+    if not directory.exists():
+        temporary = root / f".{directory.name}.{os.getpid()}.owned.tmp"
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        temporary.mkdir()
         try:
-            if directory.is_symlink():
-                cleanup_errors.append(
-                    RuntimeError(f"rollback refused symlinked snapshot directory: {directory}")
-                )
-                continue
-            if directory.exists():
-                shutil.rmtree(directory)
-        except BaseException as exc:
-            cleanup_errors.append(exc)
+            manifest = {
+                "schema_version": OPPORTUNITY_SET_SCHEMA_VERSION,
+                "object_type": object_name,
+                "snapshot_id": snapshot.snapshot_id,
+                "captured_at": snapshot.captured_at.isoformat(),
+                "immutable": True,
+                "files": [f"{object_name}.json"],
+                **manifest_extra,
+            }
+            (temporary / f"{object_name}.json").write_text(
+                json.dumps(
+                    snapshot.payload_without_id(),
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+            (temporary / "manifest.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            try:
+                temporary.rename(directory)
+                directory_created = True
+            except OSError:
+                if not directory.exists():
+                    raise
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+
+    pointer = root / f"latest_{object_name}.json"
+    pointer_before = _optional_bytes(pointer)
+    pointer_after = json.dumps(
+        {
+            "schema_version": OPPORTUNITY_SET_SCHEMA_VERSION,
+            "object_type": object_name,
+            "snapshot_id": snapshot.snapshot_id,
+            "snapshot_path": str(directory),
+        },
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    ).encode("utf-8")
+    pointer_temp = root / f".{pointer.name}.{os.getpid()}.owned.tmp"
+    pointer_temp.write_bytes(pointer_after)
     try:
         if pointer_before is None:
-            pointer.unlink(missing_ok=True)
+            try:
+                os.link(pointer_temp, pointer)
+            except FileExistsError:
+                # A concurrent publisher won the absent-pointer race; do not overwrite it.
+                pass
         else:
-            if pointer.is_symlink():
-                pointer.unlink(missing_ok=True)
-            pointer.parent.mkdir(parents=True, exist_ok=True)
-            temporary = pointer.with_name(f".{pointer.name}.rollback")
-            if temporary.is_symlink() or temporary.exists():
-                temporary.unlink(missing_ok=True)
-            temporary.write_bytes(pointer_before)
-            temporary.replace(pointer)
+            pointer_temp.replace(pointer)
+    finally:
+        pointer_temp.unlink(missing_ok=True)
+    if pointer.exists() and pointer.read_bytes() == pointer_after:
+        stat = pointer.stat()
+        inode = stat.st_ino
+        mtime_ns = stat.st_mtime_ns
+        size = stat.st_size
+    else:
+        inode = -1
+        mtime_ns = -1
+        size = -1
+    return _OwnedOpportunityPublication(
+        root=root,
+        directory=directory,
+        directory_created=directory_created,
+        root_created=root_created,
+        pointer=pointer,
+        pointer_before=pointer_before,
+        pointer_after=pointer_after,
+        pointer_inode=inode,
+        pointer_mtime_ns=mtime_ns,
+        pointer_size=size,
+    )
+
+
+def _pointer_version_is_current(publication: _OwnedOpportunityPublication) -> bool:
+    if publication.pointer_inode < 0 or not publication.pointer.exists():
+        return False
+    if publication.pointer.is_symlink():
+        return False
+    try:
+        stat = publication.pointer.stat()
+        return bool(
+            stat.st_ino == publication.pointer_inode
+            and stat.st_mtime_ns == publication.pointer_mtime_ns
+            and stat.st_size == publication.pointer_size
+            and publication.pointer.read_bytes() == publication.pointer_after
+        )
+    except OSError:
+        return False
+
+
+def _rollback_owned_opportunity_publication(
+    publication: _OwnedOpportunityPublication,
+    cleanup_errors: list[BaseException],
+) -> None:
+    # Never restore an older pointer over a possibly newer concurrent publisher. If a pointer
+    # existed before this transaction, preserve this valid immutable publication on failure.
+    if publication.pointer_before is not None:
+        return
+    # If another publisher has changed/replaced the pointer, ownership is no longer exclusive;
+    # preserve both the pointer and immutable directory rather than deleting foreign state.
+    if not _pointer_version_is_current(publication):
+        return
+    try:
+        publication.pointer.unlink(missing_ok=True)
     except BaseException as exc:
         cleanup_errors.append(exc)
-    if not root_existed:
+        return
+    if publication.directory_created:
         try:
-            root.rmdir()
+            if publication.directory.is_symlink():
+                raise RuntimeError(
+                    f"rollback refused symlinked snapshot directory: {publication.directory}"
+                )
+            if publication.directory.exists():
+                shutil.rmtree(publication.directory)
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+            return
+    if publication.root_created:
+        try:
+            publication.root.rmdir()
         except FileNotFoundError:
             pass
         except OSError:
-            if root.exists() and not any(root.iterdir()):
-                cleanup_errors.append(
-                    RuntimeError(f"failed to remove empty rollback directory: {root}")
-                )
+            pass
 
 
 def _require_safe_run_ledger_publication(

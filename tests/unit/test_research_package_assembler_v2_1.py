@@ -25,8 +25,10 @@ from alpha_cycle.intelligence.decision_view_v2_1 import (
     DecisionExpectationGapSnapshot,
     DecisionViewSnapshot,
     PriceImpliedGapObservation,
+    build_decision_view_selection_rule,
     persist_decision_expectation_gap,
     persist_decision_view,
+    persist_decision_view_selection_rule,
 )
 from alpha_cycle.intelligence.forecast_ledger import (
     ForecasterKind,
@@ -208,6 +210,18 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         dependency_cluster_id=f"benchmark-{security_id}",
         forecast_value=18_000_000.0 + offset,
     )
+    selection_rule = build_decision_view_selection_rule(
+        rule_id=f"fixture-selection-{security_id}",
+        registered_at=NOW - timedelta(hours=4),
+        security_id=security_id,
+        target_variable="net_income",
+        target_date=TARGET,
+        unit="KRW_million",
+        selected_forecaster_kind=selected_registration.forecaster_kind,
+        selected_model_family=selected_registration.model_family,
+        rationale="Freeze forecaster identity before forecast registration.",
+        source_evidence_ids=(A,),
+    )
     payoff = PayoffSurfaceSnapshot(
         captured_at=NOW + timedelta(seconds=20 + offset),
         thesis_snapshot_id=thesis.snapshot_id,
@@ -224,7 +238,7 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
     view = DecisionViewSnapshot(
         captured_at=NOW + timedelta(seconds=30 + offset),
         evaluation_date=EVAL,
-        selection_rule_snapshot_id=C,
+        selection_rule_snapshot_id=selection_rule.snapshot_id,
         security_id=security_id,
         target_variable="net_income",
         target_date=TARGET,
@@ -333,6 +347,7 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         gap,
         underwriting,
         (selected_registration, benchmark_registration),
+        selection_rule,
     )
 
 
@@ -369,7 +384,9 @@ def _persist_components(
     mismatch_first_tournament: bool = False,
 ) -> None:
     for index, thesis in enumerate(theses):
-        payoff, view, gap, underwriting, registrations = _components(thesis, index)
+        payoff, view, gap, underwriting, registrations, selection_rule = _components(
+            thesis, index
+        )
         if mismatch_first_tournament and index == 0:
             underwriting = replace(
                 underwriting,
@@ -378,6 +395,7 @@ def _persist_components(
                     target_variable="revenue",
                 ),
             )
+        persist_decision_view_selection_rule(selection_rule, output_root=tmp_path)
         for registration in registrations:
             persist_forecast_registration(registration, output_root=tmp_path)
         persist_payoff_surface(payoff, output_root=tmp_path / "payoff_surface")
@@ -495,3 +513,29 @@ def test_invalid_run_id_leaves_no_round_or_opportunity_artifacts(tmp_path: Path)
     assert not (tmp_path / "opportunity_candidate").exists()
     assert not (tmp_path / "opportunity_set").exists()
     assert not (tmp_path / "research_round_v2_1").exists()
+
+
+def test_missing_preflight_selected_thesis_persists_current_package_blocker(
+    tmp_path: Path,
+) -> None:
+    theses = _prepare_ready_request(tmp_path)
+    missing = theses[0]
+    (tmp_path / "investment_thesis_v2_1" / f"{missing.snapshot_id}.json").unlink()
+
+    receipt = assemble_and_run_research_package(
+        request_id="typed-package-round",
+        round_id="round-stale-preflight-thesis",
+        run_id="package-stale-preflight-thesis",
+        processed_at=NOW + timedelta(minutes=2),
+        artifact_root=tmp_path,
+    )
+
+    assert receipt.orchestrated is None
+    assert receipt.run is not None
+    assert receipt.run.kind is ResearchRunKind.PRE_ORCHESTRATION_BLOCKED
+    codes = {item.code for item in receipt.blockers}
+    assert "investment_thesis_snapshot_missing" in codes
+    assert "preflight_thesis_identity_mismatch" in codes
+    state = load_latest_observatory_state(tmp_path)
+    assert state is not None
+    assert {row.state for row in state.inbox} == {"pre_orchestration_blocked"}
