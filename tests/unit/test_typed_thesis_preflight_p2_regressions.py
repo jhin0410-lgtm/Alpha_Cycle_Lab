@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+import alpha_cycle.investment_thesis_repository_v2_1 as thesis_repository
 from alpha_cycle.intelligence.decision_thesis_v2 import (
     ClaimDirection,
     EpistemicStatus,
@@ -91,6 +93,7 @@ def _record_request(
     request_id: str = "p2-request",
     security_ids: tuple[str, ...] = ("000660",),
     recorded_at: datetime | None = None,
+    mode: ResearchRoundMode = ResearchRoundMode.PROSPECTIVE,
 ):
     return record_analysis_request(
         request_id=request_id,
@@ -99,7 +102,7 @@ def _record_request(
         evaluation_date=EVALUATION_DATE,
         horizon_trading_days=120,
         security_ids=security_ids,
-        mode=ResearchRoundMode.PROSPECTIVE,
+        mode=mode,
         requested_lane=UnderwritingLane.DEEP,
         request_text="Exercise P2 integrity boundaries.",
         artifact_root=tmp_path,
@@ -126,6 +129,37 @@ def test_nested_unknown_thesis_field_also_changes_content_address(tmp_path) -> N
 
     with pytest.raises(InvestmentThesisRepositoryError, match="persisted payload"):
         load_investment_thesis(path)
+
+
+def test_thesis_publish_is_not_discoverable_until_complete_atomic_link(
+    tmp_path, monkeypatch
+) -> None:
+    thesis = _thesis()
+    real_link = thesis_repository.os.link
+    observed_before_publish = False
+
+    def guarded_link(src, dst) -> None:
+        nonlocal observed_before_publish
+        observed_before_publish = True
+        directory = tmp_path / "investment_thesis_v2_1"
+        assert not list(directory.glob("*.json"))
+        assert (
+            find_latest_investment_thesis(
+                tmp_path,
+                security_id="000660",
+                horizon_trading_days=120,
+                as_of=NOW + timedelta(minutes=1),
+            )
+            is None
+        )
+        real_link(src, dst)
+
+    monkeypatch.setattr(thesis_repository.os, "link", guarded_link)
+    path = persist_investment_thesis(thesis, artifact_root=tmp_path)
+
+    assert observed_before_publish is True
+    assert load_investment_thesis(path) == thesis
+    assert not list((tmp_path / "investment_thesis_v2_1").glob("*.tmp"))
 
 
 def test_backdated_preflight_cannot_append_ledger_older_than_current_head(tmp_path) -> None:
@@ -215,6 +249,91 @@ def test_thesis_lineage_requires_immediate_version_progression(tmp_path) -> None
             security_id="000660",
             horizon_trading_days=120,
             as_of=NOW + timedelta(minutes=2),
+        )
+
+
+def test_forked_thesis_lineage_is_rejected_instead_of_silently_selecting_branch(tmp_path) -> None:
+    parent = _thesis(captured_at=NOW)
+    branch_a = replace(
+        _thesis(
+            version=2,
+            parent_snapshot_id=parent.snapshot_id,
+            captured_at=NOW + timedelta(minutes=1),
+        ),
+        why_now="fork branch A",
+    )
+    branch_b = replace(
+        _thesis(
+            version=2,
+            parent_snapshot_id=parent.snapshot_id,
+            captured_at=NOW + timedelta(minutes=2),
+        ),
+        why_now="fork branch B",
+    )
+    persist_investment_thesis(parent, artifact_root=tmp_path)
+    persist_investment_thesis(branch_a, artifact_root=tmp_path)
+    persist_investment_thesis(branch_b, artifact_root=tmp_path)
+
+    with pytest.raises(InvestmentThesisRepositoryError, match="forked"):
+        find_latest_investment_thesis(
+            tmp_path,
+            security_id="000660",
+            horizon_trading_days=120,
+            as_of=NOW + timedelta(minutes=3),
+        )
+
+
+def test_replay_preflight_requires_explicit_historical_research_cutoff(tmp_path) -> None:
+    receipt = _record_request(tmp_path, mode=ResearchRoundMode.REPLAY)
+
+    with pytest.raises(ValueError, match="requires an explicit research_cutoff_at"):
+        preflight_pending_request_theses(
+            request_id=receipt.request.request_id,
+            run_id="replay-no-cutoff",
+            processed_at=NOW + timedelta(minutes=1),
+            artifact_root=tmp_path,
+        )
+
+
+def test_replay_preflight_uses_historical_cutoff_not_processing_time(tmp_path) -> None:
+    receipt = _record_request(tmp_path, mode=ResearchRoundMode.REPLAY)
+    cutoff = NOW - timedelta(days=30)
+    historical = _thesis(captured_at=cutoff - timedelta(minutes=1))
+    later = replace(
+        _thesis(
+            version=2,
+            parent_snapshot_id=historical.snapshot_id,
+            captured_at=cutoff + timedelta(minutes=1),
+        ),
+        why_now="captured after replay cutoff",
+    )
+    persist_investment_thesis(historical, artifact_root=tmp_path)
+    persist_investment_thesis(later, artifact_root=tmp_path)
+
+    preflight = preflight_pending_request_theses(
+        request_id=receipt.request.request_id,
+        run_id="historical-replay",
+        processed_at=NOW + timedelta(minutes=1),
+        research_cutoff_at=cutoff,
+        artifact_root=tmp_path,
+    )
+
+    assert preflight.ready_for_package_assembly is True
+    assert preflight.research_cutoff_at == cutoff
+    assert preflight.thesis_snapshots == (historical,)
+    assert later.snapshot_id not in preflight.payload()["thesis_snapshot_ids"]
+
+
+def test_prospective_preflight_rejects_cutoff_before_request_time(tmp_path) -> None:
+    receipt = _record_request(tmp_path)
+
+    with pytest.raises(ValueError, match="cannot precede the analysis request"):
+        preflight_pending_request_theses(
+            request_id=receipt.request.request_id,
+            run_id="prospective-backcast",
+            processed_at=NOW + timedelta(minutes=1),
+            research_cutoff_at=NOW - timedelta(minutes=1),
+            artifact_root=tmp_path,
         )
 
 
