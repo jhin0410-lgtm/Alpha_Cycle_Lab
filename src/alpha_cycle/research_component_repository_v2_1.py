@@ -1,9 +1,9 @@
-"""Trusted persisted repositories for research-package components used by Decision System v2.1.
+"""Trusted persisted repositories for Decision System v2.1 research-package components.
 
-The persistence writers for underwriting, payoff, and Decision View artifacts predate the
-end-to-end package assembler.  This module is deliberately read-side only: it verifies the raw
-payload hash, manifest, directory identity, optional latest pointer, typed reconstruction, and PIT
-cutoff before returning an object to the existing research-round orchestrator.
+Persistence writers for underwriting, payoff, and Decision View artifacts predate the end-to-end
+package assembler. This read-side module verifies complete payload identity, manifests, directory
+identity, latest pointers, typed reconstruction, and the PIT cutoff before returning components to
+the existing research-round orchestrator.
 """
 
 from __future__ import annotations
@@ -11,11 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable, Generic, TypeVar, cast
+from typing import Any, Protocol, cast
 
 from alpha_cycle.intelligence.decision_view_v2_1 import (
     ConsensusGapObservation,
@@ -29,7 +30,6 @@ from alpha_cycle.intelligence.payoff_surface import (
     PayoffSurfaceSnapshot,
     ScenarioLabel,
 )
-from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
 from alpha_cycle.intelligence.underwriter_v2_1 import (
     ForecastTournamentAssessment,
     UnderwritingLane,
@@ -38,16 +38,22 @@ from alpha_cycle.intelligence.underwriter_v2_1 import (
 )
 
 _COMPONENT_SCHEMA_VERSION = 1
-_T = TypeVar("_T")
 
 
 class ResearchComponentRepositoryError(ValueError):
     """Raised when a persisted research component fails trust-boundary validation."""
 
 
+class _Component(Protocol):
+    captured_at: datetime
+    security_id: str
+
+    @property
+    def snapshot_id(self) -> str: ...
+
+
 @dataclass(frozen=True)
-class _LoadedArtifact(Generic[_T]):
-    snapshot: _T
+class _ArtifactRef:
     snapshot_id: str
     captured_at: datetime
     directory: Path
@@ -141,7 +147,7 @@ def build_research_component_repository_index(
     *,
     as_of: datetime,
 ) -> ResearchComponentRepositoryIndex:
-    """Scan each persisted component directory exactly once for one point-in-time cutoff."""
+    """Scan each persisted component directory exactly once for one PIT cutoff."""
 
     _require_aware(as_of, "as_of")
     root = Path(artifact_root)
@@ -186,58 +192,71 @@ def build_research_component_repository_index(
     )
 
 
-def _scan_repository(
+def _scan_repository[T: _Component](
     root: Path,
     *,
     object_name: str,
-    parser: Callable[[dict[str, Any]], _T],
-    manifest_validator: Callable[[dict[str, Any], _T], None],
+    parser: Callable[[dict[str, Any]], T],
+    manifest_validator: Callable[[dict[str, Any], T], None],
     pointer_name: str,
     as_of: datetime,
-) -> tuple[_T, ...]:
+) -> tuple[T, ...]:
     if not root.exists():
         return ()
-    loaded: list[_LoadedArtifact[_T]] = []
-    by_id: dict[str, _LoadedArtifact[_T]] = {}
-    for directory in sorted(path for path in root.iterdir() if path.is_dir() and not path.name.startswith(".")):
-        manifest_path = directory / "manifest.json"
-        payload_path = directory / f"{object_name}.json"
-        manifest = _load_object(manifest_path)
-        payload = _load_object(payload_path)
+    loaded: list[T] = []
+    by_id: dict[str, _ArtifactRef] = {}
+    directories = sorted(
+        path
+        for path in root.iterdir()
+        if path.is_dir() and not path.name.startswith(".")
+    )
+    for directory in directories:
+        manifest = _load_object(directory / "manifest.json")
+        payload = _load_object(directory / f"{object_name}.json")
         if _required_int(manifest, "schema_version") != _COMPONENT_SCHEMA_VERSION:
-            raise ResearchComponentRepositoryError(f"unsupported {object_name} manifest schema")
+            raise ResearchComponentRepositoryError(
+                f"unsupported {object_name} manifest schema"
+            )
         declared = _required_text(manifest, "snapshot_id")
         if _sha(payload) != declared:
             raise ResearchComponentRepositoryError(
                 f"{object_name} snapshot_id does not match complete persisted payload"
             )
         snapshot = parser(payload)
-        typed_id = getattr(snapshot, "snapshot_id", None)
-        if typed_id != declared:
+        if snapshot.snapshot_id != declared:
             raise ResearchComponentRepositoryError(
                 f"{object_name} typed reconstruction changed snapshot identity"
             )
-        captured_at = getattr(snapshot, "captured_at", None)
-        if not isinstance(captured_at, datetime):
-            raise ResearchComponentRepositoryError(f"{object_name} has no typed captured_at")
         manifest_validator(manifest, snapshot)
-        expected_name = f"{captured_at.astimezone().astimezone(captured_at.tzinfo).astimezone().astimezone(captured_at.tzinfo)}"
-        del expected_name  # chronology is verified below from the canonical UTC directory prefix.
-        utc_prefix = captured_at.astimezone(__import__("datetime").UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        utc_prefix = snapshot.captured_at.astimezone(UTC).strftime(
+            "%Y%m%dT%H%M%S%fZ"
+        )
         if directory.name != f"{utc_prefix}__{declared[:12]}":
-            raise ResearchComponentRepositoryError(f"{object_name} directory identity mismatch")
-        artifact = _LoadedArtifact(snapshot, declared, captured_at, directory)
+            raise ResearchComponentRepositoryError(
+                f"{object_name} directory identity mismatch"
+            )
         prior = by_id.get(declared)
         if prior is not None and prior.directory != directory:
-            raise ResearchComponentRepositoryError(f"duplicate {object_name} snapshot_id")
-        by_id[declared] = artifact
-        if captured_at <= as_of:
-            loaded.append(artifact)
+            raise ResearchComponentRepositoryError(
+                f"duplicate {object_name} snapshot_id"
+            )
+        by_id[declared] = _ArtifactRef(
+            snapshot_id=declared,
+            captured_at=snapshot.captured_at,
+            directory=directory,
+        )
+        if snapshot.captured_at <= as_of:
+            loaded.append(snapshot)
 
     pointer_path = root / pointer_name
     if pointer_path.exists():
-        _validate_pointer(pointer_path, root=root, object_name=object_name, by_id=by_id)
-    return tuple(item.snapshot for item in loaded)
+        _validate_pointer(
+            pointer_path,
+            root=root,
+            object_name=object_name,
+            by_id=by_id,
+        )
+    return tuple(loaded)
 
 
 def _validate_pointer(
@@ -245,98 +264,218 @@ def _validate_pointer(
     *,
     root: Path,
     object_name: str,
-    by_id: dict[str, _LoadedArtifact[Any]],
+    by_id: dict[str, _ArtifactRef],
 ) -> None:
     payload = _load_object(path)
     expected = {"schema_version", "snapshot_id", "snapshot_path"}
     if object_name != "payoff_surface":
         expected.add("object_type")
     if set(payload) != expected:
-        raise ResearchComponentRepositoryError(f"{object_name} latest pointer fields are not canonical")
+        raise ResearchComponentRepositoryError(
+            f"{object_name} latest pointer fields are not canonical"
+        )
     if _required_int(payload, "schema_version") != _COMPONENT_SCHEMA_VERSION:
-        raise ResearchComponentRepositoryError(f"unsupported {object_name} pointer schema")
-    if "object_type" in payload and _required_text(payload, "object_type") != object_name:
-        raise ResearchComponentRepositoryError(f"{object_name} pointer object_type mismatch")
+        raise ResearchComponentRepositoryError(
+            f"unsupported {object_name} pointer schema"
+        )
+    if (
+        "object_type" in payload
+        and _required_text(payload, "object_type") != object_name
+    ):
+        raise ResearchComponentRepositoryError(
+            f"{object_name} pointer object_type mismatch"
+        )
     snapshot_id = _required_text(payload, "snapshot_id")
     artifact = by_id.get(snapshot_id)
     if artifact is None:
-        raise ResearchComponentRepositoryError(f"{object_name} pointer references missing snapshot")
+        raise ResearchComponentRepositoryError(
+            f"{object_name} pointer references missing snapshot"
+        )
     pointer_target = Path(_required_text(payload, "snapshot_path"))
     if not pointer_target.is_absolute():
         pointer_target = (Path.cwd() / pointer_target).resolve()
     if pointer_target.resolve() != artifact.directory.resolve():
-        raise ResearchComponentRepositoryError(f"{object_name} pointer path disagrees with snapshot")
+        raise ResearchComponentRepositoryError(
+            f"{object_name} pointer path disagrees with snapshot"
+        )
     if artifact.directory.parent.resolve() != root.resolve():
-        raise ResearchComponentRepositoryError(f"{object_name} pointer escapes repository root")
+        raise ResearchComponentRepositoryError(
+            f"{object_name} pointer escapes repository root"
+        )
 
 
-def _validate_underwriting_manifest(manifest: dict[str, Any], value: UnderwritingReadinessSnapshot) -> None:
+def _validate_underwriting_manifest(
+    manifest: dict[str, Any],
+    value: UnderwritingReadinessSnapshot,
+) -> None:
     expected = {
-        "schema_version", "object_type", "snapshot_id", "captured_at", "immutable", "files",
-        "thesis_snapshot_id", "security_id", "lane", "readiness",
-        "investability_decision_enabled", "automatic_execution_enabled",
+        "schema_version",
+        "object_type",
+        "snapshot_id",
+        "captured_at",
+        "immutable",
+        "files",
+        "thesis_snapshot_id",
+        "security_id",
+        "lane",
+        "readiness",
+        "investability_decision_enabled",
+        "automatic_execution_enabled",
     }
     _require_exact_keys(manifest, expected, "underwriting_readiness manifest")
     checks = (
-        (_required_text(manifest, "object_type") == "underwriting_readiness", "object_type"),
-        (_required_text(manifest, "captured_at") == value.captured_at.isoformat(), "captured_at"),
+        (
+            _required_text(manifest, "object_type") == "underwriting_readiness",
+            "object_type",
+        ),
+        (
+            _required_text(manifest, "captured_at") == value.captured_at.isoformat(),
+            "captured_at",
+        ),
         (_required_bool(manifest, "immutable") is True, "immutable"),
-        (_required_list(manifest, "files") == ["underwriting_readiness.json"], "files"),
-        (_required_text(manifest, "thesis_snapshot_id") == value.thesis_snapshot_id, "thesis"),
-        (_required_text(manifest, "security_id") == value.security_id, "security"),
+        (
+            _required_list(manifest, "files") == ["underwriting_readiness.json"],
+            "files",
+        ),
+        (
+            _required_text(manifest, "thesis_snapshot_id")
+            == value.thesis_snapshot_id,
+            "thesis",
+        ),
+        (
+            _required_text(manifest, "security_id") == value.security_id,
+            "security",
+        ),
         (_required_text(manifest, "lane") == value.lane.value, "lane"),
-        (_required_text(manifest, "readiness") == value.readiness.value, "readiness"),
-        (_required_bool(manifest, "investability_decision_enabled") is False, "investability"),
-        (_required_bool(manifest, "automatic_execution_enabled") is False, "execution"),
+        (
+            _required_text(manifest, "readiness") == value.readiness.value,
+            "readiness",
+        ),
+        (
+            _required_bool(manifest, "investability_decision_enabled") is False,
+            "investability",
+        ),
+        (
+            _required_bool(manifest, "automatic_execution_enabled") is False,
+            "execution",
+        ),
     )
     _require_checks(checks, "underwriting_readiness manifest")
 
 
-def _validate_payoff_manifest(manifest: dict[str, Any], value: PayoffSurfaceSnapshot) -> None:
+def _validate_payoff_manifest(
+    manifest: dict[str, Any],
+    value: PayoffSurfaceSnapshot,
+) -> None:
     expected = {
-        "schema_version", "snapshot_id", "captured_at", "thesis_snapshot_id", "security_id",
-        "horizon_trading_days", "scenario_count", "guardrail_evidence_id",
-        "probabilities_calibrated", "expected_value_calculated", "target_price_enabled",
-        "optimal_position_size_enabled", "order_api_enabled", "files",
+        "schema_version",
+        "snapshot_id",
+        "captured_at",
+        "thesis_snapshot_id",
+        "security_id",
+        "horizon_trading_days",
+        "scenario_count",
+        "guardrail_evidence_id",
+        "probabilities_calibrated",
+        "expected_value_calculated",
+        "target_price_enabled",
+        "optimal_position_size_enabled",
+        "order_api_enabled",
+        "files",
     }
     _require_exact_keys(manifest, expected, "payoff_surface manifest")
     checks = (
-        (_required_text(manifest, "captured_at") == value.captured_at.isoformat(), "captured_at"),
-        (_required_text(manifest, "thesis_snapshot_id") == value.thesis_snapshot_id, "thesis"),
-        (_required_text(manifest, "security_id") == value.security_id, "security"),
-        (_required_int(manifest, "horizon_trading_days") == value.horizon_trading_days, "horizon"),
-        (_required_int(manifest, "scenario_count") == len(value.scenarios), "scenario_count"),
-        (_required_text(manifest, "guardrail_evidence_id") == value.guardrail_evidence_id, "guardrail"),
+        (
+            _required_text(manifest, "captured_at") == value.captured_at.isoformat(),
+            "captured_at",
+        ),
+        (
+            _required_text(manifest, "thesis_snapshot_id")
+            == value.thesis_snapshot_id,
+            "thesis",
+        ),
+        (
+            _required_text(manifest, "security_id") == value.security_id,
+            "security",
+        ),
+        (
+            _required_int(manifest, "horizon_trading_days")
+            == value.horizon_trading_days,
+            "horizon",
+        ),
+        (
+            _required_int(manifest, "scenario_count") == len(value.scenarios),
+            "scenario_count",
+        ),
+        (
+            _required_text(manifest, "guardrail_evidence_id")
+            == value.guardrail_evidence_id,
+            "guardrail",
+        ),
         (_required_list(manifest, "files") == ["payoff_surface.json"], "files"),
-        (_required_bool(manifest, "probabilities_calibrated") is False, "probabilities"),
-        (_required_bool(manifest, "expected_value_calculated") is False, "expected_value"),
+        (
+            _required_bool(manifest, "probabilities_calibrated") is False,
+            "probabilities",
+        ),
+        (
+            _required_bool(manifest, "expected_value_calculated") is False,
+            "expected_value",
+        ),
         (_required_bool(manifest, "target_price_enabled") is False, "target_price"),
-        (_required_bool(manifest, "optimal_position_size_enabled") is False, "position_size"),
+        (
+            _required_bool(manifest, "optimal_position_size_enabled") is False,
+            "position_size",
+        ),
         (_required_bool(manifest, "order_api_enabled") is False, "order_api"),
     )
     _require_checks(checks, "payoff_surface manifest")
 
 
-def _validate_decision_manifest(manifest: dict[str, Any], value: Any) -> None:
+def _validate_decision_manifest(manifest: dict[str, Any], value: _Component) -> None:
     expected = {
-        "schema_version", "object_type", "snapshot_id", "captured_at", "immutable", "files",
-        "decision_score_enabled", "target_price_enabled", "automatic_execution_enabled",
+        "schema_version",
+        "object_type",
+        "snapshot_id",
+        "captured_at",
+        "immutable",
+        "files",
+        "decision_score_enabled",
+        "target_price_enabled",
+        "automatic_execution_enabled",
     }
     _require_exact_keys(manifest, expected, "decision manifest")
-    object_name = "decision_expectation_gap" if isinstance(value, DecisionExpectationGapSnapshot) else "decision_view"
+    object_name = (
+        "decision_expectation_gap"
+        if isinstance(value, DecisionExpectationGapSnapshot)
+        else "decision_view"
+    )
     checks = (
         (_required_text(manifest, "object_type") == object_name, "object_type"),
-        (_required_text(manifest, "captured_at") == value.captured_at.isoformat(), "captured_at"),
+        (
+            _required_text(manifest, "captured_at") == value.captured_at.isoformat(),
+            "captured_at",
+        ),
         (_required_bool(manifest, "immutable") is True, "immutable"),
-        (_required_list(manifest, "files") == [f"{object_name}.json"], "files"),
-        (_required_bool(manifest, "decision_score_enabled") is False, "decision_score"),
+        (
+            _required_list(manifest, "files") == [f"{object_name}.json"],
+            "files",
+        ),
+        (
+            _required_bool(manifest, "decision_score_enabled") is False,
+            "decision_score",
+        ),
         (_required_bool(manifest, "target_price_enabled") is False, "target_price"),
-        (_required_bool(manifest, "automatic_execution_enabled") is False, "execution"),
+        (
+            _required_bool(manifest, "automatic_execution_enabled") is False,
+            "execution",
+        ),
     )
     _require_checks(checks, "decision manifest")
 
 
-def _parse_underwriting_readiness(payload: dict[str, Any]) -> UnderwritingReadinessSnapshot:
+def _parse_underwriting_readiness(
+    payload: dict[str, Any],
+) -> UnderwritingReadinessSnapshot:
     _require_payload_schema(payload, "underwriting_readiness")
     tournament = _object(payload.get("forecast_tournament"), "forecast_tournament")
     target_date_raw = tournament.get("target_date")
@@ -348,19 +487,49 @@ def _parse_underwriting_readiness(payload: dict[str, Any]) -> UnderwritingReadin
         forecast_ids=_text_tuple(tournament, "forecast_ids"),
         security_id=_optional_text(tournament, "security_id"),
         target_variable=_optional_text(tournament, "target_variable"),
-        target_date=None if target_date_raw is None else _date(_text(target_date_raw, "target_date"), "target_date"),
+        target_date=(
+            None
+            if target_date_raw is None
+            else _date(_text(target_date_raw, "target_date"), "target_date")
+        ),
         unit=_optional_text(tournament, "unit"),
-        forecast_origin=None if forecast_origin_raw is None else _datetime(_text(forecast_origin_raw, "forecast_origin"), "forecast_origin"),
-        information_cutoff=None if cutoff_raw is None else _datetime(_text(cutoff_raw, "information_cutoff"), "information_cutoff"),
+        forecast_origin=(
+            None
+            if forecast_origin_raw is None
+            else _datetime(
+                _text(forecast_origin_raw, "forecast_origin"),
+                "forecast_origin",
+            )
+        ),
+        information_cutoff=(
+            None
+            if cutoff_raw is None
+            else _datetime(
+                _text(cutoff_raw, "information_cutoff"),
+                "information_cutoff",
+            )
+        ),
         primary_error_metric=_optional_text(tournament, "primary_error_metric"),
-        distinct_forecaster_count=_required_int(tournament, "distinct_forecaster_count"),
-        dependency_cluster_count=_required_int(tournament, "dependency_cluster_count"),
+        distinct_forecaster_count=_required_int(
+            tournament,
+            "distinct_forecaster_count",
+        ),
+        dependency_cluster_count=_required_int(
+            tournament,
+            "dependency_cluster_count",
+        ),
         blockers=_text_tuple(tournament, "blockers"),
         flags=_text_tuple(tournament, "flags"),
     )
     value = UnderwritingReadinessSnapshot(
-        captured_at=_datetime(_required_text(payload, "captured_at"), "captured_at"),
-        evaluation_date=_date(_required_text(payload, "evaluation_date"), "evaluation_date"),
+        captured_at=_datetime(
+            _required_text(payload, "captured_at"),
+            "captured_at",
+        ),
+        evaluation_date=_date(
+            _required_text(payload, "evaluation_date"),
+            "evaluation_date",
+        ),
         thesis_snapshot_id=_required_text(payload, "thesis_snapshot_id"),
         security_id=_required_text(payload, "security_id"),
         lane=_enum(UnderwritingLane, payload, "lane"),
@@ -369,30 +538,62 @@ def _parse_underwriting_readiness(payload: dict[str, Any]) -> UnderwritingReadin
         context_snapshot_id=_required_text(payload, "context_snapshot_id"),
         causal_graph_snapshot_id=_optional_text(payload, "causal_graph_snapshot_id"),
         forecast_tournament=assessment,
-        expectation_state_snapshot_id=_optional_text(payload, "expectation_state_snapshot_id"),
-        forward_valuation_snapshot_id=_optional_text(payload, "forward_valuation_snapshot_id"),
-        price_implied_requirement_snapshot_id=_optional_text(payload, "price_implied_requirement_snapshot_id"),
-        payoff_surface_snapshot_id=_optional_text(payload, "payoff_surface_snapshot_id"),
-        epistemic_defense_snapshot_id=_optional_text(payload, "epistemic_defense_snapshot_id"),
-        required_elements_satisfied=_text_tuple(payload, "required_elements_satisfied"),
-        required_elements_missing=_text_tuple(payload, "required_elements_missing"),
+        expectation_state_snapshot_id=_optional_text(
+            payload,
+            "expectation_state_snapshot_id",
+        ),
+        forward_valuation_snapshot_id=_optional_text(
+            payload,
+            "forward_valuation_snapshot_id",
+        ),
+        price_implied_requirement_snapshot_id=_optional_text(
+            payload,
+            "price_implied_requirement_snapshot_id",
+        ),
+        payoff_surface_snapshot_id=_optional_text(
+            payload,
+            "payoff_surface_snapshot_id",
+        ),
+        epistemic_defense_snapshot_id=_optional_text(
+            payload,
+            "epistemic_defense_snapshot_id",
+        ),
+        required_elements_satisfied=_text_tuple(
+            payload,
+            "required_elements_satisfied",
+        ),
+        required_elements_missing=_text_tuple(
+            payload,
+            "required_elements_missing",
+        ),
         blockers=_text_tuple(payload, "blockers"),
         flags=_text_tuple(payload, "flags"),
     )
     for field in (
-        "investability_decision_enabled", "automatic_thesis_transition_enabled", "target_price_enabled",
-        "optimal_position_size_enabled", "automatic_execution_enabled",
+        "investability_decision_enabled",
+        "automatic_thesis_transition_enabled",
+        "target_price_enabled",
+        "optimal_position_size_enabled",
+        "automatic_execution_enabled",
     ):
         if _required_bool(payload, field):
-            raise ResearchComponentRepositoryError(f"underwriting safety flag {field} must be false")
+            raise ResearchComponentRepositoryError(
+                f"underwriting safety flag {field} must be false"
+            )
     return value
 
 
 def _parse_payoff_surface(payload: dict[str, Any]) -> PayoffSurfaceSnapshot:
     _require_payload_schema(payload, "payoff_surface")
-    scenarios = tuple(_parse_payoff_scenario(_object(item, "scenario")) for item in _required_list(payload, "scenarios"))
+    scenarios = tuple(
+        _parse_payoff_scenario(_object(item, "scenario"))
+        for item in _required_list(payload, "scenarios")
+    )
     value = PayoffSurfaceSnapshot(
-        captured_at=_datetime(_required_text(payload, "captured_at"), "captured_at"),
+        captured_at=_datetime(
+            _required_text(payload, "captured_at"),
+            "captured_at",
+        ),
         thesis_snapshot_id=_required_text(payload, "thesis_snapshot_id"),
         security_id=_required_text(payload, "security_id"),
         horizon_trading_days=_required_int(payload, "horizon_trading_days"),
@@ -402,17 +603,24 @@ def _parse_payoff_surface(payload: dict[str, Any]) -> PayoffSurfaceSnapshot:
         warnings=_text_tuple(payload, "warnings"),
     )
     for field in (
-        "probabilities_calibrated", "expected_value_calculated", "target_price_enabled",
-        "optimal_position_size_enabled", "automatic_execution_enabled",
+        "probabilities_calibrated",
+        "expected_value_calculated",
+        "target_price_enabled",
+        "optimal_position_size_enabled",
+        "automatic_execution_enabled",
     ):
         if _required_bool(payload, field):
-            raise ResearchComponentRepositoryError(f"payoff safety flag {field} must be false")
+            raise ResearchComponentRepositoryError(
+                f"payoff safety flag {field} must be false"
+            )
     return value
 
 
 def _parse_payoff_scenario(payload: dict[str, Any]) -> PayoffScenario:
     if payload.get("scenario_probability") is not None:
-        raise ResearchComponentRepositoryError("payoff scenario probability must remain null")
+        raise ResearchComponentRepositoryError(
+            "payoff scenario probability must remain null"
+        )
     return PayoffScenario(
         scenario_id=_required_text(payload, "scenario_id"),
         label=_enum(ScenarioLabel, payload, "label"),
@@ -430,43 +638,99 @@ def _parse_payoff_scenario(payload: dict[str, Any]) -> PayoffScenario:
 def _parse_decision_view(payload: dict[str, Any]) -> DecisionViewSnapshot:
     _require_payload_schema(payload, "decision_view")
     value = DecisionViewSnapshot(
-        captured_at=_datetime(_required_text(payload, "captured_at"), "captured_at"),
-        evaluation_date=_date(_required_text(payload, "evaluation_date"), "evaluation_date"),
-        selection_rule_snapshot_id=_required_text(payload, "selection_rule_snapshot_id"),
+        captured_at=_datetime(
+            _required_text(payload, "captured_at"),
+            "captured_at",
+        ),
+        evaluation_date=_date(
+            _required_text(payload, "evaluation_date"),
+            "evaluation_date",
+        ),
+        selection_rule_snapshot_id=_required_text(
+            payload,
+            "selection_rule_snapshot_id",
+        ),
         security_id=_required_text(payload, "security_id"),
         target_variable=_required_text(payload, "target_variable"),
         target_date=_date(_required_text(payload, "target_date"), "target_date"),
         unit=_required_text(payload, "unit"),
-        selected_forecast_snapshot_id=_required_text(payload, "selected_forecast_snapshot_id"),
+        selected_forecast_snapshot_id=_required_text(
+            payload,
+            "selected_forecast_snapshot_id",
+        ),
         selected_forecast_id=_required_text(payload, "selected_forecast_id"),
-        selected_forecaster_kind=_enum(ForecasterKind, payload, "selected_forecaster_kind"),
+        selected_forecaster_kind=_enum(
+            ForecasterKind,
+            payload,
+            "selected_forecaster_kind",
+        ),
         selected_model_family=_required_text(payload, "selected_model_family"),
         selected_forecast_value=_number(payload, "selected_forecast_value"),
-        forecast_origin=_datetime(_required_text(payload, "forecast_origin"), "forecast_origin"),
-        information_cutoff=_datetime(_required_text(payload, "information_cutoff"), "information_cutoff"),
-        tournament_forecast_snapshot_ids=_text_tuple(payload, "tournament_forecast_snapshot_ids"),
-        tournament_dependency_overlap=_required_bool(payload, "tournament_dependency_overlap"),
+        forecast_origin=_datetime(
+            _required_text(payload, "forecast_origin"),
+            "forecast_origin",
+        ),
+        information_cutoff=_datetime(
+            _required_text(payload, "information_cutoff"),
+            "information_cutoff",
+        ),
+        tournament_forecast_snapshot_ids=_text_tuple(
+            payload,
+            "tournament_forecast_snapshot_ids",
+        ),
+        tournament_dependency_overlap=_required_bool(
+            payload,
+            "tournament_dependency_overlap",
+        ),
         guardrail_evidence_id=_required_text(payload, "guardrail_evidence_id"),
     )
     for field in (
-        "ex_post_forecast_value_selection_enabled", "automatic_ensemble_weighting_enabled",
-        "market_consensus_claimed", "target_price_enabled", "automatic_execution_enabled",
+        "ex_post_forecast_value_selection_enabled",
+        "automatic_ensemble_weighting_enabled",
+        "market_consensus_claimed",
+        "target_price_enabled",
+        "automatic_execution_enabled",
     ):
         if _required_bool(payload, field):
-            raise ResearchComponentRepositoryError(f"decision-view safety flag {field} must be false")
+            raise ResearchComponentRepositoryError(
+                f"decision-view safety flag {field} must be false"
+            )
     return value
 
 
-def _parse_expectation_gap(payload: dict[str, Any]) -> DecisionExpectationGapSnapshot:
+def _parse_expectation_gap(
+    payload: dict[str, Any],
+) -> DecisionExpectationGapSnapshot:
     _require_payload_schema(payload, "decision_expectation_gap")
-    consensus = tuple(_parse_consensus_gap(_object(item, "consensus_gap")) for item in _required_list(payload, "consensus_gaps"))
-    price = tuple(_parse_price_gap(_object(item, "price_gap")) for item in _required_list(payload, "price_implied_gaps"))
+    consensus = tuple(
+        _parse_consensus_gap(_object(item, "consensus_gap"))
+        for item in _required_list(payload, "consensus_gaps")
+    )
+    price = tuple(
+        _parse_price_gap(_object(item, "price_gap"))
+        for item in _required_list(payload, "price_implied_gaps")
+    )
     value = DecisionExpectationGapSnapshot(
-        captured_at=_datetime(_required_text(payload, "captured_at"), "captured_at"),
-        evaluation_date=_date(_required_text(payload, "evaluation_date"), "evaluation_date"),
-        decision_view_snapshot_id=_required_text(payload, "decision_view_snapshot_id"),
-        expectation_state_snapshot_id=_required_text(payload, "expectation_state_snapshot_id"),
-        price_implied_requirement_snapshot_id=_optional_text(payload, "price_implied_requirement_snapshot_id"),
+        captured_at=_datetime(
+            _required_text(payload, "captured_at"),
+            "captured_at",
+        ),
+        evaluation_date=_date(
+            _required_text(payload, "evaluation_date"),
+            "evaluation_date",
+        ),
+        decision_view_snapshot_id=_required_text(
+            payload,
+            "decision_view_snapshot_id",
+        ),
+        expectation_state_snapshot_id=_required_text(
+            payload,
+            "expectation_state_snapshot_id",
+        ),
+        price_implied_requirement_snapshot_id=_optional_text(
+            payload,
+            "price_implied_requirement_snapshot_id",
+        ),
         security_id=_required_text(payload, "security_id"),
         target_variable=_required_text(payload, "target_variable"),
         target_date=_date(_required_text(payload, "target_date"), "target_date"),
@@ -477,12 +741,17 @@ def _parse_expectation_gap(payload: dict[str, Any]) -> DecisionExpectationGapSna
         guardrail_evidence_id=_required_text(payload, "guardrail_evidence_id"),
     )
     for field in (
-        "consensus_provider_aggregation_enabled", "price_reference_aggregation_enabled",
-        "price_implied_market_expectation_claimed", "decision_score_enabled", "target_price_enabled",
+        "consensus_provider_aggregation_enabled",
+        "price_reference_aggregation_enabled",
+        "price_implied_market_expectation_claimed",
+        "decision_score_enabled",
+        "target_price_enabled",
         "automatic_execution_enabled",
     ):
         if _required_bool(payload, field):
-            raise ResearchComponentRepositoryError(f"expectation-gap safety flag {field} must be false")
+            raise ResearchComponentRepositoryError(
+                f"expectation-gap safety flag {field} must be false"
+            )
     return value
 
 
@@ -490,7 +759,10 @@ def _parse_consensus_gap(payload: dict[str, Any]) -> ConsensusGapObservation:
     return ConsensusGapObservation(
         provider_id=_required_text(payload, "provider_id"),
         source_evidence_id=_required_text(payload, "source_evidence_id"),
-        observed_at=_datetime(_required_text(payload, "observed_at"), "observed_at"),
+        observed_at=_datetime(
+            _required_text(payload, "observed_at"),
+            "observed_at",
+        ),
         decision_value=_number(payload, "decision_value"),
         consensus_value=_number(payload, "consensus_value"),
         unit=_required_text(payload, "unit"),
@@ -501,7 +773,9 @@ def _parse_consensus_gap(payload: dict[str, Any]) -> ConsensusGapObservation:
 
 def _parse_price_gap(payload: dict[str, Any]) -> PriceImpliedGapObservation:
     if _required_bool(payload, "market_expectation_claimed"):
-        raise ResearchComponentRepositoryError("price-implied gap cannot claim market expectation")
+        raise ResearchComponentRepositoryError(
+            "price-implied gap cannot claim market expectation"
+        )
     return PriceImpliedGapObservation(
         reference_id=_required_text(payload, "reference_id"),
         reference_kind=_required_text(payload, "reference_kind"),
@@ -513,30 +787,48 @@ def _parse_price_gap(payload: dict[str, Any]) -> PriceImpliedGapObservation:
     )
 
 
-def _group_by_security(values: tuple[_T, ...]) -> dict[str, tuple[_T, ...]]:
-    grouped: dict[str, list[_T]] = defaultdict(list)
+def _group_by_security[T: _Component](values: tuple[T, ...]) -> dict[str, tuple[T, ...]]:
+    grouped: dict[str, list[T]] = defaultdict(list)
     for value in values:
-        security_id = getattr(value, "security_id", None)
-        if not isinstance(security_id, str) or not security_id.strip():
-            raise ResearchComponentRepositoryError("typed component lacks security_id")
-        grouped[security_id].append(value)
-    return {key: tuple(sorted(items, key=lambda item: (getattr(item, "captured_at"), getattr(item, "snapshot_id")))) for key, items in grouped.items()}
+        if not value.security_id.strip():
+            raise ResearchComponentRepositoryError(
+                "typed component lacks security_id"
+            )
+        grouped[value.security_id].append(value)
+    return {
+        key: tuple(
+            sorted(
+                items,
+                key=lambda item: (item.captured_at, item.snapshot_id),
+            )
+        )
+        for key, items in grouped.items()
+    }
 
 
-def _latest_unique(values: tuple[_T, ...], *, predicate: Callable[[_T], bool], component: str) -> _T | None:
+def _latest_unique[T: _Component](
+    values: tuple[T, ...],
+    *,
+    predicate: Callable[[T], bool],
+    component: str,
+) -> T | None:
     candidates = tuple(item for item in values if predicate(item))
     if not candidates:
         return None
-    latest_time = max(getattr(item, "captured_at") for item in candidates)
-    latest = tuple(item for item in candidates if getattr(item, "captured_at") == latest_time)
+    latest_time = max(item.captured_at for item in candidates)
+    latest = tuple(item for item in candidates if item.captured_at == latest_time)
     if len(latest) != 1:
-        raise ResearchComponentRepositoryError(f"ambiguous latest {component} snapshots at one capture time")
+        raise ResearchComponentRepositoryError(
+            f"ambiguous latest {component} snapshots at one capture time"
+        )
     return latest[0]
 
 
 def _require_payload_schema(payload: dict[str, Any], component: str) -> None:
     if _required_int(payload, "schema_version") != _COMPONENT_SCHEMA_VERSION:
-        raise ResearchComponentRepositoryError(f"unsupported {component} payload schema")
+        raise ResearchComponentRepositoryError(
+            f"unsupported {component} payload schema"
+        )
 
 
 def _require_checks(checks: tuple[tuple[bool, str], ...], label: str) -> None:
@@ -545,22 +837,32 @@ def _require_checks(checks: tuple[tuple[bool, str], ...], label: str) -> None:
             raise ResearchComponentRepositoryError(f"{label} {field} mismatch")
 
 
-def _require_exact_keys(payload: dict[str, Any], expected: set[str], label: str) -> None:
+def _require_exact_keys(
+    payload: dict[str, Any],
+    expected: set[str],
+    label: str,
+) -> None:
     if set(payload) != expected:
-        raise ResearchComponentRepositoryError(f"{label} fields are not canonical")
+        raise ResearchComponentRepositoryError(
+            f"{label} fields are not canonical"
+        )
 
 
 def _load_object(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ResearchComponentRepositoryError(f"cannot read JSON artifact: {path}") from exc
+        raise ResearchComponentRepositoryError(
+            f"cannot read JSON artifact: {path}"
+        ) from exc
     return _object(raw, str(path))
 
 
 def _object(value: object, field: str) -> dict[str, Any]:
     if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
-        raise ResearchComponentRepositoryError(f"{field} must be a JSON object with string keys")
+        raise ResearchComponentRepositoryError(
+            f"{field} must be a JSON object with string keys"
+        )
     return cast(dict[str, Any], value)
 
 
@@ -623,7 +925,9 @@ def _datetime(value: str, field: str) -> datetime:
     try:
         result = datetime.fromisoformat(value)
     except ValueError as exc:
-        raise ResearchComponentRepositoryError(f"{field} must be ISO datetime") from exc
+        raise ResearchComponentRepositoryError(
+            f"{field} must be ISO datetime"
+        ) from exc
     _require_aware(result, field)
     return result
 
@@ -635,7 +939,11 @@ def _date(value: str, field: str) -> date:
         raise ResearchComponentRepositoryError(f"{field} must be ISO date") from exc
 
 
-def _enum[EnumT: StrEnum](enum_type: type[EnumT], payload: dict[str, Any], field: str) -> EnumT:
+def _enum[EnumT: StrEnum](
+    enum_type: type[EnumT],
+    payload: dict[str, Any],
+    field: str,
+) -> EnumT:
     raw = _required_text(payload, field)
     try:
         return enum_type(raw)
@@ -649,7 +957,13 @@ def _require_aware(value: datetime, field: str) -> None:
 
 
 def _sha(value: object) -> str:
-    encoded = json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    encoded = json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
