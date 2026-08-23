@@ -13,10 +13,10 @@ NOW = datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
 
 
 def _fake_opportunity_persist(object_name: str):
-    def persist(snapshot: object, *, output_root: str | Path) -> Path:
+    def persist(snapshot: SimpleNamespace, *, output_root: str | Path) -> Path:
         root = Path(output_root)
-        snapshot_id = str(getattr(snapshot, "snapshot_id"))
-        captured_at = getattr(snapshot, "captured_at")
+        snapshot_id = str(snapshot.snapshot_id)
+        captured_at = snapshot.captured_at
         directory = assembler._opportunity_snapshot_directory(
             root,
             object_name=object_name,
