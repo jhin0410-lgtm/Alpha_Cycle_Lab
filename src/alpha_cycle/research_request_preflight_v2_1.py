@@ -14,14 +14,16 @@ from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import (
 from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
     AnalysisRequestSnapshot,
     ResearchRoundRunSnapshot,
+    ResearchRunKind,
     ResearchRunLedgerSnapshot,
     build_pre_orchestration_blocked_run,
+    build_pre_orchestration_ready_run,
     build_research_run_ledger,
     persist_research_run,
     persist_research_run_ledger,
 )
 from alpha_cycle.investment_thesis_repository_v2_1 import (
-    find_latest_investment_thesis,
+    build_investment_thesis_repository_index,
 )
 from alpha_cycle.research_ledger_write_lock_v2_1 import (
     exclusive_research_ledger_write_lock,
@@ -72,7 +74,7 @@ def preflight_pending_request_theses(
     artifact_root: str | Path,
     research_cutoff_at: datetime | None = None,
 ) -> ResearchThesisPreflightReceipt:
-    """Resolve typed theses or append an explicit pre-orchestration blocker run."""
+    """Resolve typed theses and append only meaningful pre-orchestration transitions."""
 
     _require_aware(processed_at, "processed_at")
     if research_cutoff_at is not None:
@@ -95,16 +97,17 @@ def preflight_pending_request_theses(
             processed_at=processed_at,
             research_cutoff_at=research_cutoff_at,
         )
-        preflight_flags = _preflight_flags(request, cutoff)
 
+        # Build one validated point-in-time repository index while the shared write lock is held,
+        # then resolve every requested security from memory. This avoids N full repository scans
+        # for an N-security request and keeps intake lock hold time proportional to repository size.
+        thesis_index = build_investment_thesis_repository_index(root, as_of=cutoff)
         theses: list[InvestmentThesisSnapshot] = []
         blockers: list[ResearchRoundBlocker] = []
         for security_id in _unique_security_ids(request.security_ids):
-            thesis = find_latest_investment_thesis(
-                root,
+            thesis = thesis_index.find_latest(
                 security_id=security_id,
                 horizon_trading_days=request.horizon_trading_days,
-                as_of=cutoff,
             )
             if thesis is None:
                 blockers.append(
@@ -123,25 +126,22 @@ def preflight_pending_request_theses(
 
         blockers_tuple = tuple(blockers)
         theses_tuple = tuple(theses)
-        if not blockers_tuple:
-            return ResearchThesisPreflightReceipt(
-                request=request,
-                research_cutoff_at=cutoff,
-                thesis_snapshots=theses_tuple,
-                blockers=(),
-                run=None,
-                ledger=ledger,
-                run_path=None,
-                ledger_path=None,
-                changed_history=False,
-            )
+        preflight_flags = _preflight_flags(
+            request,
+            cutoff,
+            ready=not blockers_tuple,
+        )
 
-        prior = _latest_run_for_request(ledger, request.snapshot_id)
-        if (
-            prior is not None
-            and prior.blockers == blockers_tuple
-            and all(flag in prior.flags for flag in preflight_flags)
-        ):
+        # Idempotence is defined over the full immutable request history, not merely its latest
+        # run. This matters for REPLAY cutoff A -> B -> A: revisiting A must reuse the prior A
+        # preflight event instead of inflating run/blocker metrics with a duplicate event.
+        prior = _matching_preflight_run(
+            ledger,
+            request_snapshot_id=request.snapshot_id,
+            blockers=blockers_tuple,
+            flags=preflight_flags,
+        )
+        if prior is not None:
             return ResearchThesisPreflightReceipt(
                 request=request,
                 research_cutoff_at=cutoff,
@@ -159,14 +159,26 @@ def preflight_pending_request_theses(
                 "processed_at must be later than the latest ledger built_at when appending history"
             )
 
-        run = build_pre_orchestration_blocked_run(
-            request,
-            run_id=run_id,
-            started_at=processed_at,
-            completed_at=processed_at,
-            blockers=blockers_tuple,
-            flags=preflight_flags,
-        )
+        if blockers_tuple:
+            run = build_pre_orchestration_blocked_run(
+                request,
+                run_id=run_id,
+                started_at=processed_at,
+                completed_at=processed_at,
+                blockers=blockers_tuple,
+                flags=preflight_flags,
+            )
+        else:
+            # Readiness here means only that the typed thesis prerequisite has cleared. It does
+            # not claim an orchestrated ResearchRoundSnapshot or any investment conclusion.
+            run = build_pre_orchestration_ready_run(
+                request,
+                run_id=run_id,
+                started_at=processed_at,
+                completed_at=processed_at,
+                flags=preflight_flags,
+            )
+
         next_ledger = build_research_run_ledger(
             ledger.requests,
             (*ledger.runs, run),
@@ -212,8 +224,12 @@ def _resolve_research_cutoff(
 def _preflight_flags(
     request: AnalysisRequestSnapshot,
     cutoff: datetime,
+    *,
+    ready: bool,
 ) -> tuple[str, ...]:
-    flags = ["typed_thesis_preflight_blocked"]
+    flags = [
+        "typed_thesis_preflight_ready" if ready else "typed_thesis_preflight_blocked"
+    ]
     if request.mode is ResearchRoundMode.REPLAY:
         flags.append(f"typed_thesis_replay_cutoff:{cutoff.isoformat()}")
     return tuple(flags)
@@ -231,12 +247,24 @@ def _find_request(
     return matches[0]
 
 
-def _latest_run_for_request(
+def _matching_preflight_run(
     ledger: ResearchRunLedgerSnapshot,
+    *,
     request_snapshot_id: str,
+    blockers: tuple[ResearchRoundBlocker, ...],
+    flags: tuple[str, ...],
 ) -> ResearchRoundRunSnapshot | None:
+    preflight_kinds = {
+        ResearchRunKind.PRE_ORCHESTRATION_BLOCKED,
+        ResearchRunKind.PRE_ORCHESTRATION_READY,
+    }
     matching = tuple(
-        item for item in ledger.runs if item.request_snapshot_id == request_snapshot_id
+        item
+        for item in ledger.runs
+        if item.request_snapshot_id == request_snapshot_id
+        and item.kind in preflight_kinds
+        and item.blockers == blockers
+        and item.flags == flags
     )
     return matching[-1] if matching else None
 
