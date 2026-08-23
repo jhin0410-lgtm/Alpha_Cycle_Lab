@@ -265,7 +265,7 @@ def _scan_repository[T: _Component](
                 f"{object_name} directory identity mismatch"
             )
         prior = by_id.get(declared)
-        if prior is not None and prior.directory != directory:
+        if prior is not None and prior.directory != resolved_directory:
             raise ResearchComponentRepositoryError(
                 f"duplicate {object_name} snapshot_id"
             )
@@ -348,9 +348,10 @@ def _validate_pointer(
             f"{object_name} pointer references missing snapshot"
         )
     pointer_target = Path(_required_text(payload, "snapshot_path"))
-    if not pointer_target.is_absolute():
-        pointer_target = (Path.cwd() / pointer_target).resolve()
-    resolved_target = pointer_target.resolve()
+    if pointer_target.is_absolute():
+        resolved_target = pointer_target.resolve()
+    else:
+        resolved_target = (root / pointer_target.name).resolve()
     if resolved_target != artifact.directory:
         raise ResearchComponentRepositoryError(
             f"{object_name} pointer path disagrees with snapshot"
