@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import streamlit as st
 
+from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
 from alpha_cycle.research_observatory_v2_1 import (
     ObservatoryDataError,
     load_latest_observatory_state,
@@ -51,10 +52,37 @@ def main() -> None:
     st.write("**Mode / lane**", f"{selected.mode.value} / {selected.requested_lane.value}")
     st.write("**Evaluation date**", selected.evaluation_date.isoformat())
 
+    replay_cutoff_text = ""
+    if selected.mode is ResearchRoundMode.REPLAY:
+        replay_cutoff_text = st.text_input(
+            "Replay research cutoff (ISO 8601 with timezone)",
+            placeholder="2026-06-30T15:00:00+09:00",
+            help=(
+                "Required for replay. Only thesis artifacts captured at or before this PIT cutoff "
+                "can satisfy preflight."
+            ),
+        )
+    else:
+        st.caption("Prospective research cutoff defaults to the preflight processing time.")
+
     if not st.button("Run typed thesis preflight", type="primary"):
         return
 
     now = datetime.now().astimezone()
+    research_cutoff_at: datetime | None = None
+    if selected.mode is ResearchRoundMode.REPLAY:
+        if not replay_cutoff_text.strip():
+            st.error("Replay preflight requires an explicit research cutoff.")
+            return
+        try:
+            research_cutoff_at = datetime.fromisoformat(replay_cutoff_text.strip())
+        except ValueError:
+            st.error("Replay research cutoff must be a valid ISO 8601 datetime.")
+            return
+        if research_cutoff_at.tzinfo is None or research_cutoff_at.utcoffset() is None:
+            st.error("Replay research cutoff must include a timezone offset.")
+            return
+
     run_id = f"thesis-preflight-{now:%Y%m%dT%H%M%S}-{uuid4().hex[:8]}"
     try:
         receipt = preflight_pending_request_theses(
@@ -62,12 +90,14 @@ def main() -> None:
             run_id=run_id,
             processed_at=now,
             artifact_root=artifact_root,
+            research_cutoff_at=research_cutoff_at,
         )
     except (ValueError, FileExistsError) as exc:
         st.error("Typed thesis preflight failed closed.")
         st.code(str(exc))
         return
 
+    st.write("**Research cutoff**", receipt.research_cutoff_at.isoformat())
     if receipt.ready_for_package_assembly:
         st.success("Typed thesis preflight passed for every requested security.")
         st.info(
