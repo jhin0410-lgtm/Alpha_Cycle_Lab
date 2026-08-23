@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,6 +40,7 @@ from alpha_cycle.research_package_integrity_v2_1 import (
 )
 
 NOW = datetime(2026, 8, 23, 12, 0, tzinfo=UTC)
+EVAL = date(2026, 8, 23)
 TARGET = date(2026, 12, 31)
 GUARDRAIL = load_decision_system_v21_guardrails().evidence_id
 A = "a" * 64
@@ -126,6 +129,8 @@ def _registration(
 def _view(first: ForecastRegistrationSnapshot, second: ForecastRegistrationSnapshot):
     return SimpleNamespace(
         captured_at=NOW,
+        evaluation_date=EVAL,
+        selection_rule_snapshot_id=C,
         security_id="000660",
         target_variable="net_income",
         target_date=TARGET,
@@ -275,15 +280,12 @@ def test_fabricated_registration_payload_cannot_enter_persisted_tournament(
     persist_decision_view_selection_rule(rule, output_root=tmp_path)
     persist_forecast_registration(first, output_root=tmp_path)
     pointer = persist_forecast_registration(second, output_root=tmp_path)
-    pointer_payload = __import__("json").loads(pointer.read_text(encoding="utf-8"))
+    pointer_payload = json.loads(pointer.read_text(encoding="utf-8"))
     directory = Path(pointer_payload["snapshot_path"])
     payload_path = directory / "forecast_registration.json"
-    payload = __import__("json").loads(payload_path.read_text(encoding="utf-8"))
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
     payload["forecaster_kind"] = "fabricated-kind"
     payload["outcome_observed"] = True
-    # Rebind the directory/manifest to the fabricated payload so simple hash/manifest checks pass.
-    import hashlib
-    import json
 
     encoded = json.dumps(
         payload,
@@ -293,13 +295,21 @@ def test_fabricated_registration_payload_cannot_enter_persisted_tournament(
         sort_keys=True,
     ).encode("utf-8")
     fabricated_id = hashlib.sha256(encoded).hexdigest()
-    payload_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+    payload_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
     manifest_path = directory / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["snapshot_id"] = fabricated_id
     manifest["forecast_id"] = second.forecast_id
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-    new_directory = directory.with_name(directory.name.rsplit("__", 1)[0] + f"__{fabricated_id[:12]}")
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    new_directory = directory.with_name(
+        directory.name.rsplit("__", 1)[0] + f"__{fabricated_id[:12]}"
+    )
     directory.rename(new_directory)
 
     view = _view(first, second)
