@@ -99,7 +99,7 @@ def preflight_pending_request_theses(
                         code="investment_thesis_snapshot_missing",
                         detail=(
                             "no validated persisted InvestmentThesisSnapshot exists for the "
-                            f"requested security/horizon as of {processed_at.isoformat()}"
+                            "requested security and trading-day horizon at the preflight cutoff"
                         ),
                         security_id=security_id,
                     )
