@@ -116,6 +116,10 @@ def preflight_pending_request_theses(
                 "analysis request already has an orchestrated run; "
                 "record a new request for another preflight"
             )
+        if processed_at <= ledger.built_at:
+            raise ValueError(
+                "processed_at must be later than the latest ledger built_at"
+            )
 
         cutoff = _resolve_research_cutoff(
             request,
@@ -185,11 +189,6 @@ def preflight_pending_request_theses(
             if prior_run is not None:
                 run = prior_run
             else:
-                if processed_at <= ledger.built_at:
-                    raise ValueError(
-                        "processed_at must be later than the latest ledger built_at "
-                        "when appending history"
-                    )
                 run = build_pre_orchestration_blocked_run(
                     request,
                     run_id=run_id,
@@ -306,7 +305,7 @@ def _unique_security_ids(security_ids: tuple[str, ...]) -> tuple[str, ...]:
         if key in seen:
             continue
         seen.add(key)
-        unique.append(security_id)
+        unique.append(key)
     return tuple(unique)
 
 
