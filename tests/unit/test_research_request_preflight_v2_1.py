@@ -13,6 +13,7 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
     UncertaintyLevel,
 )
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
+from alpha_cycle.intelligence.research_run_ledger_v2_1 import ResearchRunKind
 from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 from alpha_cycle.investment_thesis_repository_v2_1 import persist_investment_thesis
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
@@ -152,7 +153,9 @@ def test_partial_thesis_progress_changes_blocker_history(tmp_path) -> None:
     assert second.ledger.summary.run_count == 2
 
 
-def test_complete_typed_theses_pass_without_claiming_orchestration(tmp_path) -> None:
+def test_complete_typed_theses_record_pre_orchestration_readiness_without_claiming_round(
+    tmp_path,
+) -> None:
     _request(tmp_path)
     for security_id in ("000660", "005930"):
         persist_investment_thesis(
@@ -166,8 +169,11 @@ def test_complete_typed_theses_pass_without_claiming_orchestration(tmp_path) -> 
         artifact_root=tmp_path,
     )
     assert receipt.ready_for_package_assembly is True
-    assert receipt.changed_history is False
-    assert receipt.run is None
+    assert receipt.changed_history is True
+    assert receipt.run is not None
+    assert receipt.run.kind is ResearchRunKind.PRE_ORCHESTRATION_READY
+    assert receipt.run.research_round_snapshot_id is None
+    assert receipt.run.blockers == ()
     assert tuple(item.security_id for item in receipt.thesis_snapshots) == (
         "000660",
         "005930",
@@ -176,6 +182,11 @@ def test_complete_typed_theses_pass_without_claiming_orchestration(tmp_path) -> 
     assert payload["orchestrator_executed"] is False
     assert payload["investment_conclusion_created"] is False
     assert payload["automatic_execution_enabled"] is False
+
+    state = load_latest_observatory_state(tmp_path)
+    assert state is not None
+    assert {row.state for row in state.inbox} == {"pre_orchestration_ready"}
+    assert {row.blocker_count for row in state.inbox} == {0}
 
 
 def test_future_thesis_does_not_satisfy_preflight(tmp_path) -> None:
