@@ -7,14 +7,19 @@ checks their PIT/request bindings, and delegates research logic to the existing
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from alpha_cycle.intelligence.decision_guardrails_v2_1 import (
     load_decision_system_v21_guardrails,
 )
 from alpha_cycle.intelligence.decision_thesis_v2 import InvestmentThesisSnapshot
+from alpha_cycle.intelligence.opportunity_set_v2_1 import (
+    persist_opportunity_candidate,
+    persist_opportunity_set,
+)
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import (
     ResearchRoundArtifacts,
     ResearchRoundBlocker,
@@ -47,6 +52,7 @@ from alpha_cycle.research_ledger_write_lock_v2_1 import (
 )
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
 from alpha_cycle.research_preflight_state_v2_1 import (
+    CurrentResearchThesisPreflightState,
     ResearchPreflightStateError,
     ResearchThesisPreflightStateSnapshot,
     load_current_research_thesis_preflight_states,
@@ -126,6 +132,7 @@ def assemble_and_run_research_package(
             )
         ledger = observatory.ledger
         request = _find_request(ledger, request_id)
+        _require_canonical_request_security_ids(request)
         if processed_at <= ledger.built_at:
             raise ValueError("processed_at must be later than the latest ledger built_at")
         if processed_at < request.requested_at:
@@ -139,7 +146,12 @@ def assemble_and_run_research_package(
         ):
             raise ValueError("analysis request already has an orchestrated run")
 
-        preflight = _current_ready_preflight(root, request)
+        current_preflight = _current_ready_preflight(
+            root,
+            request,
+            processed_at=processed_at,
+        )
+        preflight = current_preflight.state
         cutoff = preflight.research_cutoff_at
         if cutoff > processed_at:
             raise ValueError(
@@ -213,6 +225,7 @@ def assemble_and_run_research_package(
                 request=request,
                 run_id=run_id,
                 processed_at=processed_at,
+                preflight_selected_at=current_preflight.selected_at,
                 blockers=blockers_tuple,
                 ledger=ledger,
                 root=root,
@@ -251,7 +264,7 @@ def assemble_and_run_research_package(
             horizon_trading_days=request.horizon_trading_days,
             guardrails=active,
         )
-        round_path = persist_research_round(artifacts.snapshot, output_root=root)
+        _validate_downstream_artifact_bindings(artifacts)
         run = bind_orchestrated_run(
             request,
             artifacts.snapshot,
@@ -259,21 +272,17 @@ def assemble_and_run_research_package(
             started_at=processed_at,
             completed_at=processed_at,
         )
-        run_path = persist_research_run(run, output_root=root)
         next_ledger = build_research_run_ledger(
             ledger.requests,
             (*ledger.runs, run),
             built_at=processed_at,
         )
-        try:
-            ledger_path = persist_research_run_ledger(
-                next_ledger,
-                output_root=root,
-            )
-        except BaseException:
-            run_path.unlink(missing_ok=True)
-            round_path.unlink(missing_ok=True)
-            raise
+        round_path, run_path, ledger_path = _publish_orchestrated_artifacts(
+            artifacts=artifacts,
+            run=run,
+            ledger=next_ledger,
+            root=root,
+        )
         return ResearchPackageAssemblyReceipt(
             request=request,
             thesis_preflight=preflight,
@@ -364,6 +373,14 @@ def _assemble_security_package(
                 "underwriting_payoff_binding_mismatch",
                 security_id,
             )
+    if underwriting is not None and view is not None:
+        if not _decision_view_matches_underwriting_tournament(view, underwriting):
+            _block(
+                blockers,
+                "research_package",
+                "underwriting_decision_view_tournament_binding_mismatch",
+                security_id,
+            )
     if underwriting is not None and gap is not None:
         if (
             underwriting.expectation_state_snapshot_id is not None
@@ -412,10 +429,30 @@ def _assemble_security_package(
     )
 
 
+def _decision_view_matches_underwriting_tournament(view: object, underwriting: object) -> bool:
+    tournament = underwriting.forecast_tournament  # type: ignore[attr-defined]
+    return bool(
+        tournament.comparable
+        and tournament.security_id == view.security_id  # type: ignore[attr-defined]
+        and tournament.target_variable == view.target_variable  # type: ignore[attr-defined]
+        and tournament.target_date == view.target_date  # type: ignore[attr-defined]
+        and tournament.unit == view.unit  # type: ignore[attr-defined]
+        and tournament.forecast_origin == view.forecast_origin  # type: ignore[attr-defined]
+        and tournament.information_cutoff == view.information_cutoff  # type: ignore[attr-defined]
+        and tuple(sorted(tournament.forecast_snapshot_ids))
+        == tuple(sorted(view.tournament_forecast_snapshot_ids))  # type: ignore[attr-defined]
+        and view.selected_forecast_snapshot_id  # type: ignore[attr-defined]
+        in tournament.forecast_snapshot_ids
+        and view.selected_forecast_id in tournament.forecast_ids  # type: ignore[attr-defined]
+    )
+
+
 def _current_ready_preflight(
     root: Path,
     request: AnalysisRequestSnapshot,
-) -> ResearchThesisPreflightStateSnapshot:
+    *,
+    processed_at: datetime,
+) -> CurrentResearchThesisPreflightState:
     try:
         current = load_current_research_thesis_preflight_states(root).get(
             request.snapshot_id
@@ -428,6 +465,10 @@ def _current_ready_preflight(
         raise ValueError(
             "analysis request has no current typed-thesis preflight state"
         )
+    if current.selected_at > processed_at:
+        raise ValueError(
+            "current thesis preflight selected_at cannot be after processing time"
+        )
     try:
         validate_preflight_state_request_binding(current.state, request)
     except ResearchPreflightStateError as exc:
@@ -436,7 +477,7 @@ def _current_ready_preflight(
         ) from exc
     if not current.state.ready_for_package_assembly:
         raise ValueError("typed-thesis preflight is not ready for package assembly")
-    return current.state
+    return current
 
 
 def _record_package_blockers(
@@ -444,6 +485,7 @@ def _record_package_blockers(
     request: AnalysisRequestSnapshot,
     run_id: str,
     processed_at: datetime,
+    preflight_selected_at: datetime,
     blockers: tuple[ResearchRoundBlocker, ...],
     ledger: ResearchRunLedgerSnapshot,
     root: Path,
@@ -453,7 +495,12 @@ def _record_package_blockers(
         request.snapshot_id,
         blockers,
     )
-    if prior is not None:
+    latest_request_run = _latest_request_run(ledger, request.snapshot_id)
+    if (
+        prior is not None
+        and latest_request_run == prior
+        and prior.completed_at >= preflight_selected_at
+    ):
         return ledger, None, None, False
     run = build_pre_orchestration_blocked_run(
         request,
@@ -494,6 +541,187 @@ def _matching_package_blocked_run(
         and item.blockers == blockers
     )
     return matching[-1] if matching else None
+
+
+def _latest_request_run(
+    ledger: ResearchRunLedgerSnapshot,
+    request_snapshot_id: str,
+) -> ResearchRoundRunSnapshot | None:
+    matching = tuple(
+        item
+        for item in ledger.runs
+        if item.request_snapshot_id == request_snapshot_id
+    )
+    return matching[-1] if matching else None
+
+
+def _validate_downstream_artifact_bindings(artifacts: ResearchRoundArtifacts) -> None:
+    candidate_ids = tuple(item.snapshot_id for item in artifacts.opportunity_candidates)
+    if candidate_ids != artifacts.snapshot.opportunity_candidate_snapshot_ids:
+        raise ValueError("research round opportunity-candidate bindings are inconsistent")
+    set_id = (
+        artifacts.opportunity_set.snapshot_id
+        if artifacts.opportunity_set is not None
+        else None
+    )
+    if set_id != artifacts.snapshot.opportunity_set_snapshot_id:
+        raise ValueError("research round opportunity-set binding is inconsistent")
+    if (
+        artifacts.expectation_overlay is not None
+        or artifacts.snapshot.expectation_overlay_snapshot_id is not None
+    ):
+        raise ValueError(
+            "typed research package assembler does not publish expectation overlays"
+        )
+    if (
+        artifacts.prospective_registration is not None
+        or artifacts.snapshot.prospective_registration_snapshot_id is not None
+    ):
+        raise ValueError(
+            "typed research package assembler does not publish prospective registrations"
+        )
+
+
+def _publish_orchestrated_artifacts(
+    *,
+    artifacts: ResearchRoundArtifacts,
+    run: ResearchRoundRunSnapshot,
+    ledger: ResearchRunLedgerSnapshot,
+    root: Path,
+) -> tuple[Path, Path, Path]:
+    candidate_root = root / "opportunity_candidate"
+    candidate_pointer = candidate_root / "latest_opportunity_candidate.json"
+    candidate_root_existed = candidate_root.exists()
+    candidate_pointer_before = _optional_bytes(candidate_pointer)
+    candidate_new_directories = tuple(
+        directory
+        for item in artifacts.opportunity_candidates
+        if not (
+            directory := _opportunity_snapshot_directory(
+                root,
+                object_name="opportunity_candidate",
+                captured_at=item.captured_at,
+                snapshot_id=item.snapshot_id,
+            )
+        ).exists()
+    )
+
+    set_root = root / "opportunity_set"
+    set_pointer = set_root / "latest_opportunity_set.json"
+    set_root_existed = set_root.exists()
+    set_pointer_before = _optional_bytes(set_pointer)
+    set_new_directories: tuple[Path, ...] = ()
+    if artifacts.opportunity_set is not None:
+        directory = _opportunity_snapshot_directory(
+            root,
+            object_name="opportunity_set",
+            captured_at=artifacts.opportunity_set.captured_at,
+            snapshot_id=artifacts.opportunity_set.snapshot_id,
+        )
+        if not directory.exists():
+            set_new_directories = (directory,)
+
+    round_path: Path | None = None
+    run_path: Path | None = None
+    try:
+        for candidate in artifacts.opportunity_candidates:
+            persist_opportunity_candidate(candidate, output_root=root)
+        if artifacts.opportunity_set is not None:
+            persist_opportunity_set(artifacts.opportunity_set, output_root=root)
+        round_path = persist_research_round(artifacts.snapshot, output_root=root)
+        run_path = persist_research_run(run, output_root=root)
+        ledger_path = persist_research_run_ledger(ledger, output_root=root)
+        return round_path, run_path, ledger_path
+    except BaseException as exc:
+        cleanup_errors: list[BaseException] = []
+        for path in (run_path, round_path):
+            if path is None:
+                continue
+            try:
+                path.unlink(missing_ok=True)
+            except BaseException as cleanup_exc:
+                cleanup_errors.append(cleanup_exc)
+        _rollback_opportunity_repository(
+            root=candidate_root,
+            pointer=candidate_pointer,
+            pointer_before=candidate_pointer_before,
+            root_existed=candidate_root_existed,
+            new_directories=candidate_new_directories,
+            cleanup_errors=cleanup_errors,
+        )
+        _rollback_opportunity_repository(
+            root=set_root,
+            pointer=set_pointer,
+            pointer_before=set_pointer_before,
+            root_existed=set_root_existed,
+            new_directories=set_new_directories,
+            cleanup_errors=cleanup_errors,
+        )
+        if cleanup_errors:
+            raise RuntimeError(
+                "orchestrated research publication failed and rollback was incomplete"
+            ) from cleanup_errors[0]
+        raise exc
+
+
+def _rollback_opportunity_repository(
+    *,
+    root: Path,
+    pointer: Path,
+    pointer_before: bytes | None,
+    root_existed: bool,
+    new_directories: tuple[Path, ...],
+    cleanup_errors: list[BaseException],
+) -> None:
+    for directory in reversed(new_directories):
+        try:
+            if directory.exists():
+                shutil.rmtree(directory)
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+    try:
+        if pointer_before is None:
+            pointer.unlink(missing_ok=True)
+        else:
+            pointer.parent.mkdir(parents=True, exist_ok=True)
+            temporary = pointer.with_name(f".{pointer.name}.rollback")
+            temporary.write_bytes(pointer_before)
+            temporary.replace(pointer)
+    except BaseException as exc:
+        cleanup_errors.append(exc)
+    if not root_existed:
+        try:
+            root.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            if root.exists() and not any(root.iterdir()):
+                cleanup_errors.append(
+                    RuntimeError(f"failed to remove empty rollback directory: {root}")
+                )
+
+
+def _opportunity_snapshot_directory(
+    root: Path,
+    *,
+    object_name: str,
+    captured_at: datetime,
+    snapshot_id: str,
+) -> Path:
+    timestamp = captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    return root / object_name / f"{timestamp}__{snapshot_id[:12]}"
+
+
+def _optional_bytes(path: Path) -> bytes | None:
+    return path.read_bytes() if path.exists() else None
+
+
+def _require_canonical_request_security_ids(request: AnalysisRequestSnapshot) -> None:
+    canonical = tuple(item.strip() for item in request.security_ids)
+    if canonical != request.security_ids:
+        raise ValueError(
+            "analysis request contains legacy non-canonical security ids; re-record request"
+        )
 
 
 def _find_request(
