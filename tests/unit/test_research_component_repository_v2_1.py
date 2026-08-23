@@ -199,12 +199,15 @@ def test_writer_round_trip_reconstructs_all_package_components(tmp_path: Path) -
         as_of=NOW + timedelta(minutes=10),
     )
 
-    assert index.latest_payoff(
+    selected_payoff = index.latest_payoff(
         "000660",
         thesis_snapshot_id=thesis_id,
         horizon_trading_days=120,
         guardrail_evidence_id=GUARDRAIL,
-    ) == payoff
+    )
+    assert selected_payoff is not None
+    assert selected_payoff.snapshot_id == payoff.snapshot_id
+    assert selected_payoff.payload_without_id() == payoff.payload_without_id()
     assert index.latest_decision_view(
         "000660",
         evaluation_date=EVAL,
