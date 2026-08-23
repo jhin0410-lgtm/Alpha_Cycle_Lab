@@ -8,6 +8,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
@@ -20,6 +21,9 @@ from alpha_cycle.intelligence.research_run_ledger_v2_1 import AnalysisRequestSna
 RESEARCH_PREFLIGHT_STATE_SCHEMA_VERSION = 1
 _STATE_DIRECTORY = "research_request_preflight_state_v2_1"
 _POINTER_DIRECTORY = "research_request_preflight_current_v2_1"
+_POINTER_KEYS = frozenset(
+    {"schema_version", "request_snapshot_id", "state_snapshot_id", "selected_at"}
+)
 
 
 class ResearchPreflightStateError(ValueError):
@@ -42,9 +46,7 @@ class ResearchThesisPreflightStateSnapshot:
     def __post_init__(self) -> None:
         _validate_sha(self.request_snapshot_id, "request_snapshot_id")
         _require_text(self.request_id, "request_id")
-        _require_aware(self.research_cutoff_at, "research_cutoff_at")
-        if self.research_cutoff_at.utcoffset() != UTC.utcoffset(self.research_cutoff_at):
-            raise ValueError("research_cutoff_at must be canonical UTC")
+        _require_utc(self.research_cutoff_at, "research_cutoff_at")
         if self.horizon_trading_days not in {60, 120, 250}:
             raise ValueError("preflight-state horizon must be 60, 120, or 250 trading days")
         _validate_text_tuple(self.security_ids, "security_ids")
@@ -90,9 +92,7 @@ class CurrentResearchThesisPreflightState:
     state: ResearchThesisPreflightStateSnapshot
 
     def __post_init__(self) -> None:
-        _require_aware(self.selected_at, "selected_at")
-        if self.selected_at.utcoffset() != UTC.utcoffset(self.selected_at):
-            raise ValueError("selected_at must be canonical UTC")
+        _require_utc(self.selected_at, "selected_at")
 
 
 def build_research_thesis_preflight_state(
@@ -102,7 +102,6 @@ def build_research_thesis_preflight_state(
     thesis_snapshot_ids: tuple[str, ...],
     blockers: tuple[ResearchRoundBlocker, ...],
 ) -> ResearchThesisPreflightStateSnapshot:
-    cutoff = canonical_utc(research_cutoff_at)
     return ResearchThesisPreflightStateSnapshot(
         request_snapshot_id=request.snapshot_id,
         request_id=request.request_id,
@@ -110,7 +109,7 @@ def build_research_thesis_preflight_state(
         evaluation_date=request.evaluation_date,
         horizon_trading_days=request.horizon_trading_days,
         security_ids=request.security_ids,
-        research_cutoff_at=cutoff,
+        research_cutoff_at=canonical_utc(research_cutoff_at),
         thesis_snapshot_ids=thesis_snapshot_ids,
         blockers=blockers,
         guardrail_evidence_id=request.guardrail_evidence_id,
@@ -122,29 +121,43 @@ def persist_research_thesis_preflight_state(
     *,
     output_root: str | Path,
 ) -> Path:
+    """Atomically publish immutable state; readers never observe partial JSON."""
+
     directory = Path(output_root) / _STATE_DIRECTORY
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{snapshot.snapshot_id}.json"
-    payload = dict(snapshot.payload_without_id())
-    payload["snapshot_id"] = snapshot.snapshot_id
-    encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-    except FileExistsError:
+    if path.exists():
         existing = load_research_thesis_preflight_state(path)
         if existing != snapshot:
             raise ResearchPreflightStateError(
                 "existing preflight-state artifact conflicts with content address"
             )
         return path
+
+    payload = dict(snapshot.payload_without_id())
+    payload["snapshot_id"] = snapshot.snapshot_id
+    encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    fd, temp_name = tempfile.mkstemp(
+        prefix=f".{snapshot.snapshot_id}.",
+        suffix=".tmp",
+        dir=directory,
+    )
+    temp_path = Path(temp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(encoded)
             handle.flush()
             os.fsync(handle.fileno())
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
+        try:
+            os.link(temp_path, path)
+        except FileExistsError:
+            existing = load_research_thesis_preflight_state(path)
+            if existing != snapshot:
+                raise ResearchPreflightStateError(
+                    "concurrent preflight-state publication conflicts with content address"
+                )
+    finally:
+        temp_path.unlink(missing_ok=True)
     return path
 
 
@@ -154,10 +167,18 @@ def publish_current_research_thesis_preflight_state(
     selected_at: datetime,
     output_root: str | Path,
 ) -> Path:
+    """Atomically move a request's operational pointer without rewriting immutable history."""
+
     selected = canonical_utc(selected_at)
     directory = Path(output_root) / _POINTER_DIRECTORY
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{snapshot.request_snapshot_id}.json"
+    if path.exists():
+        prior = _load_pointer(path)
+        if prior.selected_at > selected:
+            raise ResearchPreflightStateError(
+                "preflight-current selected_at cannot move backward"
+            )
     payload = {
         "schema_version": RESEARCH_PREFLIGHT_STATE_SCHEMA_VERSION,
         "request_snapshot_id": snapshot.request_snapshot_id,
@@ -216,27 +237,16 @@ def load_current_research_thesis_preflight_states(
         return {}
     result: dict[str, CurrentResearchThesisPreflightState] = {}
     for pointer_path in sorted(pointer_directory.glob("*.json")):
-        payload = _load_object(pointer_path)
-        if _required_int(payload, "schema_version") != RESEARCH_PREFLIGHT_STATE_SCHEMA_VERSION:
-            raise ResearchPreflightStateError("unsupported preflight-current pointer schema version")
-        request_snapshot_id = _required_text(payload, "request_snapshot_id")
-        state_snapshot_id = _required_text(payload, "state_snapshot_id")
-        if pointer_path.stem != request_snapshot_id:
-            raise ResearchPreflightStateError(
-                "preflight-current pointer filename does not match request_snapshot_id"
-            )
-        _validate_sha(request_snapshot_id, "request_snapshot_id")
-        _validate_sha(state_snapshot_id, "state_snapshot_id")
-        selected_at = _datetime(_required_text(payload, "selected_at"), "selected_at")
+        pointer = _load_pointer(pointer_path)
         state = load_research_thesis_preflight_state(
-            state_directory / f"{state_snapshot_id}.json"
+            state_directory / f"{pointer.state.snapshot_id}.json"
         )
-        if state.request_snapshot_id != request_snapshot_id:
+        if state.request_snapshot_id != pointer.state.request_snapshot_id:
             raise ResearchPreflightStateError(
                 "preflight-current pointer references a different request"
             )
-        result[request_snapshot_id] = CurrentResearchThesisPreflightState(
-            selected_at=selected_at,
+        result[state.request_snapshot_id] = CurrentResearchThesisPreflightState(
+            selected_at=pointer.selected_at,
             state=state,
         )
     return result
@@ -265,6 +275,52 @@ def canonical_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+@dataclass(frozen=True)
+class _CurrentPointer:
+    selected_at: datetime
+    state: ResearchThesisPreflightStateSnapshot
+
+
+def _load_pointer(path: Path) -> _CurrentPointer:
+    payload = _load_object(path)
+    if frozenset(payload) != _POINTER_KEYS:
+        raise ResearchPreflightStateError("preflight-current pointer fields are not canonical")
+    if _required_int(payload, "schema_version") != RESEARCH_PREFLIGHT_STATE_SCHEMA_VERSION:
+        raise ResearchPreflightStateError("unsupported preflight-current pointer schema version")
+    request_snapshot_id = _required_text(payload, "request_snapshot_id")
+    state_snapshot_id = _required_text(payload, "state_snapshot_id")
+    _validate_sha(request_snapshot_id, "request_snapshot_id")
+    _validate_sha(state_snapshot_id, "state_snapshot_id")
+    if path.stem != request_snapshot_id:
+        raise ResearchPreflightStateError(
+            "preflight-current pointer filename does not match request_snapshot_id"
+        )
+    selected_at = _datetime(_required_text(payload, "selected_at"), "selected_at")
+    _require_utc(selected_at, "selected_at")
+    # The state object is a lightweight locator here; the caller reloads it from the state store.
+    placeholder = ResearchThesisPreflightStateSnapshot(
+        request_snapshot_id=request_snapshot_id,
+        request_id="pointer-placeholder",
+        mode=ResearchRoundMode.PROSPECTIVE,
+        evaluation_date=date(1970, 1, 1),
+        horizon_trading_days=60,
+        security_ids=("pointer-placeholder",),
+        research_cutoff_at=datetime(1970, 1, 1, tzinfo=UTC),
+        thesis_snapshot_ids=(),
+        blockers=(),
+        guardrail_evidence_id="0" * 64,
+    )
+    object.__setattr__(placeholder, "_pointer_state_snapshot_id", state_snapshot_id)
+    return _CurrentPointer(selected_at=selected_at, state=placeholder)
+
+
+def _pointer_state_snapshot_id(pointer: _CurrentPointer) -> str:
+    value = getattr(pointer.state, "_pointer_state_snapshot_id", None)
+    if not isinstance(value, str):
+        raise ResearchPreflightStateError("preflight-current pointer state id is unavailable")
+    return value
+
+
 def _parse_state(payload: dict[str, Any]) -> ResearchThesisPreflightStateSnapshot:
     if _required_int(payload, "schema_version") != RESEARCH_PREFLIGHT_STATE_SCHEMA_VERSION:
         raise ResearchPreflightStateError("unsupported preflight-state schema version")
@@ -287,8 +343,11 @@ def _parse_state(payload: dict[str, Any]) -> ResearchThesisPreflightStateSnapsho
         blockers=blockers,
         guardrail_evidence_id=_required_text(payload, "guardrail_evidence_id"),
     )
-    if bool(payload.get("ready_for_package_assembly")) != value.ready_for_package_assembly:
-        raise ResearchPreflightStateError("persisted preflight readiness does not match blockers")
+    _require_bool(
+        payload,
+        "ready_for_package_assembly",
+        expected=value.ready_for_package_assembly,
+    )
     _require_bool(payload, "ledger_schema_changed", expected=False)
     _require_bool(payload, "orchestrator_executed", expected=False)
     _require_bool(payload, "investment_conclusion_created", expected=False)
@@ -370,10 +429,14 @@ def _date(value: str, field: str) -> date:
         raise ResearchPreflightStateError(f"{field} must be an ISO date") from exc
 
 
-def _enum[EnumT](enum_type: type[EnumT], payload: dict[str, Any], field: str) -> EnumT:
+def _enum[EnumT: StrEnum](
+    enum_type: type[EnumT],
+    payload: dict[str, Any],
+    field: str,
+) -> EnumT:
     raw = _required_text(payload, field)
     try:
-        return enum_type(raw)  # type: ignore[call-arg]
+        return enum_type(raw)
     except ValueError as exc:
         raise ResearchPreflightStateError(f"invalid {field}: {raw}") from exc
 
@@ -387,6 +450,12 @@ def _require_bool(payload: dict[str, Any], field: str, *, expected: bool) -> Non
 def _require_aware(value: datetime, field: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field} must be timezone-aware")
+
+
+def _require_utc(value: datetime, field: str) -> None:
+    _require_aware(value, field)
+    if value.utcoffset() != UTC.utcoffset(value):
+        raise ValueError(f"{field} must be canonical UTC")
 
 
 def _require_text(value: str, field: str) -> None:
