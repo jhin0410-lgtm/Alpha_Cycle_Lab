@@ -95,8 +95,10 @@ def test_missing_theses_become_explicit_pre_orchestration_blockers(tmp_path) -> 
         artifact_root=tmp_path,
     )
     assert receipt.changed_history is True
+    assert receipt.changed_current_state is True
     assert receipt.ready_for_package_assembly is False
     assert receipt.run is not None
+    assert receipt.run.kind is ResearchRunKind.PRE_ORCHESTRATION_BLOCKED
     assert tuple(item.security_id for item in receipt.blockers) == ("000660", "005930")
     assert {item.code for item in receipt.blockers} == {
         "investment_thesis_snapshot_missing"
@@ -106,6 +108,7 @@ def test_missing_theses_become_explicit_pre_orchestration_blockers(tmp_path) -> 
     assert state is not None
     assert state.ledger.summary.blocked_run_count == 1
     assert len(state.blockers) == 2
+    assert {row.state for row in state.inbox} == {"pre_orchestration_blocked"}
 
 
 def test_identical_missing_thesis_preflight_is_idempotent(tmp_path) -> None:
@@ -124,8 +127,10 @@ def test_identical_missing_thesis_preflight_is_idempotent(tmp_path) -> None:
     )
     assert first.changed_history is True
     assert second.changed_history is False
+    assert second.changed_current_state is False
     assert second.run == first.run
     assert second.ledger.snapshot_id == first.ledger.snapshot_id
+    assert second.preflight_state.snapshot_id == first.preflight_state.snapshot_id
 
 
 def test_partial_thesis_progress_changes_blocker_history(tmp_path) -> None:
@@ -148,12 +153,13 @@ def test_partial_thesis_progress_changes_blocker_history(tmp_path) -> None:
     )
     assert first.changed_history is True
     assert second.changed_history is True
+    assert second.changed_current_state is True
     assert tuple(item.security_id for item in second.blockers) == ("005930",)
     assert tuple(item.security_id for item in second.thesis_snapshots) == ("000660",)
     assert second.ledger.summary.run_count == 2
 
 
-def test_complete_typed_theses_record_pre_orchestration_readiness_without_claiming_round(
+def test_complete_typed_theses_publish_ready_state_without_changing_ledger_schema(
     tmp_path,
 ) -> None:
     _request(tmp_path)
@@ -169,22 +175,23 @@ def test_complete_typed_theses_record_pre_orchestration_readiness_without_claimi
         artifact_root=tmp_path,
     )
     assert receipt.ready_for_package_assembly is True
-    assert receipt.changed_history is True
-    assert receipt.run is not None
-    assert receipt.run.kind is ResearchRunKind.PRE_ORCHESTRATION_READY
-    assert receipt.run.research_round_snapshot_id is None
-    assert receipt.run.blockers == ()
+    assert receipt.changed_history is False
+    assert receipt.changed_current_state is True
+    assert receipt.run is None
+    assert receipt.ledger.summary.run_count == 0
     assert tuple(item.security_id for item in receipt.thesis_snapshots) == (
         "000660",
         "005930",
     )
     payload = receipt.payload()
+    assert payload["ledger_schema_changed"] is False
     assert payload["orchestrator_executed"] is False
     assert payload["investment_conclusion_created"] is False
     assert payload["automatic_execution_enabled"] is False
 
     state = load_latest_observatory_state(tmp_path)
     assert state is not None
+    assert state.ledger.summary.run_count == 0
     assert {row.state for row in state.inbox} == {"pre_orchestration_ready"}
     assert {row.blocker_count for row in state.inbox} == {0}
 
