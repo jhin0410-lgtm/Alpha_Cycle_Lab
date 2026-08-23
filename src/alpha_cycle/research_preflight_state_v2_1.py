@@ -120,7 +120,7 @@ def build_research_thesis_preflight_state(
         mode=request.mode,
         evaluation_date=request.evaluation_date,
         horizon_trading_days=request.horizon_trading_days,
-        security_ids=request.security_ids,
+        security_ids=_canonical_security_ids(request.security_ids),
         research_cutoff_at=canonical_utc(research_cutoff_at),
         thesis_snapshot_ids=thesis_snapshot_ids,
         blockers=blockers,
@@ -281,7 +281,10 @@ def validate_preflight_state_request_binding(
         (state.mode is request.mode, "request mode mismatch"),
         (state.evaluation_date == request.evaluation_date, "evaluation date mismatch"),
         (state.horizon_trading_days == request.horizon_trading_days, "horizon mismatch"),
-        (state.security_ids == request.security_ids, "security list mismatch"),
+        (
+            state.security_ids == _canonical_security_ids(request.security_ids),
+            "security list mismatch",
+        ),
         (state.guardrail_evidence_id == request.guardrail_evidence_id, "guardrail mismatch"),
     )
     for condition, message in checks:
@@ -292,6 +295,10 @@ def validate_preflight_state_request_binding(
 def canonical_utc(value: datetime) -> datetime:
     _require_aware(value, "datetime")
     return value.astimezone(UTC)
+
+
+def _canonical_security_ids(security_ids: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(item.strip() for item in security_ids))
 
 
 def _load_pointer(path: Path) -> _CurrentPointer:
