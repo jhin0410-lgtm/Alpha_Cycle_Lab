@@ -188,6 +188,25 @@ def test_cross_security_thesis_parent_cannot_satisfy_lineage(tmp_path) -> None:
         )
 
 
+def test_thesis_lineage_requires_immediate_version_progression(tmp_path) -> None:
+    parent = _thesis(captured_at=NOW)
+    child = _thesis(
+        version=3,
+        parent_snapshot_id=parent.snapshot_id,
+        captured_at=NOW + timedelta(minutes=1),
+    )
+    persist_investment_thesis(parent, artifact_root=tmp_path)
+    persist_investment_thesis(child, artifact_root=tmp_path)
+
+    with pytest.raises(InvestmentThesisRepositoryError, match="immediately precede"):
+        find_latest_investment_thesis(
+            tmp_path,
+            security_id="000660",
+            horizon_trading_days=120,
+            as_of=NOW + timedelta(minutes=2),
+        )
+
+
 def test_shared_lock_keeps_pre301_intake_and_new_preflight_mutually_exclusive(tmp_path) -> None:
     receipt = _record_request(tmp_path)
     lock_path = tmp_path / LEGACY_SHARED_LOCK
