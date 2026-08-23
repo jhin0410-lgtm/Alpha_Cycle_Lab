@@ -35,6 +35,7 @@ def test_first_request_creates_pending_ledger_and_observatory_state(tmp_path) ->
 
     assert receipt.request_path.exists()
     assert receipt.ledger_path.exists()
+    assert not (tmp_path / ".research_request_intake.lock").exists()
     assert receipt.ledger.summary.request_count == 1
     assert receipt.ledger.summary.run_count == 0
     assert receipt.payload()["state"] == "request_pending"
@@ -72,6 +73,18 @@ def test_duplicate_request_id_is_rejected_before_new_persistence(tmp_path) -> No
     assert first.request_path.exists()
     assert set((tmp_path / "analysis_request_v2_1").glob("*.json")) == request_files_before
     assert set((tmp_path / "research_run_ledger_v2_1").glob("*.json")) == ledger_files_before
+
+
+def test_existing_intake_lock_fails_closed_before_history_forks(tmp_path) -> None:
+    lock_path = tmp_path / ".research_request_intake.lock"
+    lock_path.write_text("stale or active lock\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        _record(tmp_path, request_id="locked")
+
+    assert not (tmp_path / "analysis_request_v2_1").exists()
+    assert not (tmp_path / "research_run_ledger_v2_1").exists()
+    assert lock_path.exists()
 
 
 def test_recorded_at_cannot_precede_request(tmp_path) -> None:
