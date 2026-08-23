@@ -37,6 +37,7 @@ from alpha_cycle.intelligence.payoff_surface import (
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
 from alpha_cycle.intelligence.research_run_ledger_v2_1 import ResearchRunKind
 from alpha_cycle.intelligence.underwriter_v2_1 import (
+    SUPPLEMENTAL_DEEP_ELEMENTS,
     ForecastTournamentAssessment,
     UnderwritingLane,
     UnderwritingReadiness,
@@ -52,7 +53,11 @@ from alpha_cycle.research_request_preflight_v2_1 import preflight_pending_reques
 NOW = datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
 EVAL = date(2026, 8, 23)
 TARGET = date(2026, 12, 31)
-GUARDRAIL = load_decision_system_v21_guardrails().evidence_id
+ACTIVE_GUARDRAILS = load_decision_system_v21_guardrails()
+GUARDRAIL = ACTIVE_GUARDRAILS.evidence_id
+DEEP_REQUIRED_ELEMENTS = (
+    ACTIVE_GUARDRAILS.deep_lane_required_elements + SUPPLEMENTAL_DEEP_ELEMENTS
+)
 A = "a" * 64
 B = "b" * 64
 C = "c" * 64
@@ -223,7 +228,7 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         price_implied_requirement_snapshot_id=None,
         payoff_surface_snapshot_id=payoff.snapshot_id,
         epistemic_defense_snapshot_id=None,
-        required_elements_satisfied=("payoff_surface",),
+        required_elements_satisfied=DEEP_REQUIRED_ELEMENTS,
         required_elements_missing=(),
         blockers=(),
         flags=(),
