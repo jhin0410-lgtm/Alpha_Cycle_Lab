@@ -7,7 +7,7 @@ import os
 from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, cast
 
 from alpha_cycle.intelligence.decision_thesis_v2 import (
     CatalystClock,
@@ -22,7 +22,6 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
 )
 
 _THESIS_DIRECTORY = "investment_thesis_v2_1"
-_EnumT = TypeVar("_EnumT", bound=StrEnum)
 
 
 class InvestmentThesisRepositoryError(ValueError):
@@ -262,7 +261,7 @@ def _date(value: str, field: str) -> date:
         raise InvestmentThesisRepositoryError(f"{field} must be an ISO date") from exc
 
 
-def _enum(
+def _enum[_EnumT: StrEnum](
     enum_type: type[_EnumT],
     payload: dict[str, Any],
     field: str,
