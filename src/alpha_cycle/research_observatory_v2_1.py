@@ -27,6 +27,12 @@ from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
     ResearchRunLedgerSnapshot,
 )
 from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
+from alpha_cycle.research_preflight_state_v2_1 import (
+    CurrentResearchThesisPreflightState,
+    ResearchPreflightStateError,
+    load_current_research_thesis_preflight_states,
+    validate_preflight_state_request_binding,
+)
 
 RESEARCH_OBSERVATORY_SCHEMA_VERSION = 1
 _LEDGER_DIRECTORY = "research_run_ledger_v2_1"
@@ -152,9 +158,10 @@ class ResearchObservatoryState:
 
 
 def load_latest_observatory_state(artifact_root: str | Path) -> ResearchObservatoryState | None:
-    """Load only the newest ledger body after cheaply peeking each embedded built_at."""
+    """Load newest ledger plus the independently validated current preflight projection."""
 
-    directory = Path(artifact_root) / _LEDGER_DIRECTORY
+    root = Path(artifact_root)
+    directory = root / _LEDGER_DIRECTORY
     if not directory.exists():
         return None
     paths = tuple(sorted(directory.glob("*.json")))
@@ -169,7 +176,15 @@ def load_latest_observatory_state(artifact_root: str | Path) -> ResearchObservat
     ledger = load_research_run_ledger(source_path)
     if ledger.built_at != peeked_built_at:
         raise ObservatoryDataError("peeked built_at changed during ledger validation")
-    return build_observatory_state(source_path, ledger)
+    try:
+        current_preflights = load_current_research_thesis_preflight_states(root)
+    except ResearchPreflightStateError as exc:
+        raise ObservatoryDataError("current thesis-preflight state failed validation") from exc
+    return build_observatory_state(
+        source_path,
+        ledger,
+        current_preflights=current_preflights,
+    )
 
 
 def load_research_run_ledger(path: str | Path) -> ResearchRunLedgerSnapshot:
@@ -213,11 +228,13 @@ def load_research_run_ledger(path: str | Path) -> ResearchRunLedgerSnapshot:
 def build_observatory_state(
     source_path: str | Path,
     ledger: ResearchRunLedgerSnapshot,
+    *,
+    current_preflights: dict[str, CurrentResearchThesisPreflightState] | None = None,
 ) -> ResearchObservatoryState:
     return ResearchObservatoryState(
         source_path=Path(source_path),
         ledger=ledger,
-        inbox=build_research_inbox(ledger),
+        inbox=build_research_inbox(ledger, current_preflights=current_preflights),
         blockers=build_blocker_inspector(ledger),
         history=build_research_history(ledger),
     )
@@ -225,10 +242,28 @@ def build_observatory_state(
 
 def build_research_inbox(
     ledger: ResearchRunLedgerSnapshot,
+    *,
+    current_preflights: dict[str, CurrentResearchThesisPreflightState] | None = None,
 ) -> tuple[ResearchInboxRow, ...]:
     latest_requests: dict[str, AnalysisRequestSnapshot] = {}
     latest_runs_by_request: dict[str, ResearchRoundRunSnapshot] = {}
     latest_runs_by_security: dict[str, ResearchRoundRunSnapshot] = {}
+    latest_orchestrated_by_request: dict[str, ResearchRoundRunSnapshot] = {}
+    request_by_snapshot = {item.snapshot_id: item for item in ledger.requests}
+    active_preflights = current_preflights or {}
+
+    for request_snapshot_id, current in active_preflights.items():
+        request = request_by_snapshot.get(request_snapshot_id)
+        if request is None:
+            raise ObservatoryDataError(
+                "current thesis-preflight state references a request absent from the ledger"
+            )
+        try:
+            validate_preflight_state_request_binding(current.state, request)
+        except ResearchPreflightStateError as exc:
+            raise ObservatoryDataError(
+                "current thesis-preflight state does not bind to its ledger request"
+            ) from exc
 
     for request in ledger.requests:
         for security_id in request.security_ids:
@@ -240,6 +275,10 @@ def build_research_inbox(
         current_run = latest_runs_by_request.get(run.request_snapshot_id)
         if current_run is None or _run_key(run) > _run_key(current_run):
             latest_runs_by_request[run.request_snapshot_id] = run
+        if run.kind is ResearchRunKind.ORCHESTRATED:
+            current_orchestrated = latest_orchestrated_by_request.get(run.request_snapshot_id)
+            if current_orchestrated is None or _run_key(run) > _run_key(current_orchestrated):
+                latest_orchestrated_by_request[run.request_snapshot_id] = run
         for security_id in run.security_ids:
             current_security_run = latest_runs_by_security.get(security_id)
             if current_security_run is None or _run_key(run) > _run_key(current_security_run):
@@ -248,6 +287,38 @@ def build_research_inbox(
     rows: list[ResearchInboxRow] = []
     for security_id in sorted(latest_requests):
         request = latest_requests[security_id]
+        orchestrated = latest_orchestrated_by_request.get(request.snapshot_id)
+        if orchestrated is not None:
+            rows.append(_inbox_row_from_run(security_id, request, orchestrated))
+            continue
+
+        current_preflight = active_preflights.get(request.snapshot_id)
+        if current_preflight is not None:
+            historical_run = latest_runs_by_request.get(request.snapshot_id)
+            prior_security_run = latest_runs_by_security.get(security_id)
+            visible_run = historical_run or prior_security_run
+            rows.append(
+                ResearchInboxRow(
+                    security_id=security_id,
+                    latest_request_at=request.requested_at,
+                    latest_run_completed_at=(
+                        visible_run.completed_at if visible_run is not None else None
+                    ),
+                    requested_lane=request.requested_lane,
+                    mode=request.mode,
+                    state=(
+                        "pre_orchestration_ready"
+                        if current_preflight.state.ready_for_package_assembly
+                        else "pre_orchestration_blocked"
+                    ),
+                    blocker_count=len(current_preflight.state.blockers),
+                    opportunity_set_available=False,
+                    expectation_overlay_available=False,
+                    prospective_registered=False,
+                )
+            )
+            continue
+
         matching_run = latest_runs_by_request.get(request.snapshot_id)
         if matching_run is None:
             prior_run = latest_runs_by_security.get(security_id)
@@ -268,27 +339,27 @@ def build_research_inbox(
                 )
             )
             continue
-        rows.append(
-            ResearchInboxRow(
-                security_id=security_id,
-                latest_request_at=request.requested_at,
-                latest_run_completed_at=matching_run.completed_at,
-                requested_lane=matching_run.requested_lane,
-                mode=matching_run.mode,
-                state=_run_state(matching_run),
-                blocker_count=len(matching_run.blockers),
-                opportunity_set_available=(
-                    matching_run.opportunity_set_snapshot_id is not None
-                ),
-                expectation_overlay_available=(
-                    matching_run.expectation_overlay_snapshot_id is not None
-                ),
-                prospective_registered=(
-                    matching_run.prospective_registration_snapshot_id is not None
-                ),
-            )
-        )
+        rows.append(_inbox_row_from_run(security_id, request, matching_run))
     return tuple(rows)
+
+
+def _inbox_row_from_run(
+    security_id: str,
+    request: AnalysisRequestSnapshot,
+    run: ResearchRoundRunSnapshot,
+) -> ResearchInboxRow:
+    return ResearchInboxRow(
+        security_id=security_id,
+        latest_request_at=request.requested_at,
+        latest_run_completed_at=run.completed_at,
+        requested_lane=run.requested_lane,
+        mode=run.mode,
+        state=_run_state(run),
+        blocker_count=len(run.blockers),
+        opportunity_set_available=run.opportunity_set_snapshot_id is not None,
+        expectation_overlay_available=run.expectation_overlay_snapshot_id is not None,
+        prospective_registered=run.prospective_registration_snapshot_id is not None,
+    )
 
 
 def build_blocker_inspector(
@@ -541,7 +612,7 @@ def _optional_number(payload: dict[str, Any], field: str) -> float | None:
         return None
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         raise ObservatoryDataError(f"{field} must be numeric or null")
-    return cast(float, value)
+    return float(value)
 
 
 def _require_bool(payload: dict[str, Any], field: str, *, expected: bool) -> None:
