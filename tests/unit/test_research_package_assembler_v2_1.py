@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from alpha_cycle.intelligence.decision_guardrails_v2_1 import (
     load_decision_system_v21_guardrails,
@@ -151,7 +154,7 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         target_date=TARGET,
         unit="KRW_million",
         selected_forecast_snapshot_id=D,
-        selected_forecast_id=f"selected-{security_id}",
+        selected_forecast_id=f"a-{security_id}",
         selected_forecaster_kind=ForecasterKind.MODEL,
         selected_model_family="fixture-model",
         selected_forecast_value=20_000_000.0 + offset,
@@ -180,7 +183,8 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
                 consensus_value=18_000_000.0,
                 unit=view.unit,
                 absolute_gap=view.selected_forecast_value - 18_000_000.0,
-                relative_gap=(view.selected_forecast_value - 18_000_000.0) / 18_000_000.0,
+                relative_gap=(view.selected_forecast_value - 18_000_000.0)
+                / 18_000_000.0,
             ),
         ),
         price_implied_gaps=(),
@@ -253,6 +257,28 @@ def _prepare_ready_request(tmp_path: Path):
     return theses
 
 
+def _persist_components(
+    tmp_path: Path,
+    theses: tuple[InvestmentThesisSnapshot, ...],
+    *,
+    mismatch_first_tournament: bool = False,
+) -> None:
+    for index, thesis in enumerate(theses):
+        payoff, view, gap, underwriting = _components(thesis, index)
+        if mismatch_first_tournament and index == 0:
+            underwriting = replace(
+                underwriting,
+                forecast_tournament=replace(
+                    underwriting.forecast_tournament,
+                    target_variable="revenue",
+                ),
+            )
+        persist_payoff_surface(payoff, output_root=tmp_path / "payoff_surface")
+        persist_decision_view(view, output_root=tmp_path)
+        persist_decision_expectation_gap(gap, output_root=tmp_path)
+        persist_underwriting_readiness(underwriting, output_root=tmp_path)
+
+
 def test_missing_components_block_without_running_orchestrator(tmp_path: Path) -> None:
     _prepare_ready_request(tmp_path)
     receipt = assemble_and_run_research_package(
@@ -282,12 +308,7 @@ def test_missing_components_block_without_running_orchestrator(tmp_path: Path) -
 
 def test_full_persisted_package_delegates_to_existing_orchestrator(tmp_path: Path) -> None:
     theses = _prepare_ready_request(tmp_path)
-    for index, thesis in enumerate(theses):
-        payoff, view, gap, underwriting = _components(thesis, index)
-        persist_payoff_surface(payoff, output_root=tmp_path / "payoff_surface")
-        persist_decision_view(view, output_root=tmp_path)
-        persist_decision_expectation_gap(gap, output_root=tmp_path)
-        persist_underwriting_readiness(underwriting, output_root=tmp_path)
+    _persist_components(tmp_path, theses)
 
     receipt = assemble_and_run_research_package(
         request_id="typed-package-round",
@@ -306,7 +327,64 @@ def test_full_persisted_package_delegates_to_existing_orchestrator(tmp_path: Pat
     assert receipt.research_round_path.exists()
     assert receipt.payload()["automatic_execution_enabled"] is False
 
+    candidate_root = tmp_path / "opportunity_candidate"
+    assert (candidate_root / "latest_opportunity_candidate.json").exists()
+    for candidate in receipt.orchestrated.opportunity_candidates:
+        assert any(
+            path.is_dir() and path.name.endswith(candidate.snapshot_id[:12])
+            for path in candidate_root.iterdir()
+        )
+    if receipt.orchestrated.opportunity_set is not None:
+        opportunity_set = receipt.orchestrated.opportunity_set
+        set_root = tmp_path / "opportunity_set"
+        assert (set_root / "latest_opportunity_set.json").exists()
+        assert any(
+            path.is_dir() and path.name.endswith(opportunity_set.snapshot_id[:12])
+            for path in set_root.iterdir()
+        )
+
     state = load_latest_observatory_state(tmp_path)
     assert state is not None
     assert state.ledger.summary.orchestrated_run_count == 1
     assert {row.state for row in state.inbox} == {receipt.run.round_status.value}
+
+
+def test_tournament_binding_mismatch_blocks_before_orchestrator(tmp_path: Path) -> None:
+    theses = _prepare_ready_request(tmp_path)
+    _persist_components(tmp_path, theses, mismatch_first_tournament=True)
+
+    receipt = assemble_and_run_research_package(
+        request_id="typed-package-round",
+        round_id="round-wrong-tournament",
+        run_id="package-wrong-tournament",
+        processed_at=NOW + timedelta(minutes=2),
+        artifact_root=tmp_path,
+    )
+
+    assert receipt.orchestrated is None
+    assert receipt.full_package_ready is False
+    assert any(
+        blocker.code == "underwriting_decision_view_tournament_binding_mismatch"
+        and blocker.security_id == "000660"
+        for blocker in receipt.blockers
+    )
+    assert not (tmp_path / "opportunity_candidate").exists()
+    assert not (tmp_path / "research_round_v2_1").exists()
+
+
+def test_invalid_run_id_leaves_no_round_or_opportunity_artifacts(tmp_path: Path) -> None:
+    theses = _prepare_ready_request(tmp_path)
+    _persist_components(tmp_path, theses)
+
+    with pytest.raises(ValueError, match="run_id"):
+        assemble_and_run_research_package(
+            request_id="typed-package-round",
+            round_id="round-invalid-run-id",
+            run_id="",
+            processed_at=NOW + timedelta(minutes=2),
+            artifact_root=tmp_path,
+        )
+
+    assert not (tmp_path / "opportunity_candidate").exists()
+    assert not (tmp_path / "opportunity_set").exists()
+    assert not (tmp_path / "research_round_v2_1").exists()
