@@ -37,6 +37,7 @@ from alpha_cycle.research_preflight_state_v2_1 import (
 RESEARCH_OBSERVATORY_SCHEMA_VERSION = 1
 _LEDGER_DIRECTORY = "research_run_ledger_v2_1"
 _PEEK_LINE_LIMIT = 32
+_THESIS_PREFLIGHT_BLOCKED_FLAG = "typed_thesis_preflight_blocked"
 
 
 class ObservatoryDataError(ValueError):
@@ -294,9 +295,9 @@ def build_research_inbox(
 
         matching_run = latest_runs_by_request.get(request.snapshot_id)
         current_preflight = active_preflights.get(request.snapshot_id)
-        if current_preflight is not None and (
-            matching_run is None
-            or current_preflight.selected_at >= matching_run.completed_at
+        if current_preflight is not None and _preflight_pointer_is_authoritative(
+            current_preflight,
+            matching_run,
         ):
             prior_security_run = latest_runs_by_security.get(security_id)
             visible_run = matching_run or prior_security_run
@@ -343,6 +344,19 @@ def build_research_inbox(
             continue
         rows.append(_inbox_row_from_run(security_id, request, matching_run))
     return tuple(rows)
+
+
+def _preflight_pointer_is_authoritative(
+    current: CurrentResearchThesisPreflightState,
+    run: ResearchRoundRunSnapshot | None,
+) -> bool:
+    if run is None:
+        return True
+    if run.kind is not ResearchRunKind.PRE_ORCHESTRATION_BLOCKED:
+        return False
+    if _THESIS_PREFLIGHT_BLOCKED_FLAG not in run.flags:
+        return False
+    return current.selected_at >= run.completed_at
 
 
 def _inbox_row_from_run(
