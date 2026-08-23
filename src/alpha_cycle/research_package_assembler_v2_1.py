@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -41,8 +42,10 @@ from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
     persist_research_run,
     persist_research_run_ledger,
 )
+from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 from alpha_cycle.investment_thesis_repository_v2_1 import (
     InvestmentThesisRepositoryError,
+    InvestmentThesisRepositoryIndex,
     build_investment_thesis_repository_index,
 )
 from alpha_cycle.research_component_repository_v2_1 import (
@@ -212,17 +215,23 @@ def assemble_and_run_research_package(
         blockers: list[ResearchRoundBlocker] = []
         resolved_thesis_ids: list[str] = []
         for security_id in request.security_ids:
-            thesis = thesis_index.find_latest(
+            thesis = _resolve_latest_thesis_for_package(
+                thesis_index,
                 security_id=security_id,
                 horizon_trading_days=request.horizon_trading_days,
+                blockers=blockers,
             )
             if thesis is None:
-                _block(
-                    blockers,
-                    "thesis",
-                    "investment_thesis_snapshot_missing",
-                    security_id,
-                )
+                if not any(
+                    item.security_id == security_id and item.component == "thesis"
+                    for item in blockers
+                ):
+                    _block(
+                        blockers,
+                        "thesis",
+                        "investment_thesis_snapshot_missing",
+                        security_id,
+                    )
                 continue
             resolved_thesis_ids.append(thesis.snapshot_id)
             package = _assemble_security_package(
@@ -332,6 +341,36 @@ def assemble_and_run_research_package(
         )
 
 
+def _resolve_latest_thesis_for_package(
+    thesis_index: InvestmentThesisRepositoryIndex,
+    *,
+    security_id: str,
+    horizon_trading_days: int,
+    blockers: list[ResearchRoundBlocker],
+) -> InvestmentThesisSnapshot | None:
+    try:
+        thesis = thesis_index.find_latest(
+            security_id=security_id,
+            horizon_trading_days=horizon_trading_days,
+        )
+    except InvestmentThesisRepositoryError:
+        _block(
+            blockers,
+            "thesis",
+            "investment_thesis_lineage_invalid",
+            security_id,
+        )
+        return None
+    if thesis is None:
+        _block(
+            blockers,
+            "thesis",
+            "investment_thesis_snapshot_missing",
+            security_id,
+        )
+    return thesis
+
+
 def _assemble_security_package(
     security_id: str,
     *,
@@ -411,7 +450,11 @@ def _assemble_security_package(
                 "underwriting_payoff_binding_mismatch",
                 security_id,
             )
-    if underwriting is not None and view is not None:
+    if (
+        underwriting is not None
+        and view is not None
+        and underwriting.lane is UnderwritingLane.DEEP
+    ):
         if not decision_view_matches_underwriting_tournament(
             view, underwriting, artifact_root=artifact_root
         ):
@@ -750,8 +793,7 @@ def _persist_owned_opportunity_snapshot(
         indent=2,
         sort_keys=True,
     ).encode("utf-8")
-    pointer_temp = root / f".{pointer.name}.{os.getpid()}.owned.tmp"
-    pointer_temp.write_bytes(pointer_after)
+    pointer_temp = _write_owned_pointer_temp(root, pointer.name, pointer_after)
     try:
         if pointer_before is None:
             try:
@@ -784,6 +826,24 @@ def _persist_owned_opportunity_snapshot(
         pointer_mtime_ns=mtime_ns,
         pointer_size=size,
     )
+
+
+def _write_owned_pointer_temp(root: Path, pointer_name: str, content: bytes) -> Path:
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{pointer_name}.",
+        suffix=".owned.tmp",
+        dir=root,
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
+    return temporary
 
 
 def _pointer_version_is_current(publication: _OwnedOpportunityPublication) -> bool:
