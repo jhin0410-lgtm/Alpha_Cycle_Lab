@@ -111,7 +111,9 @@ def test_missing_theses_become_explicit_pre_orchestration_blockers(tmp_path) -> 
     assert {row.state for row in state.inbox} == {"pre_orchestration_blocked"}
 
 
-def test_identical_missing_thesis_preflight_is_idempotent(tmp_path) -> None:
+def test_identical_missing_thesis_preflight_dedupes_metrics_but_advances_pit_state(
+    tmp_path,
+) -> None:
     _request(tmp_path)
     first = preflight_pending_request_theses(
         request_id="live-semiconductor-round",
@@ -127,10 +129,11 @@ def test_identical_missing_thesis_preflight_is_idempotent(tmp_path) -> None:
     )
     assert first.changed_history is True
     assert second.changed_history is False
-    assert second.changed_current_state is False
+    assert second.changed_current_state is True
     assert second.run == first.run
     assert second.ledger.snapshot_id == first.ledger.snapshot_id
-    assert second.preflight_state.snapshot_id == first.preflight_state.snapshot_id
+    assert second.preflight_state.snapshot_id != first.preflight_state.snapshot_id
+    assert second.research_cutoff_at > first.research_cutoff_at
 
 
 def test_partial_thesis_progress_changes_blocker_history(tmp_path) -> None:
