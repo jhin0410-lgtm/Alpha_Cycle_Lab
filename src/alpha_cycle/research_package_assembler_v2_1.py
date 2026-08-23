@@ -51,6 +51,17 @@ from alpha_cycle.research_ledger_write_lock_v2_1 import (
     exclusive_research_ledger_write_lock,
 )
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
+from alpha_cycle.research_package_integrity_v2_1 import (
+    decision_view_matches_underwriting_tournament,
+    package_integrity_blocker_codes,
+    require_trusted_artifact_root,
+    validate_existing_opportunity_artifacts,
+    validate_persisted_opportunity_candidate,
+    validate_persisted_opportunity_set,
+    validate_preflight_selection_timing,
+    validate_publication_layout,
+    validate_thesis_repository_layout,
+)
 from alpha_cycle.research_preflight_state_v2_1 import (
     CurrentResearchThesisPreflightState,
     ResearchPreflightStateError,
@@ -124,6 +135,7 @@ def assemble_and_run_research_package(
 
     _require_aware(processed_at, "processed_at")
     root = Path(artifact_root)
+    require_trusted_artifact_root(root)
     with exclusive_research_ledger_write_lock(root):
         observatory = load_latest_observatory_state(root)
         if observatory is None:
@@ -162,6 +174,7 @@ def assemble_and_run_research_package(
             raise ValueError("analysis request guardrail evidence is no longer active")
 
         try:
+            validate_thesis_repository_layout(root)
             thesis_index = build_investment_thesis_repository_index(
                 root,
                 as_of=cutoff,
@@ -362,6 +375,9 @@ def _assemble_security_package(
             security_id,
         )
 
+    for code in package_integrity_blocker_codes(thesis, underwriting, payoff, view, gap):
+        _block(blockers, "research_package", code, security_id)
+
     if underwriting is not None and payoff is not None:
         if (
             underwriting.payoff_surface_snapshot_id is not None
@@ -374,7 +390,7 @@ def _assemble_security_package(
                 security_id,
             )
     if underwriting is not None and view is not None:
-        if not _decision_view_matches_underwriting_tournament(view, underwriting):
+        if not decision_view_matches_underwriting_tournament(view, underwriting):
             _block(
                 blockers,
                 "research_package",
@@ -437,24 +453,6 @@ def _assemble_security_package(
     )
 
 
-def _decision_view_matches_underwriting_tournament(view: object, underwriting: object) -> bool:
-    tournament = underwriting.forecast_tournament  # type: ignore[attr-defined]
-    return bool(
-        tournament.comparable
-        and tournament.security_id == view.security_id  # type: ignore[attr-defined]
-        and tournament.target_variable == view.target_variable  # type: ignore[attr-defined]
-        and tournament.target_date == view.target_date  # type: ignore[attr-defined]
-        and tournament.unit == view.unit  # type: ignore[attr-defined]
-        and tournament.forecast_origin == view.forecast_origin  # type: ignore[attr-defined]
-        and tournament.information_cutoff == view.information_cutoff  # type: ignore[attr-defined]
-        and tuple(sorted(tournament.forecast_snapshot_ids))
-        == tuple(sorted(view.tournament_forecast_snapshot_ids))  # type: ignore[attr-defined]
-        and view.selected_forecast_snapshot_id  # type: ignore[attr-defined]
-        in tournament.forecast_snapshot_ids
-        and view.selected_forecast_id in tournament.forecast_ids  # type: ignore[attr-defined]
-    )
-
-
 def _current_ready_preflight(
     root: Path,
     request: AnalysisRequestSnapshot,
@@ -473,10 +471,7 @@ def _current_ready_preflight(
         raise ValueError(
             "analysis request has no current typed-thesis preflight state"
         )
-    if current.selected_at > processed_at:
-        raise ValueError(
-            "current thesis preflight selected_at cannot be after processing time"
-        )
+    validate_preflight_selection_timing(current, processed_at=processed_at)
     try:
         validate_preflight_state_request_binding(current.state, request)
     except ResearchPreflightStateError as exc:
@@ -523,6 +518,7 @@ def _record_package_blockers(
         (*ledger.runs, run),
         built_at=processed_at,
     )
+    _require_safe_run_ledger_publication(root, run=run, ledger=next_ledger)
     run_path = persist_research_run(run, output_root=root)
     try:
         ledger_path = persist_research_run_ledger(
@@ -597,6 +593,9 @@ def _publish_orchestrated_artifacts(
     ledger: ResearchRunLedgerSnapshot,
     root: Path,
 ) -> tuple[Path, Path, Path]:
+    validate_publication_layout(root, artifacts=artifacts, run=run, ledger=ledger)
+    validate_existing_opportunity_artifacts(root, artifacts)
+
     candidate_root = root / "opportunity_candidate"
     candidate_pointer = candidate_root / "latest_opportunity_candidate.json"
     candidate_root_existed = candidate_root.exists()
@@ -634,8 +633,18 @@ def _publish_orchestrated_artifacts(
     try:
         for candidate in artifacts.opportunity_candidates:
             persist_opportunity_candidate(candidate, output_root=root)
+            validate_persisted_opportunity_candidate(
+                root,
+                candidate,
+                require_pointer=True,
+            )
         if artifacts.opportunity_set is not None:
             persist_opportunity_set(artifacts.opportunity_set, output_root=root)
+            validate_persisted_opportunity_set(
+                root,
+                artifacts.opportunity_set,
+                require_pointer=True,
+            )
         round_path = persist_research_round(artifacts.snapshot, output_root=root)
         run_path = persist_research_run(run, output_root=root)
         ledger_path = persist_research_run_ledger(ledger, output_root=root)
@@ -683,6 +692,11 @@ def _rollback_opportunity_repository(
 ) -> None:
     for directory in reversed(new_directories):
         try:
+            if directory.is_symlink():
+                cleanup_errors.append(
+                    RuntimeError(f"rollback refused symlinked snapshot directory: {directory}")
+                )
+                continue
             if directory.exists():
                 shutil.rmtree(directory)
         except BaseException as exc:
@@ -691,8 +705,12 @@ def _rollback_opportunity_repository(
         if pointer_before is None:
             pointer.unlink(missing_ok=True)
         else:
+            if pointer.is_symlink():
+                pointer.unlink(missing_ok=True)
             pointer.parent.mkdir(parents=True, exist_ok=True)
             temporary = pointer.with_name(f".{pointer.name}.rollback")
+            if temporary.is_symlink() or temporary.exists():
+                temporary.unlink(missing_ok=True)
             temporary.write_bytes(pointer_before)
             temporary.replace(pointer)
     except BaseException as exc:
@@ -709,6 +727,28 @@ def _rollback_opportunity_repository(
                 )
 
 
+def _require_safe_run_ledger_publication(
+    root: Path,
+    *,
+    run: ResearchRoundRunSnapshot,
+    ledger: ResearchRunLedgerSnapshot,
+) -> None:
+    resolved_root = require_trusted_artifact_root(root)
+    for directory_name, snapshot_id, label in (
+        ("research_round_run_v2_1", run.snapshot_id, "research run"),
+        ("research_run_ledger_v2_1", ledger.snapshot_id, "research ledger"),
+    ):
+        repository = root / directory_name
+        if repository.is_symlink():
+            raise ValueError(f"{label} repository cannot be a symlink")
+        if repository.exists():
+            if not repository.is_dir() or repository.resolve().parent != resolved_root:
+                raise ValueError(f"{label} repository escapes artifact_root")
+        path = repository / f"{snapshot_id}.json"
+        if path.is_symlink():
+            raise ValueError(f"{label} artifact cannot be a symlink")
+
+
 def _opportunity_snapshot_directory(
     root: Path,
     *,
@@ -721,6 +761,8 @@ def _opportunity_snapshot_directory(
 
 
 def _optional_bytes(path: Path) -> bytes | None:
+    if path.is_symlink():
+        raise ValueError(f"cannot read symlinked publication pointer: {path}")
     return path.read_bytes() if path.exists() else None
 
 
