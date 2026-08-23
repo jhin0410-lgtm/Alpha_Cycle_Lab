@@ -94,7 +94,7 @@ def test_loader_rejects_payload_tampering(tmp_path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["why_now"] = "tampered after persistence"
     path.write_text(json.dumps(payload), encoding="utf-8")
-    with pytest.raises(InvestmentThesisRepositoryError, match="canonical payload"):
+    with pytest.raises(InvestmentThesisRepositoryError, match="persisted payload"):
         load_investment_thesis(path)
 
 
