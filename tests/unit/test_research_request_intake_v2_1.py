@@ -11,7 +11,7 @@ from alpha_cycle.research_request_intake_v2_1 import record_analysis_request
 
 NOW = datetime(2026, 8, 23, 6, 0, tzinfo=UTC)
 EVALUATION_DATE = date(2026, 8, 23)
-LOCK_NAME = ".research_run_ledger.lock"
+LOCK_NAME = ".research_request_intake.lock"
 
 
 def _record(tmp_path, *, request_id: str, offset: int = 0):
