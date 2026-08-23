@@ -32,6 +32,7 @@ _HEX_DIGITS = frozenset("0123456789abcdef")
 
 class ResearchRunKind(StrEnum):
     PRE_ORCHESTRATION_BLOCKED = "pre_orchestration_blocked"
+    PRE_ORCHESTRATION_READY = "pre_orchestration_ready"
     ORCHESTRATED = "orchestrated"
 
 
@@ -163,6 +164,21 @@ class ResearchRoundRunSnapshot:
             ):
                 raise ValueError("pre-orchestration blocked run cannot claim downstream artifacts")
             return
+        if self.kind is ResearchRunKind.PRE_ORCHESTRATION_READY:
+            if self.research_round_snapshot_id is not None or self.round_status is not None:
+                raise ValueError("pre-orchestration ready run cannot claim a round snapshot")
+            if self.blockers:
+                raise ValueError("pre-orchestration ready run cannot contain blockers")
+            if any(
+                value is not None
+                for value in (
+                    self.opportunity_set_snapshot_id,
+                    self.expectation_overlay_snapshot_id,
+                    self.prospective_registration_snapshot_id,
+                )
+            ):
+                raise ValueError("pre-orchestration ready run cannot claim downstream artifacts")
+            return
         if self.research_round_snapshot_id is None or self.round_status is None:
             raise ValueError("orchestrated run requires a bound research-round snapshot")
         blocked_statuses = {
@@ -256,8 +272,15 @@ class ResearchProcessObservabilitySummary:
         )
         if any(value < 0 for value in counts):
             raise ValueError("observability counts cannot be negative")
+        pre_orchestration_ready_run_count = sum(
+            count
+            for status, count in self.status_counts
+            if status == ResearchRunKind.PRE_ORCHESTRATION_READY.value
+        )
         if (
-            self.orchestrated_run_count + self.pre_orchestration_blocked_run_count
+            self.orchestrated_run_count
+            + self.pre_orchestration_blocked_run_count
+            + pre_orchestration_ready_run_count
             != self.run_count
         ):
             raise ValueError("run-kind counts must sum to run_count")
@@ -460,6 +483,41 @@ def build_pre_orchestration_blocked_run(
         research_round_snapshot_id=None,
         round_status=None,
         blockers=blockers,
+        flags=flags,
+        opportunity_set_snapshot_id=None,
+        expectation_overlay_snapshot_id=None,
+        prospective_registration_snapshot_id=None,
+        guardrail_evidence_id=request.guardrail_evidence_id,
+    )
+
+
+def build_pre_orchestration_ready_run(
+    request: AnalysisRequestSnapshot,
+    *,
+    run_id: str,
+    started_at: datetime,
+    completed_at: datetime,
+    flags: tuple[str, ...] = (),
+) -> ResearchRoundRunSnapshot:
+    """Record that typed pre-orchestration prerequisites cleared without claiming a round."""
+
+    if started_at < request.requested_at:
+        raise ValueError("research run cannot start before its request")
+    return ResearchRoundRunSnapshot(
+        run_id=run_id,
+        request_snapshot_id=request.snapshot_id,
+        request_id=request.request_id,
+        kind=ResearchRunKind.PRE_ORCHESTRATION_READY,
+        started_at=started_at,
+        completed_at=completed_at,
+        evaluation_date=request.evaluation_date,
+        horizon_trading_days=request.horizon_trading_days,
+        security_ids=request.security_ids,
+        mode=request.mode,
+        requested_lane=request.requested_lane,
+        research_round_snapshot_id=None,
+        round_status=None,
+        blockers=(),
         flags=flags,
         opportunity_set_snapshot_id=None,
         expectation_overlay_snapshot_id=None,
