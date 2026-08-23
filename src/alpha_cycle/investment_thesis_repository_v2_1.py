@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -29,6 +30,40 @@ _THESIS_DIRECTORY = "investment_thesis_v2_1"
 
 class InvestmentThesisRepositoryError(ValueError):
     """Raised when a persisted thesis fails typed or content-address validation."""
+
+
+@dataclass(frozen=True)
+class InvestmentThesisRepositoryIndex:
+    """One point-in-time scan of persisted theses, reusable across many securities."""
+
+    as_of: datetime
+    snapshots_by_id: dict[str, InvestmentThesisSnapshot]
+    candidates_by_key: dict[tuple[str, int], tuple[InvestmentThesisSnapshot, ...]]
+
+    def find_latest(
+        self,
+        *,
+        security_id: str,
+        horizon_trading_days: int,
+    ) -> InvestmentThesisSnapshot | None:
+        if not security_id.strip():
+            raise ValueError("security_id must be non-empty text")
+        candidates = self.candidates_by_key.get((security_id, horizon_trading_days), ())
+        if not candidates:
+            return None
+
+        families: dict[tuple[str, str, int], list[InvestmentThesisSnapshot]] = defaultdict(list)
+        for candidate in candidates:
+            families[_lineage_identity(candidate)].append(candidate)
+        for family in families.values():
+            _validate_unforked_family(family)
+            for candidate in family:
+                _validate_lineage(candidate, self.snapshots_by_id)
+
+        return max(
+            candidates,
+            key=lambda item: (item.captured_at, item.snapshot_version, item.snapshot_id),
+        )
 
 
 def persist_investment_thesis(
@@ -89,6 +124,36 @@ def load_investment_thesis(path: str | Path) -> InvestmentThesisSnapshot:
     return value
 
 
+def build_investment_thesis_repository_index(
+    artifact_root: str | Path,
+    *,
+    as_of: datetime,
+) -> InvestmentThesisRepositoryIndex:
+    """Read each discoverable thesis artifact once for one point-in-time cutoff."""
+
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("as_of must be timezone-aware")
+    directory = Path(artifact_root) / _THESIS_DIRECTORY
+    snapshots_by_id: dict[str, InvestmentThesisSnapshot] = {}
+    candidates: dict[tuple[str, int], list[InvestmentThesisSnapshot]] = defaultdict(list)
+    if directory.exists():
+        for path in sorted(directory.glob("*.json")):
+            value = load_investment_thesis(path)
+            prior = snapshots_by_id.get(value.snapshot_id)
+            if prior is not None and prior != value:
+                raise InvestmentThesisRepositoryError(
+                    "duplicate investment thesis snapshot_id has conflicting content"
+                )
+            snapshots_by_id[value.snapshot_id] = value
+            if value.captured_at <= as_of:
+                candidates[(value.security_id, value.horizon_trading_days)].append(value)
+    return InvestmentThesisRepositoryIndex(
+        as_of=as_of,
+        snapshots_by_id=snapshots_by_id,
+        candidates_by_key={key: tuple(values) for key, values in candidates.items()},
+    )
+
+
 def find_latest_investment_thesis(
     artifact_root: str | Path,
     *,
@@ -96,39 +161,10 @@ def find_latest_investment_thesis(
     horizon_trading_days: int,
     as_of: datetime,
 ) -> InvestmentThesisSnapshot | None:
-    if not security_id.strip():
-        raise ValueError("security_id must be non-empty text")
-    if as_of.tzinfo is None or as_of.utcoffset() is None:
-        raise ValueError("as_of must be timezone-aware")
-    directory = Path(artifact_root) / _THESIS_DIRECTORY
-    if not directory.exists():
-        return None
-
-    snapshots_by_id: dict[str, InvestmentThesisSnapshot] = {}
-    candidates: list[InvestmentThesisSnapshot] = []
-    for path in sorted(directory.glob("*.json")):
-        value = load_investment_thesis(path)
-        snapshots_by_id[value.snapshot_id] = value
-        if (
-            value.security_id == security_id
-            and value.horizon_trading_days == horizon_trading_days
-            and value.captured_at <= as_of
-        ):
-            candidates.append(value)
-    if not candidates:
-        return None
-
-    families: dict[tuple[str, str, int], list[InvestmentThesisSnapshot]] = defaultdict(list)
-    for candidate in candidates:
-        families[_lineage_identity(candidate)].append(candidate)
-    for family in families.values():
-        _validate_unforked_family(family)
-        for candidate in family:
-            _validate_lineage(candidate, snapshots_by_id)
-
-    return max(
-        candidates,
-        key=lambda item: (item.captured_at, item.snapshot_version, item.snapshot_id),
+    index = build_investment_thesis_repository_index(artifact_root, as_of=as_of)
+    return index.find_latest(
+        security_id=security_id,
+        horizon_trading_days=horizon_trading_days,
     )
 
 
