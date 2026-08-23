@@ -129,3 +129,19 @@ def test_ledger_publish_failure_rolls_back_all_new_downstream_artifacts(
     assert not run_path.exists()
     assert not (tmp_path / "opportunity_candidate").exists()
     assert not (tmp_path / "opportunity_set").exists()
+
+
+def test_rollback_preserves_concurrently_replaced_pointer_and_immutable_artifact(
+    tmp_path: Path,
+) -> None:
+    candidate = SimpleNamespace(snapshot_id="a" * 64, captured_at=NOW)
+    publication = _fake_owned_opportunity_persist(candidate, output_root=tmp_path)
+    concurrent_pointer = b'{"snapshot_id":"concurrent"}\n'
+    publication.pointer.write_bytes(concurrent_pointer)
+
+    cleanup_errors: list[BaseException] = []
+    assembler._rollback_owned_opportunity_publication(publication, cleanup_errors)
+
+    assert cleanup_errors == []
+    assert publication.pointer.read_bytes() == concurrent_pointer
+    assert publication.directory.exists()
