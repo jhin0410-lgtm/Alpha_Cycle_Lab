@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from alpha_cycle.intelligence.decision_thesis_v2 import InvestmentThesisSnapshot
@@ -113,7 +113,8 @@ def preflight_pending_request_theses(
             for item in ledger.runs
         ):
             raise ValueError(
-                "analysis request already has an orchestrated run; record a new request for another preflight"
+                "analysis request already has an orchestrated run; "
+                "record a new request for another preflight"
             )
 
         cutoff = _resolve_research_cutoff(
@@ -186,7 +187,8 @@ def preflight_pending_request_theses(
             else:
                 if processed_at <= ledger.built_at:
                     raise ValueError(
-                        "processed_at must be later than the latest ledger built_at when appending history"
+                        "processed_at must be later than the latest ledger built_at "
+                        "when appending history"
                     )
                 run = build_pre_orchestration_blocked_run(
                     request,
