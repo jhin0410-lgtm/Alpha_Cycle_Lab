@@ -1,0 +1,187 @@
+"""Typed thesis preflight for pending Alpha Cycle Lab research requests."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+
+from alpha_cycle.intelligence.decision_thesis_v2 import InvestmentThesisSnapshot
+from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundBlocker
+from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
+    AnalysisRequestSnapshot,
+    ResearchRoundRunSnapshot,
+    ResearchRunLedgerSnapshot,
+    build_pre_orchestration_blocked_run,
+    build_research_run_ledger,
+    persist_research_run,
+    persist_research_run_ledger,
+)
+from alpha_cycle.investment_thesis_repository_v2_1 import (
+    find_latest_investment_thesis,
+)
+from alpha_cycle.research_ledger_write_lock_v2_1 import (
+    exclusive_research_ledger_write_lock,
+)
+from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
+
+
+@dataclass(frozen=True)
+class ResearchThesisPreflightReceipt:
+    request: AnalysisRequestSnapshot
+    thesis_snapshots: tuple[InvestmentThesisSnapshot, ...]
+    blockers: tuple[ResearchRoundBlocker, ...]
+    run: ResearchRoundRunSnapshot | None
+    ledger: ResearchRunLedgerSnapshot
+    run_path: Path | None
+    ledger_path: Path | None
+    changed_history: bool
+
+    @property
+    def ready_for_package_assembly(self) -> bool:
+        return not self.blockers
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "request_id": self.request.request_id,
+            "request_snapshot_id": self.request.snapshot_id,
+            "thesis_snapshot_ids": [item.snapshot_id for item in self.thesis_snapshots],
+            "blockers": [item.payload() for item in self.blockers],
+            "run_snapshot_id": self.run.snapshot_id if self.run is not None else None,
+            "ledger_snapshot_id": self.ledger.snapshot_id,
+            "run_path": str(self.run_path) if self.run_path is not None else None,
+            "ledger_path": str(self.ledger_path) if self.ledger_path is not None else None,
+            "changed_history": self.changed_history,
+            "ready_for_package_assembly": self.ready_for_package_assembly,
+            "orchestrator_executed": False,
+            "investment_conclusion_created": False,
+            "automatic_execution_enabled": False,
+        }
+
+
+def preflight_pending_request_theses(
+    *,
+    request_id: str,
+    run_id: str,
+    processed_at: datetime,
+    artifact_root: str | Path,
+) -> ResearchThesisPreflightReceipt:
+    """Resolve typed theses or append an explicit pre-orchestration blocker run."""
+
+    if processed_at.tzinfo is None or processed_at.utcoffset() is None:
+        raise ValueError("processed_at must be timezone-aware")
+    root = Path(artifact_root)
+
+    with exclusive_research_ledger_write_lock(root):
+        state = load_latest_observatory_state(root)
+        if state is None:
+            raise ValueError("no Research Run Ledger exists; record an analysis request first")
+        ledger = state.ledger
+        request = _find_request(ledger, request_id)
+        if processed_at < request.requested_at:
+            raise ValueError("processed_at cannot precede the analysis request")
+        if any(item.run_id == run_id for item in ledger.runs):
+            raise ValueError(f"run_id already exists in the latest ledger: {run_id}")
+
+        theses: list[InvestmentThesisSnapshot] = []
+        blockers: list[ResearchRoundBlocker] = []
+        for security_id in request.security_ids:
+            thesis = find_latest_investment_thesis(
+                root,
+                security_id=security_id,
+                horizon_trading_days=request.horizon_trading_days,
+                as_of=processed_at,
+            )
+            if thesis is None:
+                blockers.append(
+                    ResearchRoundBlocker(
+                        component="thesis",
+                        code="investment_thesis_snapshot_missing",
+                        detail=(
+                            "no validated persisted InvestmentThesisSnapshot exists for the "
+                            f"requested security/horizon as of {processed_at.isoformat()}"
+                        ),
+                        security_id=security_id,
+                    )
+                )
+            else:
+                theses.append(thesis)
+
+        blockers_tuple = tuple(blockers)
+        theses_tuple = tuple(theses)
+        if not blockers_tuple:
+            return ResearchThesisPreflightReceipt(
+                request=request,
+                thesis_snapshots=theses_tuple,
+                blockers=(),
+                run=None,
+                ledger=ledger,
+                run_path=None,
+                ledger_path=None,
+                changed_history=False,
+            )
+
+        prior = _latest_run_for_request(ledger, request.snapshot_id)
+        if prior is not None and prior.blockers == blockers_tuple:
+            return ResearchThesisPreflightReceipt(
+                request=request,
+                thesis_snapshots=theses_tuple,
+                blockers=blockers_tuple,
+                run=prior,
+                ledger=ledger,
+                run_path=None,
+                ledger_path=None,
+                changed_history=False,
+            )
+
+        run = build_pre_orchestration_blocked_run(
+            request,
+            run_id=run_id,
+            started_at=processed_at,
+            completed_at=processed_at,
+            blockers=blockers_tuple,
+            flags=("typed_thesis_preflight_blocked",),
+        )
+        next_ledger = build_research_run_ledger(
+            ledger.requests,
+            (*ledger.runs, run),
+            built_at=processed_at,
+        )
+        run_path = persist_research_run(run, output_root=root)
+        try:
+            ledger_path = persist_research_run_ledger(next_ledger, output_root=root)
+        except BaseException:
+            run_path.unlink(missing_ok=True)
+            raise
+        return ResearchThesisPreflightReceipt(
+            request=request,
+            thesis_snapshots=theses_tuple,
+            blockers=blockers_tuple,
+            run=run,
+            ledger=next_ledger,
+            run_path=run_path,
+            ledger_path=ledger_path,
+            changed_history=True,
+        )
+
+
+def _find_request(
+    ledger: ResearchRunLedgerSnapshot,
+    request_id: str,
+) -> AnalysisRequestSnapshot:
+    matches = tuple(item for item in ledger.requests if item.request_id == request_id)
+    if not matches:
+        raise ValueError(f"request_id is not present in the latest ledger: {request_id}")
+    if len(matches) != 1:
+        raise ValueError(f"request_id is not unique in the latest ledger: {request_id}")
+    return matches[0]
+
+
+def _latest_run_for_request(
+    ledger: ResearchRunLedgerSnapshot,
+    request_snapshot_id: str,
+) -> ResearchRoundRunSnapshot | None:
+    matching = tuple(
+        item for item in ledger.runs if item.request_snapshot_id == request_snapshot_id
+    )
+    return matching[-1] if matching else None
