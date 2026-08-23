@@ -352,7 +352,10 @@ def test_current_preflight_state_tampering_fails_closed(tmp_path) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    with pytest.raises(ObservatoryDataError, match="current thesis-preflight state failed validation"):
+    with pytest.raises(
+        ObservatoryDataError,
+        match="current thesis-preflight state failed validation",
+    ):
         load_latest_observatory_state(tmp_path)
 
 
@@ -376,5 +379,8 @@ def test_current_preflight_pointer_tampering_fails_closed(tmp_path) -> None:
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    with pytest.raises(ObservatoryDataError, match="current thesis-preflight state failed validation"):
+    with pytest.raises(
+        ObservatoryDataError,
+        match="current thesis-preflight state failed validation",
+    ):
         load_latest_observatory_state(tmp_path)
