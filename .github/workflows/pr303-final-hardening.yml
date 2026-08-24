@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: write
+  issues: write
+  pull-requests: write
 
 jobs:
   harden:
@@ -66,6 +68,7 @@ jobs:
         run: /tmp/pr303-final-hardening-venv/bin/pytest
 
       - name: Commit only tested source and tests
+        id: publish
         shell: bash
         run: |
           set -euo pipefail
@@ -79,5 +82,39 @@ jobs:
           git add -A
           git commit -m "Harden PR303 final review findings"
           git push origin HEAD:feature/typed-research-package-assembler-v2-1
+          echo "tested_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report successful tested head
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="PR303 final seven-finding hardening passed Ruff, mypy, and full pytest. Tested commit pushed: ${TESTED_HEAD}. Actions run id: ${GITHUB_RUN_ID}."
+          curl --fail-with-body -sS \
+            -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/303/comments" \
+            -d "$(python3 -c 'import json,os; print(json.dumps({"body": os.environ["BODY"]}))')"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TESTED_HEAD: ${{ steps.publish.outputs.tested_head }}
+          BODY: PR303 final seven-finding hardening succeeded.
+
+      - name: Report failed gate
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="PR303 final seven-finding hardening failed on staging head ${GITHUB_SHA}. Actions run id: ${GITHUB_RUN_ID}. No tested hardening commit was pushed."
+          payload="$(BODY="$body" python3 -c 'import json,os; print(json.dumps({"body": os.environ["BODY"]}))')"
+          curl --fail-with-body -sS \
+            -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/303/comments" \
+            -d "$payload"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
