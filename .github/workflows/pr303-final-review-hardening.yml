@@ -40,6 +40,22 @@ jobs:
           rm -f scripts/pr303_apply_final_review_hardening.py
           rm -f .github/workflows/pr303-final-review-hardening.yml
 
+      - name: Normalize patched source typing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/alpha_cycle/research_package_source_revalidation_v2_1.py")
+          text = path.read_text(encoding="utf-8")
+          old = "{str(key): item for key, item in cast(dict[object, object], raw).items()}"
+          new = "{str(key): item for key, item in raw.items()}"
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one redundant-cast source expression")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+
       - name: Create isolated Python 3.12 environment
         shell: bash
         run: |
