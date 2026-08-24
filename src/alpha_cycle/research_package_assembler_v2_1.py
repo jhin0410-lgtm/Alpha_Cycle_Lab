@@ -7,6 +7,7 @@ checks their PIT/request bindings, and delegates research logic to the existing
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -57,6 +58,10 @@ from alpha_cycle.research_ledger_write_lock_v2_1 import (
     exclusive_research_ledger_write_lock,
 )
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
+from alpha_cycle.research_package_canonical_evidence_v2_1 import (
+    decision_gap_bound_sources_are_canonical,
+    underwriting_bound_evidence_is_valid,
+)
 from alpha_cycle.research_package_integrity_v2_1 import (
     decision_view_has_valid_persisted_selection,
     decision_view_matches_underwriting_tournament,
@@ -90,6 +95,15 @@ class _OwnedOpportunityPublication:
     pointer_inode: int
     pointer_mtime_ns: int
     pointer_size: int
+
+
+@dataclass(frozen=True)
+class _OwnedFilePublication:
+    path: Path
+    inode: int
+    mtime_ns: int
+    size: int
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -493,6 +507,23 @@ def _assemble_security_package(
     ):
         _block(blockers, "research_package", code, security_id)
 
+    if (
+        underwriting is not None
+        and artifact_root is not None
+        and not underwriting_bound_evidence_is_valid(
+            artifact_root,
+            thesis=thesis,
+            underwriting=underwriting,
+            payoff=payoff,
+        )
+    ):
+        _block(
+            blockers,
+            "research_package",
+            "underwriting_persisted_evidence_canonical_mismatch",
+            security_id,
+        )
+
     if underwriting is not None and payoff is not None:
         if (
             underwriting.payoff_surface_snapshot_id is not None
@@ -572,6 +603,20 @@ def _assemble_security_package(
                 blockers,
                 "research_package",
                 "decision_gap_target_binding_mismatch",
+                security_id,
+            )
+        if (
+            artifact_root is not None
+            and not decision_gap_bound_sources_are_canonical(
+                artifact_root,
+                view=view,
+                gap=gap,
+            )
+        ):
+            _block(
+                blockers,
+                "research_package",
+                "decision_gap_persisted_source_binding_mismatch",
                 security_id,
             )
 
@@ -655,13 +700,14 @@ def _record_package_blockers(
     )
     _require_safe_run_ledger_publication(root, run=run, ledger=next_ledger)
     run_path = persist_research_run(run, output_root=root)
+    owned_run = _capture_owned_file(run_path)
     try:
         ledger_path = persist_research_run_ledger(
             next_ledger,
             output_root=root,
         )
     except BaseException:
-        run_path.unlink(missing_ok=True)
+        _unlink_owned_file_if_current(owned_run)
         raise
     return next_ledger, run_path, ledger_path, True
 
@@ -734,6 +780,8 @@ def _publish_orchestrated_artifacts(
     opportunity_publications: list[_OwnedOpportunityPublication] = []
     round_path: Path | None = None
     run_path: Path | None = None
+    owned_round: _OwnedFilePublication | None = None
+    owned_run: _OwnedFilePublication | None = None
     try:
         for candidate in artifacts.opportunity_candidates:
             publication = _persist_owned_opportunity_snapshot(candidate, output_root=root)
@@ -755,16 +803,18 @@ def _publish_orchestrated_artifacts(
                 require_pointer=_pointer_version_is_current(publication),
             )
         round_path = persist_research_round(artifacts.snapshot, output_root=root)
+        owned_round = _capture_owned_file(round_path)
         run_path = persist_research_run(run, output_root=root)
+        owned_run = _capture_owned_file(run_path)
         ledger_path = persist_research_run_ledger(ledger, output_root=root)
         return round_path, run_path, ledger_path
     except BaseException as exc:
         cleanup_errors: list[BaseException] = []
-        for path in (run_path, round_path):
-            if path is None:
+        for publication in (owned_run, owned_round):
+            if publication is None:
                 continue
             try:
-                path.unlink(missing_ok=True)
+                _unlink_owned_file_if_current(publication)
             except BaseException as cleanup_exc:
                 cleanup_errors.append(cleanup_exc)
         for publication in reversed(opportunity_publications):
@@ -850,6 +900,9 @@ def _persist_owned_opportunity_snapshot(
 
     pointer = root / f"latest_{object_name}.json"
     pointer_before = _optional_bytes(pointer)
+    pointer_before_identity = (
+        _capture_file_identity(pointer) if pointer_before is not None else None
+    )
     pointer_after = json.dumps(
         {
             "schema_version": OPPORTUNITY_SET_SCHEMA_VERSION,
@@ -869,11 +922,16 @@ def _persist_owned_opportunity_snapshot(
             except FileExistsError:
                 # A concurrent publisher won the absent-pointer race; do not overwrite it.
                 pass
-        else:
-            pointer_temp.replace(pointer)
+        elif pointer_before_identity is not None:
+            _replace_pointer_if_version_matches(
+                pointer_temp,
+                pointer,
+                expected_bytes=pointer_before,
+                expected_identity=pointer_before_identity,
+            )
     finally:
         pointer_temp.unlink(missing_ok=True)
-    if pointer.exists() and pointer.read_bytes() == pointer_after:
+    if pointer.exists() and not pointer.is_symlink() and pointer.read_bytes() == pointer_after:
         stat = pointer.stat()
         inode = stat.st_ino
         mtime_ns = stat.st_mtime_ns
@@ -916,6 +974,33 @@ def _write_owned_pointer_temp(root: Path, pointer_name: str, content: bytes) -> 
     return temporary
 
 
+def _replace_pointer_if_version_matches(
+    replacement: Path,
+    pointer: Path,
+    *,
+    expected_bytes: bytes,
+    expected_identity: tuple[int, int, int],
+) -> bool:
+    """Replace a mutable pointer only when the version read by this writer is still current."""
+
+    if pointer.is_symlink() or not pointer.exists():
+        return False
+    try:
+        if _capture_file_identity(pointer) != expected_identity:
+            return False
+        if pointer.read_bytes() != expected_bytes:
+            return False
+        # Recheck immediately before publication so a replaced inode/version is never knowingly
+        # overwritten.  Cooperative writers use this same CAS boundary; a foreign replacement
+        # observed at either check wins and is preserved.
+        if _capture_file_identity(pointer) != expected_identity:
+            return False
+        replacement.replace(pointer)
+        return True
+    except FileNotFoundError:
+        return False
+
+
 def _pointer_version_is_current(publication: _OwnedOpportunityPublication) -> bool:
     if publication.pointer_inode < 0 or not publication.pointer.exists():
         return False
@@ -937,9 +1022,30 @@ def _rollback_owned_opportunity_publication(
     publication: _OwnedOpportunityPublication,
     cleanup_errors: list[BaseException],
 ) -> None:
-    # Never restore an older pointer over a possibly newer concurrent publisher. If a pointer
-    # existed before this transaction, preserve this valid immutable publication on failure.
     if publication.pointer_before is not None:
+        # Restore the previous pointer only while our own published version is still current.
+        # A concurrent replacement wins; we never overwrite foreign state during rollback.
+        if not _pointer_version_is_current(publication):
+            return
+        previous_temp = _write_owned_pointer_temp(
+            publication.root,
+            publication.pointer.name,
+            publication.pointer_before,
+        )
+        try:
+            current_identity = _capture_file_identity(publication.pointer)
+            _replace_pointer_if_version_matches(
+                previous_temp,
+                publication.pointer,
+                expected_bytes=publication.pointer_after,
+                expected_identity=current_identity,
+            )
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+        finally:
+            previous_temp.unlink(missing_ok=True)
+        # Preserve immutable directories when replacing an existing pointer. Another reader or
+        # publisher may already have retained a reference to the content-addressed snapshot.
         return
     # If another publisher has changed/replaced the pointer, ownership is no longer exclusive;
     # preserve both the pointer and immutable directory rather than deleting foreign state.
@@ -968,6 +1074,49 @@ def _rollback_owned_opportunity_publication(
             pass
         except OSError:
             pass
+
+
+def _capture_file_identity(path: Path) -> tuple[int, int, int]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"publication path must be a regular file: {path}")
+    stat = path.stat()
+    return stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+
+def _capture_owned_file(path: Path) -> _OwnedFilePublication:
+    inode, mtime_ns, size = _capture_file_identity(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    return _OwnedFilePublication(
+        path=path,
+        inode=inode,
+        mtime_ns=mtime_ns,
+        size=size,
+        sha256=digest,
+    )
+
+
+def _owned_file_is_current(publication: _OwnedFilePublication) -> bool:
+    path = publication.path
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        inode, mtime_ns, size = _capture_file_identity(path)
+        if (
+            inode != publication.inode
+            or mtime_ns != publication.mtime_ns
+            or size != publication.size
+        ):
+            return False
+        return hashlib.sha256(path.read_bytes()).hexdigest() == publication.sha256
+    except OSError:
+        return False
+
+
+def _unlink_owned_file_if_current(publication: _OwnedFilePublication) -> bool:
+    if not _owned_file_is_current(publication):
+        return False
+    publication.path.unlink(missing_ok=True)
+    return True
 
 
 def _require_safe_run_ledger_publication(
