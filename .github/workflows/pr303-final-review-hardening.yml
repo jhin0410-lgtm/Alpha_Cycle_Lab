@@ -31,7 +31,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
 
       - name: Apply exact-head hardening patch
-        run: python3 scripts/pr303_apply_final_review_hardening.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/pr303_apply_final_review_hardening.py
+          rm -f scripts/pr303_apply_final_review_hardening.py
+          rm -f .github/workflows/pr303-final-review-hardening.yml
 
       - name: Create isolated Python 3.12 environment
         shell: bash
@@ -55,14 +60,12 @@ jobs:
       - name: Full pytest
         run: .venv-pr303/bin/pytest
 
-      - name: Commit tested hardening and remove one-shot machinery
+      - name: Commit tested hardening
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          rm -f scripts/pr303_apply_final_review_hardening.py
-          rm -f .github/workflows/pr303-final-review-hardening.yml
           git add -A
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
