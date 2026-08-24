@@ -197,6 +197,11 @@ def test_fast_lane_still_validates_persisted_decision_view(
     )
     monkeypatch.setattr(
         assembler,
+        "underwriting_bound_evidence_is_valid",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        assembler,
         "decision_view_has_valid_persisted_selection",
         lambda *args, **kwargs: False,
     )
@@ -318,8 +323,6 @@ def test_ambiguous_component_selection_becomes_structured_blocker(
     assert [(item.component, item.code) for item in blockers] == [
         ("underwriter", "underwriting_snapshot_selection_ambiguous")
     ]
-
-
 
 
 def test_fast_ready_requires_persisted_evidence_bindings(tmp_path: Path) -> None:
