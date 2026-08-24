@@ -68,7 +68,7 @@ The current production boundary is intentionally asymmetric:
 - the current KIS expectation path remains explicitly non-certified and cannot satisfy the Deep certified-consensus authority requirement;
 - until independently authoritative valuation/OpenDART acquisition evidence and a recognized certified-consensus provider contract exist, valuation/consensus-dependent Deep package authority fails closed rather than manufacturing a new authority envelope from derived data.
 
-The previously attempted normalized `research_source_evidence_v2_1` envelope was removed because it copied normalized shares/financial history or caller-supplied consensus claims from the derived objects it was meant to authenticate. Moving self-certification into another content-addressed envelope is not considered source replay.
+The previously attempted normalized `research_source_evidence_v2_1` envelope was removed because it copied normalized shares/financial history or caller-supplied consensus claims from the derived objects it was meant to authenticate. Moving self-certification into another content-addressed envelope is not considered source replay. That removal also removes the attempted valuation replay's hash-then-reopen pathname window; no unproven normalized source envelope remains on the production authority path.
 
 Other persisted invariants remain enforced:
 
@@ -128,7 +128,7 @@ The assembler consumes the existing writer layouts:
 
 ## Validation
 
-Assembler-mechanics regressions remain isolated from unavailable production source authority so they continue to test component reconstruction, blocker persistence, transactionality and rollback semantics. Dedicated adversarial regressions separately assert that self-certified consensus, self-consistent valuation evidence, and the removed normalized source envelope cannot establish Deep authority or publish opportunity/research-round artifacts.
+Assembler-mechanics regressions remain isolated from unavailable production source authority so they continue to test component reconstruction, blocker persistence, transactionality and rollback semantics. Dedicated adversarial regressions separately assert that self-certified consensus, self-consistent valuation evidence, and the removed normalized source envelope cannot establish Deep authority or publish opportunity/research-round artifacts. The integration regression requires the structured `underwriting_persisted_evidence_canonical_mismatch` blocker before orchestration.
 
 The exact-head Ruff, mypy, full-pytest and final Codex merge-gate results are recorded on PR #303 before merge. No prior-head validation is treated as evidence for a later head.
 
