@@ -1,4 +1,4 @@
-name: PR303 valuation diagnostic
+name: PR303 final self-deleting gate
 
 on:
   push:
@@ -8,25 +8,28 @@ on:
       - .github/workflows/pr303-valuation-diagnostic.yml
 
 permissions:
+  contents: write
   issues: write
   pull-requests: write
 
 jobs:
-  diagnose:
+  harden:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Check out exact branch head
         shell: bash
         run: |
           set -euo pipefail
           git init .
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git fetch --no-tags --depth=1 origin "+refs/heads/feature/typed-research-package-assembler-v2-1:refs/remotes/origin/pr303"
           git checkout -B feature/typed-research-package-assembler-v2-1 refs/remotes/origin/pr303
           test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Apply current hardening patch in workspace
+      - name: Apply all seven-finding hardening fixes
         shell: bash
         run: |
           set -euo pipefail
@@ -59,6 +62,8 @@ jobs:
               (r'"def _new_publication_quarantine(\n",', '"def _new_publication_quarantine(",'),
               (r'"def _capture_file_identity(\n",', '"def _capture_file_identity(",'),
           ):
+              if bad not in text:
+                  raise SystemExit(f'function boundary marker missing: {bad}')
               text = text.replace(bad, good, 1)
           path.write_text(text, encoding='utf-8')
           PY
@@ -67,38 +72,104 @@ jobs:
           from pathlib import Path
           path = Path('src/alpha_cycle/research_package_source_revalidation_v2_1.py')
           text = path.read_text(encoding='utf-8')
-          text = text.replace('        if value is None or pd.isna(value):\n', '        if value is None:\n', 1)
-          text = text.replace('            result = float(value)\n', '            result = float(cast(float | int | str, value))\n', 1)
-          text = text.replace(
-              '    share_keys = {key(dict(row)) for row in snapshot.shares.to_dict(orient="records")}\n',
-              '    share_keys = {\n        key({str(name): value for name, value in row.items()})\n        for row in snapshot.shares.to_dict(orient="records")\n    }\n',
-              1,
+          replacements = (
+              ('        if value is None or pd.isna(value):\n', '        if value is None:\n'),
+              ('            result = float(value)\n', '            result = float(cast(float | int | str, value))\n'),
+              (
+                  '    share_keys = {key(dict(row)) for row in snapshot.shares.to_dict(orient="records")}\n',
+                  '    share_keys = {\n        key({str(name): value for name, value in row.items()})\n        for row in snapshot.shares.to_dict(orient="records")\n    }\n',
+              ),
           )
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'generated typing pattern missing: {old!r}')
+              text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
           PY
           python3 .github/pr303_final_hardening_followup.py
+          rm -f \
+            .github/pr303_final_hardening.py \
+            .github/pr303_final_hardening_followup.py \
+            .github/pr303_valuation_diagnostic.py \
+            .github/workflows/pr303-final-hardening.yml \
+            .github/workflows/pr303-valuation-diagnostic.yml
 
-      - name: Install and diagnose
+      - name: Create isolated Python environment
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv /tmp/pr303-diag
-          /tmp/pr303-diag/bin/python -m pip install -e ".[dev]" >/dev/null
-          /tmp/pr303-diag/bin/python .github/pr303_valuation_diagnostic.py
+          python3 -m venv /tmp/pr303-final
+          /tmp/pr303-final/bin/python -m pip install --upgrade pip >/dev/null
+          /tmp/pr303-final/bin/python -m pip install -e ".[dev]" >/dev/null
 
-      - name: Report diagnostic run
-        if: always()
+      - name: Normalize changed Python files
         shell: bash
         run: |
           set -euo pipefail
-          body="PR303 valuation diagnostic run id: ${GITHUB_RUN_ID}; head: ${GITHUB_SHA}; conclusion: ${JOB_STATUS}."
+          files=(
+            src/alpha_cycle/research_package_assembler_v2_1.py
+            src/alpha_cycle/research_package_source_revalidation_v2_1.py
+            tests/unit/test_research_package_assembler_v2_1.py
+            tests/unit/test_research_package_publication_rollback_v2_1.py
+            tests/unit/test_research_package_exact_head_review_round2_v2_1.py
+          )
+          /tmp/pr303-final/bin/ruff format "${files[@]}"
+          /tmp/pr303-final/bin/ruff check --fix "${files[@]}"
+
+      - name: Ruff
+        run: /tmp/pr303-final/bin/ruff check .
+
+      - name: Mypy
+        run: /tmp/pr303-final/bin/mypy
+
+      - name: Full pytest
+        run: /tmp/pr303-final/bin/pytest
+
+      - name: Commit tested source only
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git status --porcelain | grep -E '(^|/)(\.venv|venv|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)(/|$)'; then
+            echo "Refusing transient environment/cache files" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Harden PR303 final review findings"
+          git push origin HEAD:feature/typed-research-package-assembler-v2-1
+          echo "tested_head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Report successful tested head
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="PR303 final hardening passed Ruff, mypy, and full pytest. Tested source commit: ${TESTED_HEAD}. Actions run id: ${GITHUB_RUN_ID}. Temporary hardening/diagnostic controls were removed in the tested commit."
           payload="$(BODY="$body" python3 -c 'import json,os; print(json.dumps({"body": os.environ["BODY"]}))')"
-          curl --fail-with-body -sS \
-            -X POST \
+          curl --fail-with-body -sS -X POST \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/303/comments" \
             -d "$payload"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          JOB_STATUS: ${{ job.status }}
+          TESTED_HEAD: ${{ steps.publish.outputs.tested_head }}
+
+      - name: Report failed gate
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="PR303 final hardening failed on staging head ${GITHUB_SHA}. Actions run id: ${GITHUB_RUN_ID}. No tested hardening source commit was pushed."
+          payload="$(BODY="$body" python3 -c 'import json,os; print(json.dumps({"body": os.environ["BODY"]}))')"
+          curl --fail-with-body -sS -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/303/comments" \
+            -d "$payload"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
