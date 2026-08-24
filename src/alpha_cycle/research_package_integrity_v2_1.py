@@ -220,7 +220,7 @@ def decision_view_has_valid_persisted_selection(
         return False
     active = load_decision_system_v21_guardrails()
     if (
-        view.guardrail_evidence_id != active.evidence_id
+        getattr(view, "guardrail_evidence_id", None) != active.evidence_id
         or rule.guardrail_evidence_id != active.evidence_id
     ):
         return False

@@ -250,9 +250,13 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         selected_forecast_value=selected_registration.forecast_value,
         forecast_origin=NOW - timedelta(hours=2),
         information_cutoff=NOW - timedelta(hours=3),
-        tournament_forecast_snapshot_ids=(
-            selected_registration.snapshot_id,
-            benchmark_registration.snapshot_id,
+        tournament_forecast_snapshot_ids=tuple(
+            sorted(
+                (
+                    selected_registration.snapshot_id,
+                    benchmark_registration.snapshot_id,
+                )
+            )
         ),
         tournament_dependency_overlap=False,
         guardrail_evidence_id=GUARDRAIL,
