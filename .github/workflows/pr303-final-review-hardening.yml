@@ -82,10 +82,11 @@ jobs:
         run: |
           set -euo pipefail
           body="PR303 one-shot hardening failed on staging head ${GITHUB_SHA}. Actions run id: ${GITHUB_RUN_ID}. No tested hardening commit was pushed."
+          payload=$(BODY="$body" python3 -c 'import json,os; print(json.dumps({"body": os.environ["BODY"]}))')
           curl --fail-with-body --silent --show-error \
             -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/303/comments" \
-            -d "$(python3 -c 'import json,os; print(json.dumps({"body": os.environ["BODY"]}))' BODY="$body")"
+            -d "$payload"
