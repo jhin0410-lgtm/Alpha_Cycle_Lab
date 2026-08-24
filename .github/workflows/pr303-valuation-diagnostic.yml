@@ -1,0 +1,83 @@
+name: PR303 valuation diagnostic
+
+on:
+  push:
+    branches:
+      - feature/typed-research-package-assembler-v2-1
+    paths:
+      - .github/workflows/pr303-valuation-diagnostic.yml
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out exact branch head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "+refs/heads/feature/typed-research-package-assembler-v2-1:refs/remotes/origin/pr303"
+          git checkout -B feature/typed-research-package-assembler-v2-1 refs/remotes/origin/pr303
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Apply current hardening patch in workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/pr303_final_hardening.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''def replace_between(path: str, start: str, end: str, replacement: str) -> None:
+              text = read(path)
+              pattern = re.compile(re.escape(start) + r".*?(?=" + re.escape(end) + r")", re.S)
+              updated, count = pattern.subn(replacement.rstrip() + "\\n\\n", text, count=1)
+              if count != 1:
+                  raise RuntimeError(f"{path}: could not replace block {start!r} -> {end!r}")
+              write(path, updated)
+          '''
+          new = '''def replace_between(path: str, start: str, end: str, replacement: str) -> None:
+              text = read(path)
+              try:
+                  start_index = text.index(start)
+                  end_index = text.index(end, start_index + len(start))
+              except ValueError as exc:
+                  raise RuntimeError(f"{path}: could not replace block {start!r} -> {end!r}") from exc
+              write(path, text[:start_index] + replacement.rstrip() + "\\n\\n" + text[end_index:])
+          '''
+          if old not in text:
+              raise SystemExit('replace_between helper mismatch')
+          text = text.replace(old, new, 1)
+          for bad, good in (
+              (r'"def _write_owned_pointer_temp(\n",', '"def _write_owned_pointer_temp(",'),
+              (r'"def _new_publication_quarantine(\n",', '"def _new_publication_quarantine(",'),
+              (r'"def _capture_file_identity(\n",', '"def _capture_file_identity(",'),
+          ):
+              text = text.replace(bad, good, 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          python3 .github/pr303_final_hardening.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/alpha_cycle/research_package_source_revalidation_v2_1.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('        if value is None or pd.isna(value):\n', '        if value is None:\n', 1)
+          text = text.replace('            result = float(value)\n', '            result = float(cast(float | int | str, value))\n', 1)
+          text = text.replace(
+              '    share_keys = {key(dict(row)) for row in snapshot.shares.to_dict(orient="records")}\n',
+              '    share_keys = {\n        key({str(name): value for name, value in row.items()})\n        for row in snapshot.shares.to_dict(orient="records")\n    }\n',
+              1,
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+          python3 .github/pr303_final_hardening_followup.py
+
+      - name: Install and diagnose
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/pr303-diag
+          /tmp/pr303-diag/bin/python -m pip install -e ".[dev]" >/dev/null
+          /tmp/pr303-diag/bin/python .github/pr303_valuation_diagnostic.py
