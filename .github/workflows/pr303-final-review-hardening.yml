@@ -1,0 +1,70 @@
+name: PR303 final review hardening
+
+on:
+  push:
+    branches:
+      - feature/typed-research-package-assembler-v2-1
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pr303-final-review-hardening
+  cancel-in-progress: false
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out exact branch head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "+refs/heads/${GITHUB_REF_NAME}:refs/remotes/origin/work"
+          git checkout -B "${GITHUB_REF_NAME}" refs/remotes/origin/work
+          test "$(git rev-parse HEAD)" = "${GITHUB_SHA}"
+
+      - name: Apply exact-head hardening patch
+        run: python3 scripts/pr303_apply_final_review_hardening.py
+
+      - name: Create isolated Python 3.12 environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys
+          if sys.version_info[:2] != (3, 12):
+              raise SystemExit(f"PR303 hardening requires Python 3.12, found {sys.version}")
+          PY
+          python3 -m venv .venv-pr303
+          .venv-pr303/bin/python -m pip install --upgrade pip
+          .venv-pr303/bin/python -m pip install -e ".[dev]"
+
+      - name: Ruff
+        run: .venv-pr303/bin/ruff check .
+
+      - name: Mypy
+        run: .venv-pr303/bin/mypy
+
+      - name: Full pytest
+        run: .venv-pr303/bin/pytest
+
+      - name: Commit tested hardening and remove one-shot machinery
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f scripts/pr303_apply_final_review_hardening.py
+          rm -f .github/workflows/pr303-final-review-hardening.yml
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Fix final typed-package integrity review findings"
+          git push origin "HEAD:refs/heads/${GITHUB_REF_NAME}"
