@@ -14,9 +14,7 @@ NOW = datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
 
 def _fake_owned_opportunity_persist(snapshot: SimpleNamespace, *, output_root: Path):
     object_name = (
-        "opportunity_candidate"
-        if str(snapshot.snapshot_id).startswith("a")
-        else "opportunity_set"
+        "opportunity_candidate" if str(snapshot.snapshot_id).startswith("a") else "opportunity_set"
     )
     root = Path(output_root) / object_name
     root_created = not root.exists()
@@ -70,7 +68,7 @@ def test_ledger_publish_failure_rolls_back_all_new_downstream_artifacts(
     artifacts = SimpleNamespace(
         opportunity_candidates=(candidate,),
         opportunity_set=opportunity_set,
-        snapshot=object(),
+        snapshot=SimpleNamespace(snapshot_id="c" * 64, payload_without_id=lambda: {}),
     )
     round_path = tmp_path / "research_round_v2_1" / "round.json"
     run_path = tmp_path / "research_round_run_v2_1" / "run.json"
@@ -97,38 +95,32 @@ def test_ledger_publish_failure_rolls_back_all_new_downstream_artifacts(
         _fake_owned_opportunity_persist,
     )
 
-    def persist_round(snapshot: object, *, output_root: str | Path) -> Path:
-        del snapshot, output_root
-        round_path.parent.mkdir(parents=True)
-        round_path.write_text("{}\n", encoding="utf-8")
-        return round_path
+    def persist_owned_json(*, root, repository_name, snapshot_id, payload_without_id):
+        del root, snapshot_id, payload_without_id
+        if repository_name == "research_run_ledger_v2_1":
+            raise RuntimeError("injected ledger publication failure")
+        path = round_path if repository_name == "research_round_v2_1" else run_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+        return path, assembler._capture_owned_file(path)
 
-    def persist_run(run: object, *, output_root: str | Path) -> Path:
-        del run, output_root
-        run_path.parent.mkdir(parents=True)
-        run_path.write_text("{}\n", encoding="utf-8")
-        return run_path
-
-    def fail_ledger(ledger: object, *, output_root: str | Path) -> Path:
-        del ledger, output_root
-        raise RuntimeError("injected ledger publication failure")
-
-    monkeypatch.setattr(assembler, "persist_research_round", persist_round)
-    monkeypatch.setattr(assembler, "persist_research_run", persist_run)
-    monkeypatch.setattr(assembler, "persist_research_run_ledger", fail_ledger)
+    monkeypatch.setattr(assembler, "_persist_owned_content_addressed_json", persist_owned_json)
 
     with pytest.raises(RuntimeError, match="injected ledger publication failure"):
         assembler._publish_orchestrated_artifacts(
             artifacts=artifacts,
-            run=object(),
-            ledger=object(),
+            run=SimpleNamespace(snapshot_id="d" * 64, payload_without_id=lambda: {}),
+            ledger=SimpleNamespace(snapshot_id="e" * 64, payload_without_id=lambda: {}),
             root=tmp_path,
         )
 
     assert not round_path.exists()
     assert not run_path.exists()
-    assert not (tmp_path / "opportunity_candidate").exists()
-    assert not (tmp_path / "opportunity_set").exists()
+    for object_name in ("opportunity_candidate", "opportunity_set"):
+        root = tmp_path / object_name
+        assert root.exists()
+        assert not (root / f"latest_{object_name}.json").exists()
+        assert any(path.is_dir() for path in root.iterdir())
 
 
 def test_rollback_preserves_concurrently_replaced_pointer_and_immutable_artifact(

@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -29,7 +28,6 @@ from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import (
     ResearchRoundArtifacts,
     ResearchRoundBlocker,
     ResearchSecurityPackage,
-    persist_research_round,
     run_research_round,
 )
 from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
@@ -40,8 +38,6 @@ from alpha_cycle.intelligence.research_run_ledger_v2_1 import (
     bind_orchestrated_run,
     build_pre_orchestration_blocked_run,
     build_research_run_ledger,
-    persist_research_run,
-    persist_research_run_ledger,
 )
 from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 from alpha_cycle.investment_thesis_repository_v2_1 import (
@@ -73,6 +69,9 @@ from alpha_cycle.research_package_integrity_v2_1 import (
     validate_preflight_selection_timing,
     validate_publication_layout,
     validate_thesis_repository_layout,
+)
+from alpha_cycle.research_package_source_revalidation_v2_1 import (
+    ResearchPackageSourceRevalidationError,
 )
 from alpha_cycle.research_preflight_state_v2_1 import (
     CurrentResearchThesisPreflightState,
@@ -134,21 +133,15 @@ class ResearchPackageAssemblyReceipt:
             "full_package_ready": self.full_package_ready,
             "orchestrator_executed": self.orchestrated is not None,
             "research_round_snapshot_id": (
-                self.orchestrated.snapshot.snapshot_id
-                if self.orchestrated is not None
-                else None
+                self.orchestrated.snapshot.snapshot_id if self.orchestrated is not None else None
             ),
             "run_snapshot_id": self.run.snapshot_id if self.run is not None else None,
             "ledger_snapshot_id": self.ledger.snapshot_id,
             "research_round_path": (
-                str(self.research_round_path)
-                if self.research_round_path is not None
-                else None
+                str(self.research_round_path) if self.research_round_path is not None else None
             ),
             "run_path": str(self.run_path) if self.run_path is not None else None,
-            "ledger_path": (
-                str(self.ledger_path) if self.ledger_path is not None else None
-            ),
+            "ledger_path": (str(self.ledger_path) if self.ledger_path is not None else None),
             "changed_history": self.changed_history,
             "investment_conclusion_created": False,
             "target_price_enabled": False,
@@ -174,9 +167,7 @@ def assemble_and_run_research_package(
     with exclusive_research_ledger_write_lock(root):
         observatory = load_latest_observatory_state(root)
         if observatory is None:
-            raise ValueError(
-                "no Research Run Ledger exists; record an analysis request first"
-            )
+            raise ValueError("no Research Run Ledger exists; record an analysis request first")
         ledger = observatory.ledger
         request = _find_request(ledger, request_id)
         _require_canonical_request_security_ids(request)
@@ -201,9 +192,7 @@ def assemble_and_run_research_package(
         preflight = current_preflight.state
         cutoff = preflight.research_cutoff_at
         if cutoff > processed_at:
-            raise ValueError(
-                "current thesis preflight cutoff cannot be after processing time"
-            )
+            raise ValueError("current thesis preflight cutoff cannot be after processing time")
         active = load_decision_system_v21_guardrails()
         if request.guardrail_evidence_id != active.evidence_id:
             raise ValueError("analysis request guardrail evidence is no longer active")
@@ -222,9 +211,7 @@ def assemble_and_run_research_package(
             InvestmentThesisRepositoryError,
             ResearchComponentRepositoryError,
         ) as exc:
-            raise ValueError(
-                "persisted research-package repository failed validation"
-            ) from exc
+            raise ValueError("persisted research-package repository failed validation") from exc
 
         packages: list[ResearchSecurityPackage] = []
         blockers: list[ResearchRoundBlocker] = []
@@ -507,22 +494,23 @@ def _assemble_security_package(
     ):
         _block(blockers, "research_package", code, security_id)
 
-    if (
-        underwriting is not None
-        and artifact_root is not None
-        and not underwriting_bound_evidence_is_valid(
-            artifact_root,
-            thesis=thesis,
-            underwriting=underwriting,
-            payoff=payoff,
-        )
-    ):
-        _block(
-            blockers,
-            "research_package",
-            "underwriting_persisted_evidence_canonical_mismatch",
-            security_id,
-        )
+    if underwriting is not None and artifact_root is not None:
+        try:
+            underwriting_evidence_valid = underwriting_bound_evidence_is_valid(
+                artifact_root,
+                thesis=thesis,
+                underwriting=underwriting,
+                payoff=payoff,
+            )
+        except ResearchPackageSourceRevalidationError:
+            underwriting_evidence_valid = False
+        if not underwriting_evidence_valid:
+            _block(
+                blockers,
+                "research_package",
+                "underwriting_persisted_evidence_canonical_mismatch",
+                security_id,
+            )
 
     if underwriting is not None and payoff is not None:
         if (
@@ -549,11 +537,7 @@ def _assemble_security_package(
             "decision_view_persisted_selection_invalid",
             security_id,
         )
-    if (
-        underwriting is not None
-        and view is not None
-        and underwriting.lane is UnderwritingLane.DEEP
-    ):
+    if underwriting is not None and view is not None and underwriting.lane is UnderwritingLane.DEEP:
         if not decision_view_matches_underwriting_tournament(
             view, underwriting, artifact_root=artifact_root
         ):
@@ -566,8 +550,7 @@ def _assemble_security_package(
     if underwriting is not None and gap is not None:
         if (
             underwriting.expectation_state_snapshot_id is not None
-            and underwriting.expectation_state_snapshot_id
-            != gap.expectation_state_snapshot_id
+            and underwriting.expectation_state_snapshot_id != gap.expectation_state_snapshot_id
         ):
             _block(
                 blockers,
@@ -605,20 +588,22 @@ def _assemble_security_package(
                 "decision_gap_target_binding_mismatch",
                 security_id,
             )
-        if (
-            artifact_root is not None
-            and not decision_gap_bound_sources_are_canonical(
-                artifact_root,
-                view=view,
-                gap=gap,
-            )
-        ):
-            _block(
-                blockers,
-                "research_package",
-                "decision_gap_persisted_source_binding_mismatch",
-                security_id,
-            )
+        if artifact_root is not None:
+            try:
+                gap_sources_valid = decision_gap_bound_sources_are_canonical(
+                    artifact_root,
+                    view=view,
+                    gap=gap,
+                )
+            except ResearchPackageSourceRevalidationError:
+                gap_sources_valid = False
+            if not gap_sources_valid:
+                _block(
+                    blockers,
+                    "research_package",
+                    "decision_gap_persisted_source_binding_mismatch",
+                    security_id,
+                )
 
     if any(item.security_id == security_id for item in blockers):
         return None
@@ -640,24 +625,16 @@ def _current_ready_preflight(
     processed_at: datetime,
 ) -> CurrentResearchThesisPreflightState:
     try:
-        current = load_current_research_thesis_preflight_states(root).get(
-            request.snapshot_id
-        )
+        current = load_current_research_thesis_preflight_states(root).get(request.snapshot_id)
     except ResearchPreflightStateError as exc:
-        raise ValueError(
-            "current thesis preflight state failed validation"
-        ) from exc
+        raise ValueError("current thesis preflight state failed validation") from exc
     if current is None:
-        raise ValueError(
-            "analysis request has no current typed-thesis preflight state"
-        )
+        raise ValueError("analysis request has no current typed-thesis preflight state")
     validate_preflight_selection_timing(current, processed_at=processed_at)
     try:
         validate_preflight_state_request_binding(current.state, request)
     except ResearchPreflightStateError as exc:
-        raise ValueError(
-            "current thesis preflight does not bind to analysis request"
-        ) from exc
+        raise ValueError("current thesis preflight does not bind to analysis request") from exc
     if not current.state.ready_for_package_assembly:
         raise ValueError("typed-thesis preflight is not ready for package assembly")
     return current
@@ -699,12 +676,18 @@ def _record_package_blockers(
         built_at=processed_at,
     )
     _require_safe_run_ledger_publication(root, run=run, ledger=next_ledger)
-    run_path = persist_research_run(run, output_root=root)
-    owned_run = _capture_owned_file(run_path)
+    run_path, owned_run = _persist_owned_content_addressed_json(
+        root=root,
+        repository_name="research_round_run_v2_1",
+        snapshot_id=run.snapshot_id,
+        payload_without_id=run.payload_without_id(),
+    )
     try:
-        ledger_path = persist_research_run_ledger(
-            next_ledger,
-            output_root=root,
+        ledger_path, _owned_ledger = _persist_owned_content_addressed_json(
+            root=root,
+            repository_name="research_run_ledger_v2_1",
+            snapshot_id=next_ledger.snapshot_id,
+            payload_without_id=next_ledger.payload_without_id(),
         )
     except BaseException:
         _unlink_owned_file_if_current(owned_run)
@@ -733,9 +716,7 @@ def _latest_request_run(
     request_snapshot_id: str,
 ) -> ResearchRoundRunSnapshot | None:
     matching = tuple(
-        item
-        for item in ledger.runs
-        if item.request_snapshot_id == request_snapshot_id
+        item for item in ledger.runs if item.request_snapshot_id == request_snapshot_id
     )
     return matching[-1] if matching else None
 
@@ -745,9 +726,7 @@ def _validate_downstream_artifact_bindings(artifacts: ResearchRoundArtifacts) ->
     if candidate_ids != artifacts.snapshot.opportunity_candidate_snapshot_ids:
         raise ValueError("research round opportunity-candidate bindings are inconsistent")
     set_id = (
-        artifacts.opportunity_set.snapshot_id
-        if artifacts.opportunity_set is not None
-        else None
+        artifacts.opportunity_set.snapshot_id if artifacts.opportunity_set is not None else None
     )
     if set_id != artifacts.snapshot.opportunity_set_snapshot_id:
         raise ValueError("research round opportunity-set binding is inconsistent")
@@ -755,9 +734,7 @@ def _validate_downstream_artifact_bindings(artifacts: ResearchRoundArtifacts) ->
         artifacts.expectation_overlay is not None
         or artifacts.snapshot.expectation_overlay_snapshot_id is not None
     ):
-        raise ValueError(
-            "typed research package assembler does not publish expectation overlays"
-        )
+        raise ValueError("typed research package assembler does not publish expectation overlays")
     if (
         artifacts.prospective_registration is not None
         or artifacts.snapshot.prospective_registration_snapshot_id is not None
@@ -778,10 +755,9 @@ def _publish_orchestrated_artifacts(
     validate_existing_opportunity_artifacts(root, artifacts)
 
     opportunity_publications: list[_OwnedOpportunityPublication] = []
-    round_path: Path | None = None
-    run_path: Path | None = None
     owned_round: _OwnedFilePublication | None = None
     owned_run: _OwnedFilePublication | None = None
+    owned_ledger: _OwnedFilePublication | None = None
     try:
         for candidate in artifacts.opportunity_candidates:
             publication = _persist_owned_opportunity_snapshot(candidate, output_root=root)
@@ -802,15 +778,33 @@ def _publish_orchestrated_artifacts(
                 artifacts.opportunity_set,
                 require_pointer=_pointer_version_is_current(publication),
             )
-        round_path = persist_research_round(artifacts.snapshot, output_root=root)
-        owned_round = _capture_owned_file(round_path)
-        run_path = persist_research_run(run, output_root=root)
-        owned_run = _capture_owned_file(run_path)
-        ledger_path = persist_research_run_ledger(ledger, output_root=root)
+
+        round_path, owned_round = _persist_owned_content_addressed_json(
+            root=root,
+            repository_name="research_round_v2_1",
+            snapshot_id=artifacts.snapshot.snapshot_id,
+            payload_without_id=artifacts.snapshot.payload_without_id(),
+        )
+        run_path, owned_run = _persist_owned_content_addressed_json(
+            root=root,
+            repository_name="research_round_run_v2_1",
+            snapshot_id=run.snapshot_id,
+            payload_without_id=run.payload_without_id(),
+        )
+        if not _owned_file_is_current(owned_round) or not _owned_file_is_current(owned_run):
+            raise RuntimeError("round/run publication changed before ledger publication")
+        ledger_path, owned_ledger = _persist_owned_content_addressed_json(
+            root=root,
+            repository_name="research_run_ledger_v2_1",
+            snapshot_id=ledger.snapshot_id,
+            payload_without_id=ledger.payload_without_id(),
+        )
+        if not _owned_file_is_current(owned_round) or not _owned_file_is_current(owned_run):
+            raise RuntimeError("round/run publication changed during ledger publication")
         return round_path, run_path, ledger_path
     except BaseException as exc:
         cleanup_errors: list[BaseException] = []
-        for owned_file in (owned_run, owned_round):
+        for owned_file in (owned_ledger, owned_run, owned_round):
             if owned_file is None:
                 continue
             try:
@@ -861,11 +855,28 @@ def _persist_owned_opportunity_snapshot(
     )
     directory_created = False
     if not directory.exists():
-        temporary = root / f".{directory.name}.{os.getpid()}.owned.tmp"
-        if temporary.exists():
-            shutil.rmtree(temporary)
-        temporary.mkdir()
+        temporary = Path(
+            tempfile.mkdtemp(
+                prefix=f".{directory.name}.",
+                suffix=".owned.tmp",
+                dir=root,
+            )
+        )
+        directory_fd: int | None = None
+        owned_directory_identity: tuple[int, int] | None = None
         try:
+            lexical = os.stat(temporary, follow_symlinks=False)
+            flags = os.O_RDONLY
+            if hasattr(os, "O_DIRECTORY"):
+                flags |= os.O_DIRECTORY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            directory_fd = os.open(temporary, flags)
+            opened = os.fstat(directory_fd)
+            owned_directory_identity = (opened.st_dev, opened.st_ino)
+            if (lexical.st_dev, lexical.st_ino) != owned_directory_identity:
+                raise RuntimeError("opportunity temp directory changed before open")
+
             manifest = {
                 "schema_version": OPPORTUNITY_SET_SCHEMA_VERSION,
                 "object_type": object_name,
@@ -875,28 +886,40 @@ def _persist_owned_opportunity_snapshot(
                 "files": [f"{object_name}.json"],
                 **manifest_extra,
             }
-            (temporary / f"{object_name}.json").write_text(
+            _write_directory_relative_file(
+                directory_fd,
+                f"{object_name}.json",
                 json.dumps(
                     snapshot.payload_without_id(),
                     ensure_ascii=False,
                     indent=2,
                     sort_keys=True,
-                ),
-                encoding="utf-8",
+                ).encode("utf-8"),
             )
-            (temporary / "manifest.json").write_text(
-                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True),
-                encoding="utf-8",
+            _write_directory_relative_file(
+                directory_fd,
+                "manifest.json",
+                json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8"),
             )
+            os.fsync(directory_fd)
+            current = os.stat(temporary, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != owned_directory_identity:
+                raise RuntimeError("opportunity temp directory changed before publication")
             try:
-                temporary.rename(directory)
+                os.rename(temporary, directory)
                 directory_created = True
             except OSError:
                 if not directory.exists():
                     raise
+            if directory_created:
+                published = os.stat(directory, follow_symlinks=False)
+                if (published.st_dev, published.st_ino) != owned_directory_identity:
+                    raise RuntimeError("opportunity snapshot directory ownership changed")
         finally:
-            if temporary.exists():
-                shutil.rmtree(temporary)
+            if directory_fd is not None:
+                os.close(directory_fd)
+            # Never recursively delete an ambiguous temporary pathname.  An incomplete
+            # unreferenced temp directory is safer than following a raced replacement.
 
     pointer = root / f"latest_{object_name}.json"
     pointer_before = _optional_bytes(pointer)
@@ -915,6 +938,7 @@ def _persist_owned_opportunity_snapshot(
         sort_keys=True,
     ).encode("utf-8")
     pointer_temp = _write_owned_pointer_temp(root, pointer.name, pointer_after)
+    pointer_temp_identity = _capture_file_identity(pointer_temp)
     pointer_published_by_this_call = False
     try:
         if pointer_before is None:
@@ -922,8 +946,6 @@ def _persist_owned_opportunity_snapshot(
                 os.link(pointer_temp, pointer)
                 pointer_published_by_this_call = True
             except FileExistsError:
-                # A concurrent publisher won the absent-pointer race; do not overwrite it and
-                # never infer ownership merely because its deterministic bytes match ours.
                 pointer_published_by_this_call = False
         elif pointer_before_identity is not None:
             pointer_published_by_this_call = _replace_pointer_if_version_matches(
@@ -934,16 +956,8 @@ def _persist_owned_opportunity_snapshot(
             )
     finally:
         pointer_temp.unlink(missing_ok=True)
-    if (
-        pointer_published_by_this_call
-        and pointer.exists()
-        and not pointer.is_symlink()
-        and pointer.read_bytes() == pointer_after
-    ):
-        stat = pointer.stat()
-        inode = stat.st_ino
-        mtime_ns = stat.st_mtime_ns
-        size = stat.st_size
+    if pointer_published_by_this_call:
+        inode, mtime_ns, size = pointer_temp_identity
     else:
         inode = -1
         mtime_ns = -1
@@ -960,6 +974,22 @@ def _persist_owned_opportunity_snapshot(
         pointer_mtime_ns=mtime_ns,
         pointer_size=size,
     )
+
+
+def _write_directory_relative_file(directory_fd: int, name: str, content: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(name, flags, 0o644, dir_fd=directory_fd)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 def _write_owned_pointer_temp(root: Path, pointer_name: str, content: bytes) -> Path:
@@ -989,13 +1019,7 @@ def _replace_pointer_if_version_matches(
     expected_bytes: bytes,
     expected_identity: tuple[int, int, int],
 ) -> bool:
-    """Conditionally publish without a check-then-rename race.
-
-    The current canonical name is first atomically claimed into an unpredictable
-    same-directory quarantine.  Verification then occurs on the stable claimed
-    pathname.  Publication uses a no-replace hard link, so a direct/non-cooperating
-    publisher that recreates the canonical name while we validate always wins.
-    """
+    """Conditionally publish after atomically quarantining the observed old pointer."""
 
     if pointer.is_symlink() or not pointer.exists():
         return False
@@ -1017,8 +1041,13 @@ def _replace_pointer_if_version_matches(
         try:
             os.link(replacement, pointer)
         except FileExistsError:
-            # A concurrent publisher recreated the canonical name after our claim.
+            # A concurrent publisher recreated the canonical name and wins.
             return False
+        except BaseException:
+            # Publication failed after we claimed the old pointer.  Preserve the
+            # previously published state whenever no concurrent writer now owns it.
+            _restore_quarantined_file_if_absent(quarantine, pointer)
+            raise
         return True
     finally:
         quarantine.unlink(missing_ok=True)
@@ -1122,8 +1151,6 @@ def _rollback_owned_opportunity_publication(
             cleanup_errors.append(exc)
         finally:
             previous_temp.unlink(missing_ok=True)
-        # Preserve immutable directories when replacing an existing pointer. Another reader or
-        # publisher may already have retained a reference to the content-addressed snapshot.
         return
     if publication.pointer_inode < 0:
         return
@@ -1137,24 +1164,79 @@ def _rollback_owned_opportunity_publication(
     except BaseException as exc:
         cleanup_errors.append(exc)
         return
-    if publication.directory_created:
+    # Content-addressed opportunity directories are immutable.  Once publication can
+    # race with non-cooperating writers, destructive rmtree-by-path is never safe: the
+    # deterministic pathname may already belong to another publisher.  Leave an
+    # unreferenced immutable directory in place; only the mutable latest pointer rolls back.
+
+
+def _persist_owned_content_addressed_json(
+    *,
+    root: Path,
+    repository_name: str,
+    snapshot_id: str,
+    payload_without_id: dict[str, object],
+) -> tuple[Path, _OwnedFilePublication]:
+    repository = root / repository_name
+    repository.mkdir(parents=True, exist_ok=True)
+    path = repository / f"{snapshot_id}.json"
+    payload = dict(payload_without_id)
+    payload["snapshot_id"] = snapshot_id
+    encoded = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o644)
+    created = os.fstat(fd)
+    owned_fd = os.dup(fd)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+            completed = os.fstat(handle.fileno())
+        publication = _OwnedFilePublication(
+            path=path,
+            inode=completed.st_ino,
+            mtime_ns=completed.st_mtime_ns,
+            size=completed.st_size,
+            sha256=hashlib.sha256(encoded).hexdigest(),
+        )
+        if not _owned_file_is_current(publication):
+            raise RuntimeError(f"publication path changed during creation: {path}")
+        return path, publication
+    except BaseException:
+        if fd >= 0:
+            os.close(fd)
         try:
-            if publication.directory.is_symlink():
-                raise RuntimeError(
-                    f"rollback refused symlinked snapshot directory: {publication.directory}"
-                )
-            if publication.directory.exists():
-                shutil.rmtree(publication.directory)
-        except BaseException as exc:
-            cleanup_errors.append(exc)
-            return
-    if publication.root_created:
+            _unlink_file_if_inode_matches(path, created.st_ino)
+        except BaseException:
+            pass
+        raise
+    finally:
+        os.close(owned_fd)
+
+
+def _unlink_file_if_inode_matches(path: Path, expected_inode: int) -> bool:
+    if path.is_symlink() or not path.exists():
+        return False
+    quarantine = _new_publication_quarantine(path)
+    try:
         try:
-            publication.root.rmdir()
+            os.replace(path, quarantine)
         except FileNotFoundError:
-            pass
-        except OSError:
-            pass
+            return False
+        if quarantine.is_symlink() or not quarantine.is_file():
+            return False
+        if quarantine.stat().st_ino != expected_inode:
+            _restore_quarantined_file_if_absent(quarantine, path)
+            return False
+        return True
+    finally:
+        quarantine.unlink(missing_ok=True)
 
 
 def _capture_file_identity(path: Path) -> tuple[int, int, int]:
@@ -1282,9 +1364,7 @@ def _find_request(
 ) -> AnalysisRequestSnapshot:
     matches = tuple(item for item in ledger.requests if item.request_id == request_id)
     if len(matches) != 1:
-        raise ValueError(
-            f"request_id must resolve exactly once in latest ledger: {request_id}"
-        )
+        raise ValueError(f"request_id must resolve exactly once in latest ledger: {request_id}")
     return matches[0]
 
 

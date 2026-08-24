@@ -98,6 +98,7 @@ from alpha_cycle.intelligence.underwriter_v2_1 import (
 )
 from alpha_cycle.intelligence.valuation import (
     ValuationEvidenceSnapshot,
+    _valuation_metrics,
     write_valuation_evidence_snapshot,
 )
 from alpha_cycle.investment_thesis_repository_v2_1 import persist_investment_thesis
@@ -310,26 +311,68 @@ def _valuation_evidence(
     offset: int,
 ) -> ValuationEvidenceSnapshot:
     market_cap = float(expectations.observations[0].value) * 1_000_000.0 * 10.0
+    issued_shares = 1_000_000.0
+    price = market_cap / issued_shares
+    shares = pd.DataFrame(
+        [
+            {
+                "ticker": thesis.security_id,
+                "security_name": "보통주",
+                "security_class": "common",
+                "issued_shares": issued_shares,
+                "period_end": "2025-12-31",
+                "available_date": "2026-03-31",
+            }
+        ]
+    )
+    security_values = pd.DataFrame(
+        [
+            {
+                "ticker": thesis.security_id,
+                "security_name": "보통주",
+                "security_class": "common",
+                "issued_shares": issued_shares,
+                "period_end": "2025-12-31",
+                "available_date": "2026-03-31",
+                "symbol": thesis.security_id,
+                "mapping_source": "default_common",
+                "price": price,
+                "price_timestamp": "2026-08-23T00:00:00+00:00",
+                "security_market_value": market_cap,
+                "priced": True,
+            }
+        ]
+    )
+    financial_history = pd.DataFrame(
+        [
+            {
+                "ticker": thesis.security_id,
+                "business_year": 2025,
+                "period_label": "FY",
+                "period_end": "2025-12-31",
+                "revenue": market_cap / 5.0,
+                "net_income": market_cap / 10.0,
+                "equity": market_cap / 2.0,
+                "free_cash_flow_ytd": market_cap / 20.0,
+            }
+        ]
+    )
+    valuation_metrics = _valuation_metrics(security_values, financial_history)
     return ValuationEvidenceSnapshot(
         captured_at=NOW + timedelta(seconds=19 + offset),
         evaluation_date=EVAL,
         research_snapshot_id=A,
         market_snapshot_id=C,
         history_years=1,
-        shares=pd.DataFrame([{"ticker": thesis.security_id, "listed_stock_cnt": 1.0}]),
-        security_values=pd.DataFrame([{"ticker": thesis.security_id, "market_value": market_cap}]),
-        financial_history=pd.DataFrame([{"ticker": thesis.security_id, "revenue": 1.0}]),
-        valuation_metrics=pd.DataFrame(
-            [
-                {
-                    "ticker": thesis.security_id,
-                    "market_cap_complete": True,
-                    "market_cap": market_cap,
-                    "valuation_score": 3.0,
-                }
-            ]
-        ),
-        raw_valuation={"fixture_security_id": thesis.security_id},
+        shares=shares,
+        security_values=security_values,
+        financial_history=financial_history,
+        valuation_metrics=valuation_metrics,
+        raw_valuation={
+            "source_research_snapshot_id": A,
+            "source_market_snapshot_id": C,
+            "fixture_security_id": thesis.security_id,
+        },
         warnings=(),
     )
 
@@ -434,6 +477,7 @@ def _epistemic_sources(thesis: InvestmentThesisSnapshot, offset: int):
     )
     return counter, blind, epistemic
 
+
 def _components(thesis: InvestmentThesisSnapshot, offset: int):
     security_id = thesis.security_id
     selected_registration = _registration(
@@ -493,9 +537,7 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         selected_forecast_value=selected_registration.forecast_value,
         forecast_origin=NOW - timedelta(hours=2),
         information_cutoff=NOW - timedelta(hours=3),
-        tournament_forecast_snapshot_ids=tuple(
-            sorted(item.snapshot_id for item in registrations)
-        ),
+        tournament_forecast_snapshot_ids=tuple(sorted(item.snapshot_id for item in registrations)),
         tournament_dependency_overlap=False,
         guardrail_evidence_id=GUARDRAIL,
     )

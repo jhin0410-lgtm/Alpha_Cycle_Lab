@@ -8,10 +8,12 @@ canonical builder so forged-but-self-consistent derived envelopes fail closed.
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import pandas as pd
 
 from alpha_cycle.intelligence.decision_guardrails_v2_1 import (
@@ -51,6 +53,8 @@ from alpha_cycle.intelligence.price_implied_requirement import (
 from alpha_cycle.intelligence.valuation import (
     VALUATION_SCHEMA_VERSION,
     ValuationEvidenceSnapshot,
+    _records,
+    _valuation_metrics,
 )
 from alpha_cycle.research_package_integrity_v2_1 import require_trusted_artifact_root
 
@@ -207,9 +211,7 @@ def load_canonical_counter_thesis(
                 payload, "strongest_alternative_explanation_id"
             ),
             alternative_explanations=explanations,
-            falsification_evidence_refs=_text_tuple(
-                payload, "falsification_evidence_refs"
-            ),
+            falsification_evidence_refs=_text_tuple(payload, "falsification_evidence_refs"),
             missing_evidence=_text_tuple(payload, "missing_evidence"),
             unresolved_contradictions=contradictions,
             status=CounterThesisStatus(_text(payload, "status")),
@@ -220,16 +222,20 @@ def load_canonical_counter_thesis(
     expected_manifest = _research_contract_manifest(
         "counter_thesis", snapshot.snapshot_id, snapshot.captured_at
     )
-    return snapshot if _canonical_simple_snapshot_matches(
-        snapshot_id,
-        payload,
-        manifest,
-        directory,
-        snapshot.snapshot_id,
-        snapshot.captured_at,
-        snapshot.payload_without_id(),
-        expected_manifest,
-    ) else None
+    return (
+        snapshot
+        if _canonical_simple_snapshot_matches(
+            snapshot_id,
+            payload,
+            manifest,
+            directory,
+            snapshot.snapshot_id,
+            snapshot.captured_at,
+            snapshot.payload_without_id(),
+            expected_manifest,
+        )
+        else None
+    )
 
 
 def load_canonical_blind_spot(
@@ -278,9 +284,7 @@ def load_canonical_blind_spot(
             search_completed=_boolean(payload, "search_completed"),
             candidates=candidates,
             search_limitations=_text_tuple(payload, "search_limitations"),
-            no_candidate_found_reason=_optional_text(
-                payload, "no_candidate_found_reason"
-            ),
+            no_candidate_found_reason=_optional_text(payload, "no_candidate_found_reason"),
             guardrail_evidence_id=_text(payload, "guardrail_evidence_id"),
         )
     except (KeyError, TypeError, ValueError):
@@ -288,16 +292,20 @@ def load_canonical_blind_spot(
     expected_manifest = _research_contract_manifest(
         "blind_spot", snapshot.snapshot_id, snapshot.captured_at
     )
-    return snapshot if _canonical_simple_snapshot_matches(
-        snapshot_id,
-        payload,
-        manifest,
-        directory,
-        snapshot.snapshot_id,
-        snapshot.captured_at,
-        snapshot.payload_without_id(),
-        expected_manifest,
-    ) else None
+    return (
+        snapshot
+        if _canonical_simple_snapshot_matches(
+            snapshot_id,
+            payload,
+            manifest,
+            directory,
+            snapshot.snapshot_id,
+            snapshot.captured_at,
+            snapshot.payload_without_id(),
+            expected_manifest,
+        )
+        else None
+    )
 
 
 def load_canonical_valuation_reference_frame(
@@ -352,16 +360,20 @@ def load_canonical_valuation_reference_frame(
         "automatic_execution_enabled": False,
         "files": ["valuation_reference_frame.json"],
     }
-    return snapshot if _canonical_simple_snapshot_matches(
-        snapshot_id,
-        payload,
-        manifest,
-        directory,
-        snapshot.snapshot_id,
-        snapshot.captured_at,
-        snapshot.payload_without_id(),
-        expected_manifest,
-    ) else None
+    return (
+        snapshot
+        if _canonical_simple_snapshot_matches(
+            snapshot_id,
+            payload,
+            manifest,
+            directory,
+            snapshot.snapshot_id,
+            snapshot.captured_at,
+            snapshot.payload_without_id(),
+            expected_manifest,
+        )
+        else None
+    )
 
 
 def load_canonical_valuation_evidence(
@@ -401,10 +413,7 @@ def load_canonical_valuation_evidence(
             "files",
         }:
             return None
-        frames = {
-            name: _read_valuation_csv(directory / name, root)
-            for name in required_files[:-1]
-        }
+        frames = {name: _read_valuation_csv(directory / name, root) for name in required_files[:-1]}
         raw_valuation = _read_json_regular(directory / "raw_valuation.json", root)
         snapshot = ValuationEvidenceSnapshot(
             captured_at=_datetime(manifest, "captured_at"),
@@ -440,9 +449,7 @@ def load_canonical_valuation_evidence(
         "market_cap_complete_count": int(
             snapshot.valuation_metrics["market_cap_complete"].astype(bool).sum()
         ),
-        "valuation_scored_count": int(
-            snapshot.valuation_metrics["valuation_score"].notna().sum()
-        ),
+        "valuation_scored_count": int(snapshot.valuation_metrics["valuation_score"].notna().sum()),
         "warnings": list(snapshot.warnings),
         "valuation_method": "peer_relative_percentile_shrunk_to_neutral",
         "consensus_available": False,
@@ -454,7 +461,94 @@ def load_canonical_valuation_evidence(
     timestamp = snapshot.captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     if directory.name != f"{timestamp}__{snapshot.snapshot_id[:12]}":
         return None
+    if not _valuation_evidence_semantics_match(snapshot):
+        return None
     return snapshot
+
+
+def _valuation_evidence_semantics_match(snapshot: ValuationEvidenceSnapshot) -> bool:
+    """Recompute market-cap semantics instead of trusting self-consistent CSV values."""
+
+    if not isinstance(snapshot.raw_valuation, dict):
+        return False
+    if snapshot.raw_valuation.get("source_research_snapshot_id") != snapshot.research_snapshot_id:
+        return False
+    if snapshot.raw_valuation.get("source_market_snapshot_id") != snapshot.market_snapshot_id:
+        return False
+
+    values = snapshot.security_values
+    required_value_columns = {
+        "ticker",
+        "security_name",
+        "security_class",
+        "issued_shares",
+        "price",
+        "security_market_value",
+        "priced",
+    }
+    required_share_columns = {
+        "ticker",
+        "security_name",
+        "security_class",
+        "issued_shares",
+    }
+    if not required_value_columns.issubset(values.columns):
+        return False
+    if not required_share_columns.issubset(snapshot.shares.columns):
+        return False
+
+    def finite_or_none(value: object) -> float | None:
+        if value is None:
+            return None
+        try:
+            result = float(cast(float | int | str, value))
+        except (TypeError, ValueError):
+            return None
+        return result if math.isfinite(result) else None
+
+    def key(row: dict[str, object]) -> tuple[str, str, str, float | None]:
+        return (
+            str(row.get("ticker", "")).strip(),
+            str(row.get("security_name", "")).strip(),
+            str(row.get("security_class", "")).strip(),
+            finite_or_none(row.get("issued_shares")),
+        )
+
+    share_keys = {
+        key({str(name): value for name, value in row.items()})
+        for row in snapshot.shares.to_dict(orient="records")
+    }
+    for raw in values.to_dict(orient="records"):
+        row = {str(name): value for name, value in raw.items()}
+        if key(row) not in share_keys:
+            return False
+        issued = finite_or_none(row.get("issued_shares"))
+        price = finite_or_none(row.get("price"))
+        observed_value = finite_or_none(row.get("security_market_value"))
+        raw_priced = row.get("priced")
+        if not isinstance(raw_priced, (bool, np.bool_)):
+            return False
+        expected_priced = price is not None
+        if bool(raw_priced) is not expected_priced:
+            return False
+        expected_value = price * issued if price is not None and issued is not None else None
+        if expected_value is None:
+            if observed_value is not None:
+                return False
+        elif observed_value is None or not math.isclose(
+            observed_value, expected_value, rel_tol=1e-12, abs_tol=1e-6
+        ):
+            return False
+
+    try:
+        recomputed = _valuation_metrics(values, snapshot.financial_history)
+        if _records(recomputed.reset_index(drop=True)) != _records(
+            snapshot.valuation_metrics.reset_index(drop=True)
+        ):
+            return False
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _find_valuation_directory(root: Path, snapshot_id: str) -> Path | None:
@@ -585,7 +679,7 @@ def _read_valuation_csv(path: Path, root: Path) -> pd.DataFrame:
     string_columns = {
         column: "string"
         for column in header.columns
-        if column in {"ticker", "stock_code", "corp_code", "report_code"}
+        if column in {"ticker", "stock_code", "corp_code", "report_code", "symbol"}
         or column.endswith("_date")
         or column.endswith("_end")
     }
