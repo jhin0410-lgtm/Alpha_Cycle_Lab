@@ -32,6 +32,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/pr303_final_hardening.py
+          rm -f .github/pr303_final_hardening.py .github/workflows/pr303-final-hardening.yml
 
       - name: Create isolated Python environment
         shell: bash
@@ -54,7 +55,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/pr303_final_hardening.py .github/workflows/pr303-final-hardening.yml
           git status --short
           if git status --porcelain | grep -E '(^|/)(\.venv|venv|__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache)(/|$)'; then
             echo "Refusing to commit transient environment/cache files" >&2
