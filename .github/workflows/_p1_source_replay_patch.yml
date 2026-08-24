@@ -1,0 +1,231 @@
+name: P1 source replay patch
+
+on:
+  push:
+    branches:
+      - feature/typed-research-package-assembler-v2-1
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/typed-research-package-assembler-v2-1
+          fetch-depth: 0
+      - name: Apply exact source replay patch
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          source_path = Path('src/alpha_cycle/research_package_source_revalidation_v2_1.py')
+          text = source_path.read_text(encoding='utf-8')
+          marker = '\n\n__all__ = ['
+          if text.count(marker) != 1:
+              raise SystemExit('source revalidation __all__ anchor changed')
+          integration = r'''
+
+# Final source-authority gate.  The typed derived envelopes above remain useful for structural
+# reconstruction, but Deep comparability additionally requires replay from independently persisted
+# source artifacts.  These wrappers are intentionally defined after the legacy loaders so all
+# existing callers resolve the hardened global functions at call time.
+_load_canonical_valuation_evidence_without_upstream_replay = load_canonical_valuation_evidence
+_forward_valuation_sources_without_expectation_replay = forward_valuation_sources_are_canonical
+
+
+def _find_bound_upstream_directory(
+    root: Path,
+    *,
+    repository_names: tuple[str, ...],
+    snapshot_id: str,
+) -> Path | None:
+    resolved_root = require_trusted_artifact_root(root)
+    matches: list[Path] = []
+    for repository_name in repository_names:
+        repository = root / repository_name
+        if not repository.exists():
+            continue
+        if repository.is_symlink() or not repository.is_dir():
+            raise ResearchPackageSourceRevalidationError(
+                f"{repository_name} repository must be a regular directory"
+            )
+        resolved_repository = repository.resolve()
+        if resolved_repository.parent != resolved_root:
+            raise ResearchPackageSourceRevalidationError(
+                f"{repository_name} repository escapes artifact_root"
+            )
+        for candidate in repository.iterdir():
+            if candidate.is_symlink() or not candidate.is_dir():
+                raise ResearchPackageSourceRevalidationError(
+                    f"{repository_name} snapshot must be a regular directory"
+                )
+            if candidate.resolve().parent != resolved_repository:
+                raise ResearchPackageSourceRevalidationError(
+                    f"{repository_name} snapshot escapes repository"
+                )
+            manifest_path = candidate / "manifest.json"
+            if not manifest_path.is_file():
+                continue
+            manifest = _read_json_regular(manifest_path, root)
+            if str(manifest.get("snapshot_id", "")) == snapshot_id:
+                matches.append(candidate)
+    if len(matches) > 1:
+        raise ResearchPackageSourceRevalidationError(
+            "upstream snapshot identity is ambiguous across trusted repositories"
+        )
+    return matches[0] if matches else None
+
+
+def _valuation_sources_are_canonical(
+    root: Path,
+    snapshot: ValuationEvidenceSnapshot,
+) -> bool:
+    from alpha_cycle.intelligence.research_source_evidence_v2_1 import (
+        ResearchSourceEvidenceError,
+        load_persisted_valuation_source,
+        rebuild_valuation_evidence_from_source,
+    )
+
+    if not isinstance(snapshot.raw_valuation, dict):
+        return False
+    source_id = str(snapshot.raw_valuation.get("source_valuation_snapshot_id", "")).strip()
+    if len(source_id) != 64 or any(character not in "0123456789abcdef" for character in source_id):
+        return False
+    try:
+        source = load_persisted_valuation_source(root, source_id)
+        if source is None:
+            return False
+        if (
+            source.research_snapshot_id != snapshot.research_snapshot_id
+            or source.market_snapshot_id != snapshot.market_snapshot_id
+            or source.evaluation_date != snapshot.evaluation_date
+            or source.history_years != snapshot.history_years
+            or source.captured_at > snapshot.captured_at
+        ):
+            return False
+        research_directory = _find_bound_upstream_directory(
+            root,
+            repository_names=("research-intelligence", "research_intelligence", "research"),
+            snapshot_id=source.research_snapshot_id,
+        )
+        market_directory = _find_bound_upstream_directory(
+            root,
+            repository_names=("market-intelligence", "market_intelligence", "market"),
+            snapshot_id=source.market_snapshot_id,
+        )
+        if research_directory is None or market_directory is None:
+            return False
+        rebuilt = rebuild_valuation_evidence_from_source(
+            source,
+            research_snapshot=research_directory,
+            market_snapshot=market_directory,
+            captured_at=snapshot.captured_at,
+        )
+    except (
+        OSError,
+        ResearchPackageSourceRevalidationError,
+        ResearchSourceEvidenceError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+    return bool(
+        rebuilt.snapshot_id == snapshot.snapshot_id
+        and rebuilt.payload_without_id() == snapshot.payload_without_id()
+    )
+
+
+def load_canonical_valuation_evidence(
+    root: Path,
+    snapshot_id: str,
+) -> ValuationEvidenceSnapshot | None:
+    snapshot = _load_canonical_valuation_evidence_without_upstream_replay(root, snapshot_id)
+    if snapshot is None:
+        return None
+    return snapshot if _valuation_sources_are_canonical(root, snapshot) else None
+
+
+def forward_valuation_sources_are_canonical(
+    root: str | Path,
+    *,
+    snapshot: ForwardValuationStateSnapshot,
+    expectations: ExpectationStateSnapshot,
+) -> bool:
+    from alpha_cycle.intelligence.research_source_evidence_v2_1 import (
+        certified_expectation_sources_are_canonical,
+    )
+
+    if not certified_expectation_sources_are_canonical(
+        root,
+        expectations.observations,
+        expectations.source_snapshot_ids,
+        captured_at=expectations.captured_at,
+    ):
+        return False
+    return _forward_valuation_sources_without_expectation_replay(
+        root,
+        snapshot=snapshot,
+        expectations=expectations,
+    )
+'''
+          text = text.replace(marker, integration + marker)
+          source_path.write_text(text, encoding='utf-8')
+
+          test_path = Path('tests/unit/test_research_package_assembler_v2_1.py')
+          text = test_path.read_text(encoding='utf-8')
+          if 'import json\n' not in text:
+              text = text.replace('from pathlib import Path\n', 'from pathlib import Path\nimport json\n')
+          old = '''from alpha_cycle.intelligence.expectation_gap_contract import ExpectationSemantics\nfrom alpha_cycle.intelligence.expectation_state import (\n    CertifiedExpectationObservation,\n    ExpectationKind,\n    ExpectationMetric,\n    ExpectationStateSnapshot,\n    persist_expectation_state,\n)\n'''
+          new = '''from alpha_cycle.intelligence.expectation_state import (\n    ExpectationMetric,\n    ExpectationStateSnapshot,\n    persist_expectation_state,\n)\n'''
+          if old not in text:
+              raise SystemExit('expectation import anchor changed')
+          text = text.replace(old, new)
+          valuation_import = '''from alpha_cycle.intelligence.valuation import (\n    ValuationEvidenceSnapshot,\n    _valuation_metrics,\n    write_valuation_evidence_snapshot,\n)\n'''
+          source_import = valuation_import + '''from alpha_cycle.intelligence.research_source_evidence_v2_1 import (\n    CertifiedConsensusSourceSnapshot,\n    build_valuation_source_from_evidence,\n    persist_certified_consensus_source,\n    persist_valuation_source,\n    rebuild_valuation_evidence_from_source,\n)\n'''
+          if valuation_import not in text:
+              raise SystemExit('valuation import anchor changed')
+          text = text.replace(valuation_import, source_import)
+
+          expectation_pattern = re.compile(
+              r'def _expectations\(thesis: InvestmentThesisSnapshot, offset: int\) -> ExpectationStateSnapshot:\n.*?(?=\n\ndef _valuation_evidence)',
+              re.S,
+          )
+          expectation_replacement = '''def _expectations(\n    thesis: InvestmentThesisSnapshot,\n    offset: int,\n    tmp_path: Path,\n) -> ExpectationStateSnapshot:\n    source = CertifiedConsensusSourceSnapshot(\n        captured_at=NOW + timedelta(seconds=21, microseconds=500 + offset),\n        provider_id="fixture-independent-consensus",\n        security_id=thesis.security_id,\n        metric=ExpectationMetric.NET_INCOME,\n        target_period="2026",\n        target_period_end=TARGET,\n        value=18_000_000.0 + offset,\n        unit="KRW_million",\n        observed_at=NOW - timedelta(hours=1),\n        source_scope="fixture-consensus",\n        aggregation_method="fixture-median",\n        sample_count=3,\n        dispersion=None,\n        raw_provider_payload={\n            "fixture_provider": "independent-consensus",\n            "security_id": thesis.security_id,\n            "value": 18_000_000.0 + offset,\n        },\n    )\n    persist_certified_consensus_source(source, output_root=tmp_path)\n    return ExpectationStateSnapshot(\n        captured_at=NOW + timedelta(seconds=22 + offset),\n        evaluation_date=EVAL,\n        observations=(source.observation(),),\n        source_snapshot_ids=(source.snapshot_id,),\n    )\n'''
+          text, count = expectation_pattern.subn(expectation_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('expectation helper anchor changed')
+
+          valuation_pattern = re.compile(
+              r'def _valuation_evidence\(\n    thesis: InvestmentThesisSnapshot,\n    expectations: ExpectationStateSnapshot,\n    offset: int,\n\) -> ValuationEvidenceSnapshot:\n.*?(?=\n\ndef _forward_valuation)',
+              re.S,
+          )
+          valuation_replacement = '''def _ensure_valuation_upstream_fixture(tmp_path: Path) -> tuple[Path, Path]:\n    research = tmp_path / "research-intelligence" / f"20260823T080000000000Z__{A[:12]}"\n    market = tmp_path / "market-intelligence" / f"20260823T080000000000Z__{C[:12]}"\n    research.mkdir(parents=True, exist_ok=True)\n    market.mkdir(parents=True, exist_ok=True)\n    research_manifest = {\n        "schema_version": 2,\n        "snapshot_id": A,\n        "captured_at": "2026-08-23T08:00:00+00:00",\n        "evaluation_date": EVAL.isoformat(),\n        "files": ["raw_opendart.json"],\n    }\n    market_manifest = {\n        "schema_version": 1,\n        "snapshot_id": C,\n        "captured_at": "2026-08-23T00:00:00+00:00",\n        "provider": "fixture-market",\n        "files": ["prices.csv"],\n        "order_api_enabled": False,\n    }\n    (research / "manifest.json").write_text(\n        json.dumps(research_manifest, ensure_ascii=False, indent=2, sort_keys=True),\n        encoding="utf-8",\n    )\n    (research / "raw_opendart.json").write_text(\n        json.dumps({"fixture": "opendart-source"}, sort_keys=True),\n        encoding="utf-8",\n    )\n    (market / "manifest.json").write_text(\n        json.dumps(market_manifest, ensure_ascii=False, indent=2, sort_keys=True),\n        encoding="utf-8",\n    )\n    (market / "prices.csv").write_text(\n        "symbol,timestamp,last_price,currency\\n"\n        "000660,2026-08-23T00:00:00+00:00,180000000,KRW\\n"\n        "005930,2026-08-23T00:00:00+00:00,180000010,KRW\\n",\n        encoding="utf-8",\n    )\n    return research, market\n\n\ndef _valuation_evidence(\n    thesis: InvestmentThesisSnapshot,\n    expectations: ExpectationStateSnapshot,\n    offset: int,\n    tmp_path: Path,\n) -> ValuationEvidenceSnapshot:\n    market_cap = float(expectations.observations[0].value) * 1_000_000.0 * 10.0\n    issued_shares = 1_000_000.0\n    price = market_cap / issued_shares\n    shares = pd.DataFrame(\n        [\n            {\n                "ticker": thesis.security_id,\n                "security_name": "보통주",\n                "security_class": "common",\n                "issued_shares": issued_shares,\n                "period_end": "2025-12-31",\n                "available_date": "2026-03-31",\n            }\n        ]\n    )\n    security_values = pd.DataFrame(\n        [\n            {\n                "ticker": thesis.security_id,\n                "security_name": "보통주",\n                "security_class": "common",\n                "issued_shares": issued_shares,\n                "period_end": "2025-12-31",\n                "available_date": "2026-03-31",\n                "symbol": thesis.security_id,\n                "mapping_source": "default_common",\n                "price": price,\n                "price_timestamp": "2026-08-23T00:00:00+00:00",\n                "security_market_value": market_cap,\n                "priced": True,\n            }\n        ]\n    )\n    financial_history = pd.DataFrame(\n        [\n            {\n                "ticker": thesis.security_id,\n                "business_year": 2025,\n                "period_label": "FY",\n                "period_end": "2025-12-31",\n                "revenue": market_cap / 5.0,\n                "net_income": market_cap / 10.0,\n                "equity": market_cap / 2.0,\n                "free_cash_flow_ytd": market_cap / 20.0,\n            }\n        ]\n    )\n    candidate = ValuationEvidenceSnapshot(\n        captured_at=NOW + timedelta(seconds=19 + offset),\n        evaluation_date=EVAL,\n        research_snapshot_id=A,\n        market_snapshot_id=C,\n        history_years=1,\n        shares=shares,\n        security_values=security_values,\n        financial_history=financial_history,\n        valuation_metrics=_valuation_metrics(security_values, financial_history),\n        raw_valuation={\n            "source_research_snapshot_id": A,\n            "source_market_snapshot_id": C,\n            "fixture_security_id": thesis.security_id,\n        },\n        warnings=(),\n    )\n    research, market = _ensure_valuation_upstream_fixture(tmp_path)\n    source = build_valuation_source_from_evidence(\n        candidate,\n        research_snapshot=research,\n        market_snapshot=market,\n    )\n    persist_valuation_source(source, output_root=tmp_path)\n    return rebuild_valuation_evidence_from_source(\n        source,\n        research_snapshot=research,\n        market_snapshot=market,\n        captured_at=candidate.captured_at,\n    )\n'''
+          text, count = valuation_pattern.subn(valuation_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit('valuation helper anchor changed')
+          text = text.replace(
+              'def _components(thesis: InvestmentThesisSnapshot, offset: int):',
+              'def _components(thesis: InvestmentThesisSnapshot, offset: int, tmp_path: Path):',
+          )
+          text = text.replace(
+              'expectations = _expectations(thesis, offset)\n    valuation = _valuation_evidence(thesis, expectations, offset)',
+              'expectations = _expectations(thesis, offset, tmp_path)\n    valuation = _valuation_evidence(thesis, expectations, offset, tmp_path)',
+          )
+          text = text.replace(
+              ') = _components(thesis, index)',
+              ') = _components(thesis, index, tmp_path)',
+          )
+          test_path.write_text(text, encoding='utf-8')
+          PY
+          git rm .github/workflows/_p1_source_replay_patch.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/alpha_cycle/research_package_source_revalidation_v2_1.py tests/unit/test_research_package_assembler_v2_1.py
+          git commit -m "Bind package evidence to persisted source artifacts"
+          git push origin HEAD:feature/typed-research-package-assembler-v2-1
