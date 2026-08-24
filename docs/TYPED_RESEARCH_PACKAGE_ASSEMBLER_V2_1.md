@@ -57,11 +57,21 @@ Per security, selection requires the request-compatible:
 - Decision View security/evaluation-date/guardrail;
 - Expectation Gap bound to the selected Decision View, security, evaluation date, guardrail and target variable/date/unit.
 
-Persisted builder outputs are additionally checked for canonical invariants that their dataclasses alone do not enforce. Derived evidence is accepted only when its persisted source contracts can also be reconstructed and the owning canonical builder reproduces the exact derived snapshot:
+Persisted builder outputs are additionally checked for canonical invariants that their dataclasses alone do not enforce. Source-derived evidence is accepted only when the package has an independently authoritative persisted source contract for that input.
 
-- `ValuationEvidenceSnapshot + ExpectationStateSnapshot -> ForwardValuationStateSnapshot` is replayed through `build_forward_valuation_state(...)`;
-- `ValuationEvidenceSnapshot + ValuationReferenceFrameSnapshot -> PriceImpliedRequirementSnapshot` is replayed through `build_price_implied_requirement(...)`;
-- `InvestmentThesisSnapshot + CounterThesisSnapshot + BlindSpotDiscoverySnapshot -> EpistemicDefensePackageSnapshot` is replayed through `build_epistemic_defense_package(...)`;
+The current production boundary is intentionally asymmetric:
+
+- `InvestmentThesisSnapshot + CounterThesisSnapshot + BlindSpotDiscoverySnapshot -> EpistemicDefensePackageSnapshot` is replayed through `build_epistemic_defense_package(...)` because those persisted source contracts are independently reconstructable;
+- `ForwardValuationStateSnapshot` is **not** promoted to Deep source authority merely because a self-consistent `ValuationEvidenceSnapshot` and `ExpectationStateSnapshot` can reproduce it;
+- `PriceImpliedRequirementSnapshot` is **not** promoted to Deep source authority merely because a self-consistent valuation envelope and reference frame can reproduce it;
+- a market-consensus observation is **not** certified by flags stored in `ExpectationStateSnapshot` itself. A recognized provider-specific persisted authority must reproduce the provider, metric, target period, unit, value, timestamp and aggregation semantics;
+- the current KIS expectation path remains explicitly non-certified and cannot satisfy the Deep certified-consensus authority requirement;
+- until independently authoritative valuation/OpenDART acquisition evidence and a recognized certified-consensus provider contract exist, valuation/consensus-dependent Deep package authority fails closed rather than manufacturing a new authority envelope from derived data.
+
+The previously attempted normalized `research_source_evidence_v2_1` envelope was removed because it copied normalized shares/financial history or caller-supplied consensus claims from the derived objects it was meant to authenticate. Moving self-certification into another content-addressed envelope is not considered source replay.
+
+Other persisted invariants remain enforced:
+
 - terminal theses cannot enter a ready package;
 - thesis/payoff/underwriting and Decision View/Expectation Gap capture ordering is causal;
 - ready underwriting carries the complete active lane-specific required-element set;
@@ -75,9 +85,11 @@ Persisted builder outputs are additionally checked for canonical invariants that
 
 ## Fail-closed orchestration
 
-If a required component is absent or incompatible, the assembler records a schema-v1 `PRE_ORCHESTRATION_BLOCKED` run with structured package blockers. Repeating the exact blocker state is historically idempotent while a newer operational preflight state can still produce a fresh blocker run so the Observatory does not hide a current package failure.
+If a required component is absent, incompatible, or lacks the independent source authority required by its lane, the assembler records a schema-v1 `PRE_ORCHESTRATION_BLOCKED` run with structured package blockers. Repeating the exact blocker state is historically idempotent while a newer operational preflight state can still produce a fresh blocker run so the Observatory does not hide a current package failure.
 
 The assembler calls `run_research_round(...)` only after every requested security has a complete typed package. The orchestrator remains authoritative for opportunity-candidate, opportunity-set and research-round construction. A package being complete does **not** imply an investable or even non-blocked research-round result.
+
+The authority boundary is deliberately conservative: absence of a production-certified valuation/provider source contract reduces available Deep evidence; it never causes the assembler to fabricate certification, market cap, fair value, or a stale ready state.
 
 ## Publication transaction
 
@@ -114,9 +126,11 @@ The assembler consumes the existing writer layouts:
 
 `latest_*` JSON files are validated pointers only; they do not determine PIT selection.
 
-## Final hardening validation
+## Validation
 
-The final review-hardening source commit `84ecd0360594826506873156a5eb464c856695c6` passed Ruff, mypy across 411 source files, and the full test suite with 1601 passed tests. Temporary hardening and diagnostic workflows/scripts were removed from that tested source commit before the normal pull-request CI retrigger.
+Assembler-mechanics regressions remain isolated from unavailable production source authority so they continue to test component reconstruction, blocker persistence, transactionality and rollback semantics. Dedicated adversarial regressions separately assert that self-certified consensus, self-consistent valuation evidence, and the removed normalized source envelope cannot establish Deep authority or publish opportunity/research-round artifacts.
+
+The exact-head Ruff, mypy, full-pytest and final Codex merge-gate results are recorded on PR #303 before merge. No prior-head validation is treated as evidence for a later head.
 
 ## Frozen prospective artifacts
 
