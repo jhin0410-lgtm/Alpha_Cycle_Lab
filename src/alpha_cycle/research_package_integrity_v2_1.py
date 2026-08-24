@@ -21,6 +21,7 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
 from alpha_cycle.intelligence.decision_view_v2_1 import (
     DECISION_VIEW_SCHEMA_VERSION,
     DecisionExpectationGapSnapshot,
+    build_decision_view,
     DecisionViewSelectionMethod,
     DecisionViewSelectionRuleSnapshot,
     DecisionViewSnapshot,
@@ -191,6 +192,54 @@ def validate_preflight_selection_timing(
         )
 
 
+def decision_view_has_valid_persisted_selection(
+    view: DecisionViewSnapshot,
+    *,
+    artifact_root: str | Path,
+) -> bool:
+    """Rebuild the canonical Decision View from persisted preregistered inputs."""
+
+    snapshot_ids = tuple(view.tournament_forecast_snapshot_ids)
+    if len(snapshot_ids) < 2 or len(set(snapshot_ids)) != len(snapshot_ids):
+        return False
+    registrations = _load_persisted_forecast_registrations(
+        Path(artifact_root),
+        snapshot_ids,
+    )
+    if len(registrations) != len(snapshot_ids):
+        return False
+    if tuple(sorted(item.snapshot_id for item in registrations)) != tuple(
+        sorted(snapshot_ids)
+    ):
+        return False
+    rule = _load_persisted_decision_view_selection_rule(
+        Path(artifact_root),
+        view.selection_rule_snapshot_id,
+    )
+    if rule is None:
+        return False
+    active = load_decision_system_v21_guardrails()
+    if (
+        view.guardrail_evidence_id != active.evidence_id
+        or rule.guardrail_evidence_id != active.evidence_id
+    ):
+        return False
+    try:
+        rebuilt = build_decision_view(
+            rule,
+            registrations,
+            captured_at=view.captured_at,
+            evaluation_date=view.evaluation_date,
+            guardrails=active,
+        )
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        rebuilt.snapshot_id == view.snapshot_id
+        and rebuilt.payload_without_id() == view.payload_without_id()
+    )
+
+
 def decision_view_matches_underwriting_tournament(
     view: DecisionViewSnapshot,
     underwriting: UnderwritingReadinessSnapshot,
@@ -199,6 +248,11 @@ def decision_view_matches_underwriting_tournament(
 ) -> bool:
     """Bind a Decision View to a genuine persisted forecast tournament identity."""
 
+    if artifact_root is not None and not decision_view_has_valid_persisted_selection(
+        view,
+        artifact_root=artifact_root,
+    ):
+        return False
     tournament = underwriting.forecast_tournament
     snapshot_ids = tuple(tournament.forecast_snapshot_ids)
     forecast_ids = tuple(tournament.forecast_ids)
@@ -804,7 +858,12 @@ def _underwriting_ready_contract_is_valid(
         return True
     active = load_decision_system_v21_guardrails()
     if underwriting.lane is UnderwritingLane.FAST:
-        if underwriting.readiness is not UnderwritingReadiness.FAST_LANE_READY_FOR_HUMAN_REVIEW:
+        if (
+            underwriting.readiness
+            is not UnderwritingReadiness.FAST_LANE_READY_FOR_HUMAN_REVIEW
+        ):
+            return False
+        if thesis.status.value not in active.fast_lane_allowed_thesis_statuses:
             return False
         required = tuple(active.fast_lane_required_elements)
         return bool(
@@ -1120,6 +1179,7 @@ def _sha(value: object) -> str:
 
 __all__ = [
     "ResearchPackageIntegrityError",
+    "decision_view_has_valid_persisted_selection",
     "decision_view_matches_underwriting_tournament",
     "package_integrity_blocker_codes",
     "require_trusted_artifact_root",

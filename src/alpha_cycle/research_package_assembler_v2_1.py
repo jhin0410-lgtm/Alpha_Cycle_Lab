@@ -58,6 +58,7 @@ from alpha_cycle.research_ledger_write_lock_v2_1 import (
 )
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
 from alpha_cycle.research_package_integrity_v2_1 import (
+    decision_view_has_valid_persisted_selection,
     decision_view_matches_underwriting_tournament,
     package_integrity_blocker_codes,
     require_trusted_artifact_root,
@@ -381,54 +382,100 @@ def _assemble_security_package(
     artifact_root: Path | None = None,
     blockers: list[ResearchRoundBlocker],
 ) -> ResearchSecurityPackage | None:
-    underwriting = component_index.latest_underwriting(
-        security_id,
-        thesis_snapshot_id=thesis.snapshot_id,
-        evaluation_date=request.evaluation_date,
-        lane=request.requested_lane,
-        guardrail_evidence_id=guardrail_evidence_id,
-    )
-    if underwriting is None:
+    underwriting_selection_failed = False
+    try:
+        underwriting = component_index.latest_underwriting(
+            security_id,
+            thesis_snapshot_id=thesis.snapshot_id,
+            evaluation_date=request.evaluation_date,
+            lane=request.requested_lane,
+            guardrail_evidence_id=guardrail_evidence_id,
+        )
+    except ResearchComponentRepositoryError:
+        underwriting = None
+        underwriting_selection_failed = True
+        _block(
+            blockers,
+            "underwriter",
+            "underwriting_snapshot_selection_ambiguous",
+            security_id,
+        )
+    if underwriting is None and not underwriting_selection_failed:
         _block(
             blockers,
             "underwriter",
             "underwriting_snapshot_missing_or_incompatible",
             security_id,
         )
-    payoff = component_index.latest_payoff(
-        security_id,
-        thesis_snapshot_id=thesis.snapshot_id,
-        horizon_trading_days=request.horizon_trading_days,
-        guardrail_evidence_id=guardrail_evidence_id,
-    )
-    if payoff is None:
+
+    payoff_selection_failed = False
+    try:
+        payoff = component_index.latest_payoff(
+            security_id,
+            thesis_snapshot_id=thesis.snapshot_id,
+            horizon_trading_days=request.horizon_trading_days,
+            guardrail_evidence_id=guardrail_evidence_id,
+        )
+    except ResearchComponentRepositoryError:
+        payoff = None
+        payoff_selection_failed = True
+        _block(
+            blockers,
+            "payoff_surface",
+            "payoff_surface_selection_ambiguous",
+            security_id,
+        )
+    if payoff is None and not payoff_selection_failed:
         _block(
             blockers,
             "payoff_surface",
             "payoff_surface_missing_or_incompatible",
             security_id,
         )
-    view = component_index.latest_decision_view(
-        security_id,
-        evaluation_date=request.evaluation_date,
-        guardrail_evidence_id=guardrail_evidence_id,
-    )
-    if view is None:
+
+    decision_view_selection_failed = False
+    try:
+        view = component_index.latest_decision_view(
+            security_id,
+            evaluation_date=request.evaluation_date,
+            guardrail_evidence_id=guardrail_evidence_id,
+        )
+    except ResearchComponentRepositoryError:
+        view = None
+        decision_view_selection_failed = True
+        _block(
+            blockers,
+            "decision_view",
+            "decision_view_selection_ambiguous",
+            security_id,
+        )
+    if view is None and not decision_view_selection_failed:
         _block(
             blockers,
             "decision_view",
             "decision_view_missing_or_incompatible",
             security_id,
         )
+
     gap = None
+    expectation_gap_selection_failed = False
     if view is not None:
-        gap = component_index.latest_expectation_gap(
-            security_id,
-            decision_view_snapshot_id=view.snapshot_id,
-            evaluation_date=request.evaluation_date,
-            guardrail_evidence_id=guardrail_evidence_id,
-        )
-    if gap is None:
+        try:
+            gap = component_index.latest_expectation_gap(
+                security_id,
+                decision_view_snapshot_id=view.snapshot_id,
+                evaluation_date=request.evaluation_date,
+                guardrail_evidence_id=guardrail_evidence_id,
+            )
+        except ResearchComponentRepositoryError:
+            expectation_gap_selection_failed = True
+            _block(
+                blockers,
+                "expectation_gap",
+                "expectation_gap_selection_ambiguous",
+                security_id,
+            )
+    if gap is None and not expectation_gap_selection_failed:
         _block(
             blockers,
             "expectation_gap",
@@ -450,6 +497,20 @@ def _assemble_security_package(
                 "underwriting_payoff_binding_mismatch",
                 security_id,
             )
+    if (
+        view is not None
+        and artifact_root is not None
+        and not decision_view_has_valid_persisted_selection(
+            view,
+            artifact_root=artifact_root,
+        )
+    ):
+        _block(
+            blockers,
+            "research_package",
+            "decision_view_persisted_selection_invalid",
+            security_id,
+        )
     if (
         underwriting is not None
         and view is not None
@@ -836,6 +897,8 @@ def _write_owned_pointer_temp(root: Path, pointer_name: str, content: bytes) -> 
     )
     temporary = Path(temporary_name)
     try:
+        if os.name != "nt":
+            os.fchmod(fd, 0o644)
         with os.fdopen(fd, "wb") as handle:
             handle.write(content)
             handle.flush()
