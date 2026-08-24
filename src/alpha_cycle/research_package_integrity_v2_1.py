@@ -688,6 +688,8 @@ def package_integrity_blocker_codes(
     payoff: PayoffSurfaceSnapshot | None,
     view: DecisionViewSnapshot | None,
     gap: DecisionExpectationGapSnapshot | None,
+    *,
+    artifact_root: str | Path | None = None,
 ) -> tuple[str, ...]:
     """Return deterministic fail-closed blockers for persisted-only builder bypasses."""
 
@@ -699,7 +701,10 @@ def package_integrity_blocker_codes(
     if underwriting is not None and underwriting.captured_at < thesis.captured_at:
         blockers.append("thesis_underwriting_capture_order_mismatch")
     if underwriting is not None and not _underwriting_ready_contract_is_valid(
-        thesis, underwriting, payoff
+        thesis,
+        underwriting,
+        payoff,
+        artifact_root=artifact_root,
     ):
         blockers.append("underwriting_ready_evidence_contract_mismatch")
     if (
@@ -853,6 +858,8 @@ def _underwriting_ready_contract_is_valid(
     thesis: InvestmentThesisSnapshot,
     underwriting: UnderwritingReadinessSnapshot,
     payoff: PayoffSurfaceSnapshot | None,
+    *,
+    artifact_root: str | Path | None = None,
 ) -> bool:
     if underwriting.readiness not in _READY_UNDERWRITING_STATES:
         return True
@@ -866,10 +873,19 @@ def _underwriting_ready_contract_is_valid(
         if thesis.status.value not in active.fast_lane_allowed_thesis_statuses:
             return False
         required = tuple(active.fast_lane_required_elements)
-        return bool(
+        base_contract = bool(
             tuple(underwriting.required_elements_satisfied) == required
             and not underwriting.required_elements_missing
             and not underwriting.blockers
+        )
+        if not base_contract:
+            return False
+        if artifact_root is None:
+            return True
+        return _fast_lane_persisted_evidence_is_valid(
+            Path(artifact_root),
+            thesis=thesis,
+            underwriting=underwriting,
         )
     if underwriting.lane is not UnderwritingLane.DEEP:
         return False
@@ -905,6 +921,193 @@ def _underwriting_ready_contract_is_valid(
         return False
     return True
 
+
+
+def _fast_lane_persisted_evidence_is_valid(
+    root: Path,
+    *,
+    thesis: InvestmentThesisSnapshot,
+    underwriting: UnderwritingReadinessSnapshot,
+) -> bool:
+    """Substantiate the canonical Fast-Lane evidence contract from persisted artifacts."""
+
+    context = _load_bound_evidence_payload(
+        root,
+        repository_name="underwriting_context",
+        snapshot_id=underwriting.context_snapshot_id,
+        payload_name="underwriting_context.json",
+    )
+    if context is None:
+        return False
+    if (
+        context.get("thesis_snapshot_id") != thesis.snapshot_id
+        or context.get("security_id") != thesis.security_id
+        or context.get("evaluation_date") != underwriting.evaluation_date.isoformat()
+        or context.get("guardrail_evidence_id") != underwriting.guardrail_evidence_id
+    ):
+        return False
+    try:
+        if _payload_datetime(context, "captured_at") > underwriting.captured_at:
+            return False
+    except (TypeError, ValueError):
+        return False
+    transmission_refs = context.get("transmission_evidence_refs")
+    transmission_bound = bool(
+        isinstance(transmission_refs, list)
+        and transmission_refs
+        and all(isinstance(item, str) and item.strip() for item in transmission_refs)
+    )
+    if not transmission_bound and underwriting.causal_graph_snapshot_id is not None:
+        graph = _load_bound_evidence_payload(
+            root,
+            repository_name="semiconductor_causal_graph",
+            snapshot_id=underwriting.causal_graph_snapshot_id,
+            payload_name="causal_graph.json",
+        )
+        if graph is not None:
+            try:
+                transmission_bound = bool(
+                    graph.get("security_id") in {None, thesis.security_id}
+                    and graph.get("evaluation_date")
+                    == underwriting.evaluation_date.isoformat()
+                    and graph.get("guardrail_evidence_id")
+                    == underwriting.guardrail_evidence_id
+                    and _payload_datetime(graph, "captured_at")
+                    <= underwriting.captured_at
+                )
+            except (TypeError, ValueError):
+                transmission_bound = False
+    if not transmission_bound:
+        return False
+
+    expectation_bound = False
+    if underwriting.expectation_state_snapshot_id is not None:
+        expectation = _load_bound_evidence_payload(
+            root,
+            repository_name="expectation_state",
+            snapshot_id=underwriting.expectation_state_snapshot_id,
+            payload_name="expectations.json",
+        )
+        if expectation is not None:
+            observations = expectation.get("observations")
+            try:
+                expectation_bound = bool(
+                    expectation.get("evaluation_date")
+                    == underwriting.evaluation_date.isoformat()
+                    and _payload_datetime(expectation, "captured_at")
+                    <= underwriting.captured_at
+                    and isinstance(observations, list)
+                    and any(
+                        isinstance(item, dict)
+                        and item.get("security_id") == thesis.security_id
+                        for item in observations
+                    )
+                )
+            except (TypeError, ValueError):
+                expectation_bound = False
+    if not expectation_bound and underwriting.price_implied_requirement_snapshot_id is not None:
+        price_implied = _load_bound_evidence_payload(
+            root,
+            repository_name="price_implied_requirement",
+            snapshot_id=underwriting.price_implied_requirement_snapshot_id,
+            payload_name="price_implied_requirement.json",
+        )
+        if price_implied is not None:
+            observations = price_implied.get("observations")
+            try:
+                expectation_bound = bool(
+                    price_implied.get("security_id") == thesis.security_id
+                    and price_implied.get("evaluation_date")
+                    == underwriting.evaluation_date.isoformat()
+                    and price_implied.get("guardrail_evidence_id")
+                    == underwriting.guardrail_evidence_id
+                    and _payload_datetime(price_implied, "captured_at")
+                    <= underwriting.captured_at
+                    and isinstance(observations, list)
+                    and any(
+                        isinstance(item, dict)
+                        and item.get("security_id") == thesis.security_id
+                        and item.get("status") == "available"
+                        for item in observations
+                    )
+                )
+            except (TypeError, ValueError):
+                expectation_bound = False
+    if not expectation_bound:
+        return False
+
+    if underwriting.epistemic_defense_snapshot_id is None:
+        return False
+    epistemic = _load_bound_evidence_payload(
+        root,
+        repository_name="epistemic_package",
+        snapshot_id=underwriting.epistemic_defense_snapshot_id,
+        payload_name="epistemic_package.json",
+    )
+    if epistemic is None:
+        return False
+    try:
+        return bool(
+            epistemic.get("thesis_snapshot_id") == thesis.snapshot_id
+            and epistemic.get("guardrail_evidence_id")
+            == underwriting.guardrail_evidence_id
+            and epistemic.get("required_contracts_present") is True
+            and _payload_datetime(epistemic, "captured_at")
+            <= underwriting.captured_at
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _load_bound_evidence_payload(
+    root: Path,
+    *,
+    repository_name: str,
+    snapshot_id: str,
+    payload_name: str,
+) -> dict[str, object] | None:
+    """Load one immutable content-addressed evidence payload from a contained repository."""
+
+    try:
+        resolved_root = require_trusted_artifact_root(root)
+        repository = root / repository_name
+        _require_safe_repository(
+            repository,
+            resolved_root=resolved_root,
+            label=repository_name,
+        )
+        if not repository.exists():
+            return None
+        matches = tuple(
+            path
+            for path in repository.iterdir()
+            if path.is_dir()
+            and not path.name.startswith(".")
+            and path.name.endswith(f"__{snapshot_id[:12]}")
+        )
+        if len(matches) != 1:
+            return None
+        directory = matches[0]
+        _require_safe_directory_slot(directory, repository, repository_name)
+        payload_path = directory / payload_name
+        manifest_path = directory / "manifest.json"
+        _require_safe_file_slot(payload_path, directory, f"{repository_name} payload")
+        _require_safe_file_slot(manifest_path, directory, f"{repository_name} manifest")
+        payload = _load_json_object(payload_path)
+        manifest = _load_json_object(manifest_path)
+    except (OSError, ResearchPackageIntegrityError):
+        return None
+    if _sha(payload) != snapshot_id:
+        return None
+    if manifest.get("snapshot_id") != snapshot_id:
+        return None
+    files = manifest.get("files")
+    if not isinstance(files, list) or payload_name not in files:
+        return None
+    captured_at = payload.get("captured_at")
+    if manifest.get("captured_at") != captured_at:
+        return None
+    return payload
 
 def _gap_observations_match_view(
     view: DecisionViewSnapshot,

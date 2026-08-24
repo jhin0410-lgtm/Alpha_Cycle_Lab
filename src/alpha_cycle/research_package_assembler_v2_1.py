@@ -483,7 +483,14 @@ def _assemble_security_package(
             security_id,
         )
 
-    for code in package_integrity_blocker_codes(thesis, underwriting, payoff, view, gap):
+    for code in package_integrity_blocker_codes(
+        thesis,
+        underwriting,
+        payoff,
+        view,
+        gap,
+        artifact_root=artifact_root,
+    ):
         _block(blockers, "research_package", code, security_id)
 
     if underwriting is not None and payoff is not None:

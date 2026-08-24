@@ -307,3 +307,35 @@ def test_ambiguous_component_selection_becomes_structured_blocker(
         ("underwriter", "underwriting_snapshot_selection_ambiguous")
     ]
 
+
+
+
+def test_fast_ready_requires_persisted_evidence_bindings(tmp_path: Path) -> None:
+    active = integrity.load_decision_system_v21_guardrails()
+    thesis = SimpleNamespace(
+        snapshot_id=A,
+        security_id="000660",
+        status=ThesisStatus.UNDERWRITING,
+    )
+    underwriting = SimpleNamespace(
+        readiness=UnderwritingReadiness.FAST_LANE_READY_FOR_HUMAN_REVIEW,
+        lane=UnderwritingLane.FAST,
+        evaluation_date=EVAL,
+        captured_at=NOW,
+        context_snapshot_id=B,
+        causal_graph_snapshot_id=None,
+        expectation_state_snapshot_id=None,
+        price_implied_requirement_snapshot_id=None,
+        epistemic_defense_snapshot_id=None,
+        guardrail_evidence_id=active.evidence_id,
+        required_elements_satisfied=tuple(active.fast_lane_required_elements),
+        required_elements_missing=(),
+        blockers=(),
+    )
+
+    assert not integrity._underwriting_ready_contract_is_valid(  # type: ignore[attr-defined]
+        thesis,  # type: ignore[arg-type]
+        underwriting,  # type: ignore[arg-type]
+        None,
+        artifact_root=tmp_path,
+    )
