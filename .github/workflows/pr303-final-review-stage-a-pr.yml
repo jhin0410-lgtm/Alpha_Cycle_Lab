@@ -45,15 +45,28 @@ jobs:
           exec(compile(code, '<pr303-stage-a>', 'exec'), {})
           BOOT
 
-      - name: Normalize generated Stage A source
+      - name: Normalize generated Stage A raw blocks
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('src/alpha_cycle/research_package_assembler_v2_1.py')
-          text = path.read_text(encoding='utf-8')
+          def normalize_generated_raw_blocks(path: Path) -> None:
+              text = path.read_text(encoding='utf-8')
+              physical_lines = text.splitlines(keepends=True)
+              normalized = ''.join(
+                  line.replace('\\n', '\n') if line.count('\\n') >= 3 else line
+                  for line in physical_lines
+              )
+              path.write_text(normalized, encoding='utf-8')
+
+          source = Path('src/alpha_cycle/research_package_assembler_v2_1.py')
+          regression = Path('tests/unit/test_research_package_final_review_round3_v2_1.py')
+          normalize_generated_raw_blocks(source)
+          normalize_generated_raw_blocks(regression)
+
+          text = source.read_text(encoding='utf-8')
           old = 'def _publication_namespace_is_current(publication_root: _PinnedPublicationRoot) -> bool:'
           new = (
               'def _publication_namespace_is_current(\n'
@@ -62,21 +75,7 @@ jobs:
           )
           if old not in text:
               raise SystemExit('expected Stage A signature not found')
-          path.write_text(text.replace(old, new), encoding='utf-8')
-          PY
-
-      - name: Report exact generated publication fragments
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          text = Path('src/alpha_cycle/research_package_assembler_v2_1.py').read_text(encoding='utf-8')
-          for needle in ('candidate_repository.io_path', 'set_repository.io_path', 'round_repository.io_path'):
-              pos = text.find(needle)
-              print('NEEDLE', needle, 'POS', pos)
-              if pos >= 0:
-                  print(repr(text[max(0, pos-180):pos+220]))
+          source.write_text(text.replace(old, new), encoding='utf-8')
           PY
 
       - name: Apply descriptor-relative publication patch
