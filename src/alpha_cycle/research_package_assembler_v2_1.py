@@ -810,11 +810,11 @@ def _publish_orchestrated_artifacts(
         return round_path, run_path, ledger_path
     except BaseException as exc:
         cleanup_errors: list[BaseException] = []
-        for publication in (owned_run, owned_round):
-            if publication is None:
+        for owned_file in (owned_run, owned_round):
+            if owned_file is None:
                 continue
             try:
-                _unlink_owned_file_if_current(publication)
+                _unlink_owned_file_if_current(owned_file)
             except BaseException as cleanup_exc:
                 cleanup_errors.append(cleanup_exc)
         for publication in reversed(opportunity_publications):
@@ -991,7 +991,7 @@ def _replace_pointer_if_version_matches(
         if pointer.read_bytes() != expected_bytes:
             return False
         # Recheck immediately before publication so a replaced inode/version is never knowingly
-        # overwritten.  Cooperative writers use this same CAS boundary; a foreign replacement
+        # overwritten. Cooperative writers use this same CAS boundary; a foreign replacement
         # observed at either check wins and is preserved.
         if _capture_file_identity(pointer) != expected_identity:
             return False
