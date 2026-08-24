@@ -9,6 +9,10 @@ from runpy import run_path
 import pytest
 
 import alpha_cycle.research_package_assembler_v2_1 as assembler
+from alpha_cycle.intelligence.opportunity_set_v2_1 import (
+    OpportunityCandidateSnapshot,
+    OpportunityResearchClass,
+)
 from alpha_cycle.research_package_source_revalidation_v2_1 import (
     epistemic_package_sources_are_canonical,
     forward_valuation_sources_are_canonical,
@@ -21,6 +25,9 @@ _FIXTURE = run_path(
 _components = _FIXTURE["_components"]
 _persist_components = _FIXTURE["_persist_components"]
 _prepare_ready_request = _FIXTURE["_prepare_ready_request"]
+NOW = _FIXTURE["NOW"]
+EVAL = _FIXTURE["EVAL"]
+GUARDRAIL = _FIXTURE["GUARDRAIL"]
 
 
 def _materialized_sources(tmp_path: Path):
@@ -119,3 +126,52 @@ def test_owned_file_rollback_never_deletes_concurrent_replacement(
     assert assembler._unlink_owned_file_if_current(publication) is True
     assert path.read_bytes() == foreign
     assert hashlib.sha256(path.read_bytes()).hexdigest() != publication.sha256
+
+
+def test_absent_pointer_link_loser_never_claims_foreign_equal_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidate = OpportunityCandidateSnapshot(
+        captured_at=NOW,
+        evaluation_date=EVAL,
+        security_id="000660",
+        thesis_snapshot_id="a" * 64,
+        underwriting_readiness_snapshot_id="b" * 64,
+        payoff_surface_snapshot_id="c" * 64,
+        horizon_trading_days=120,
+        research_class=OpportunityResearchClass.DEEP_READY,
+        bear_return_lower=-0.30,
+        base_return_lower=0.10,
+        base_return_upper=0.30,
+        bull_return_upper=0.60,
+        nearest_catalyst_id="fixture-catalyst",
+        nearest_catalyst_days=30,
+        nearest_catalyst_evidence_refs=("fixture-evidence",),
+        comparison_blockers=(),
+        flags=(),
+        guardrail_evidence_id=GUARDRAIL,
+    )
+    real_link = os.link
+    raced = False
+
+    def racing_link(src, dst, *args, **kwargs):
+        nonlocal raced
+        destination = Path(dst)
+        if destination.name == "latest_opportunity_candidate.json" and not raced:
+            raced = True
+            destination.write_bytes(Path(src).read_bytes())
+            raise FileExistsError(destination)
+        return real_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "link", racing_link)
+    publication = assembler._persist_owned_opportunity_snapshot(
+        candidate, output_root=tmp_path
+    )
+    assert publication.pointer_inode == -1
+    foreign_bytes = publication.pointer.read_bytes()
+    cleanup_errors: list[BaseException] = []
+    assembler._rollback_owned_opportunity_publication(publication, cleanup_errors)
+    assert cleanup_errors == []
+    assert publication.pointer.exists()
+    assert publication.pointer.read_bytes() == foreign_bytes
+    assert publication.directory.exists()

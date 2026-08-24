@@ -915,15 +915,18 @@ def _persist_owned_opportunity_snapshot(
         sort_keys=True,
     ).encode("utf-8")
     pointer_temp = _write_owned_pointer_temp(root, pointer.name, pointer_after)
+    pointer_published_by_this_call = False
     try:
         if pointer_before is None:
             try:
                 os.link(pointer_temp, pointer)
+                pointer_published_by_this_call = True
             except FileExistsError:
-                # A concurrent publisher won the absent-pointer race; do not overwrite it.
-                pass
+                # A concurrent publisher won the absent-pointer race; do not overwrite it and
+                # never infer ownership merely because its deterministic bytes match ours.
+                pointer_published_by_this_call = False
         elif pointer_before_identity is not None:
-            _replace_pointer_if_version_matches(
+            pointer_published_by_this_call = _replace_pointer_if_version_matches(
                 pointer_temp,
                 pointer,
                 expected_bytes=pointer_before,
@@ -931,7 +934,12 @@ def _persist_owned_opportunity_snapshot(
             )
     finally:
         pointer_temp.unlink(missing_ok=True)
-    if pointer.exists() and not pointer.is_symlink() and pointer.read_bytes() == pointer_after:
+    if (
+        pointer_published_by_this_call
+        and pointer.exists()
+        and not pointer.is_symlink()
+        and pointer.read_bytes() == pointer_after
+    ):
         stat = pointer.stat()
         inode = stat.st_ino
         mtime_ns = stat.st_mtime_ns
