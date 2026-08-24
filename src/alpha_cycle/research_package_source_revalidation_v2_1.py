@@ -8,7 +8,7 @@ canonical builder so forged-but-self-consistent derived envelopes fail closed.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -36,11 +36,13 @@ from alpha_cycle.intelligence.epistemic_defense import (
 )
 from alpha_cycle.intelligence.expectation_state import ExpectationStateSnapshot
 from alpha_cycle.intelligence.forward_valuation import (
+    ForwardValuationMetric,
     ForwardValuationStateSnapshot,
     build_forward_valuation_state,
 )
 from alpha_cycle.intelligence.price_implied_requirement import (
     PRICE_IMPLIED_SCHEMA_VERSION,
+    PriceImpliedRequirementSnapshot,
     ReferenceFrameKind,
     ValuationReferenceFrameSnapshot,
     ValuationReferencePoint,
@@ -90,14 +92,9 @@ def forward_valuation_sources_are_canonical(
 def price_implied_sources_are_canonical(
     root: str | Path,
     *,
-    snapshot: object,
+    snapshot: PriceImpliedRequirementSnapshot,
 ) -> bool:
     """Rebuild a price-implied requirement from valuation and reference-frame sources."""
-
-    from alpha_cycle.intelligence.price_implied_requirement import PriceImpliedRequirementSnapshot
-
-    if not isinstance(snapshot, PriceImpliedRequirementSnapshot):
-        return False
     artifact_root = Path(root)
     valuation = load_canonical_valuation_evidence(
         artifact_root,
@@ -422,7 +419,14 @@ def load_canonical_valuation_evidence(
             raw_valuation=raw_valuation,
             warnings=_text_tuple(manifest, "warnings"),
         )
-    except (KeyError, OSError, TypeError, ValueError, pd.errors.ParserError):
+    except (
+        KeyError,
+        OSError,
+        TypeError,
+        ValueError,
+        pd.errors.EmptyDataError,
+        pd.errors.ParserError,
+    ):
         return None
     expected_manifest = {
         "schema_version": VALUATION_SCHEMA_VERSION,
@@ -447,13 +451,7 @@ def load_canonical_valuation_evidence(
     }
     if manifest != expected_manifest or snapshot.snapshot_id != snapshot_id:
         return None
-    expected_name = (
-        snapshot.captured_at.astimezone().astimezone(datetime.now().astimezone().tzinfo)
-    )
-    del expected_name
-    timestamp = snapshot.captured_at.astimezone(__import__("datetime").timezone.utc).strftime(
-        "%Y%m%dT%H%M%S%fZ"
-    )
+    timestamp = snapshot.captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     if directory.name != f"{timestamp}__{snapshot.snapshot_id[:12]}":
         return None
     return snapshot
@@ -615,9 +613,7 @@ def _require_regular_contained_file(path: Path, root: Path) -> None:
         )
 
 
-def _forward_metric(value: str):
-    from alpha_cycle.intelligence.forward_valuation import ForwardValuationMetric
-
+def _forward_metric(value: str) -> ForwardValuationMetric:
     return ForwardValuationMetric(value)
 
 
@@ -678,7 +674,7 @@ def _object_list(payload: dict[str, object], field: str) -> tuple[dict[str, obje
     if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
         raise ValueError(f"{field} must be an array of objects")
     return tuple(
-        {str(key): item for key, item in cast(dict[object, object], raw).items()}
+        {str(key): item for key, item in raw.items()}
         for raw in cast(list[dict[object, object]], value)
     )
 

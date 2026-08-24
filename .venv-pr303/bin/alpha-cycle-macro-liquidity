@@ -1,0 +1,6 @@
+#!/home/runner/work/Alpha_Cycle_Lab/Alpha_Cycle_Lab/.venv-pr303/bin/python
+import sys
+from alpha_cycle.macro_liquidity_cli import main
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(main())

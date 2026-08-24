@@ -84,6 +84,12 @@ def underwriting_bound_evidence_is_valid(
 ) -> bool:
     """Revalidate every persisted evidence binding used by a ready underwriting snapshot."""
 
+    from alpha_cycle.research_package_source_revalidation_v2_1 import (
+        epistemic_package_sources_are_canonical,
+        forward_valuation_sources_are_canonical,
+        price_implied_sources_are_canonical,
+    )
+
     artifact_root = Path(root)
     active = load_decision_system_v21_guardrails()
     if underwriting.guardrail_evidence_id != active.evidence_id:
@@ -147,6 +153,12 @@ def underwriting_bound_evidence_is_valid(
             or forward_valuation.captured_at > underwriting.captured_at
         ):
             return False
+        if not forward_valuation_sources_are_canonical(
+            artifact_root,
+            snapshot=forward_valuation,
+            expectations=expectations,
+        ):
+            return False
 
     price_implied = _load_optional(
         underwriting.price_implied_requirement_snapshot_id,
@@ -161,6 +173,11 @@ def underwriting_bound_evidence_is_valid(
         or price_implied.captured_at > underwriting.captured_at
     ):
         return False
+    if price_implied is not None and not price_implied_sources_are_canonical(
+        artifact_root,
+        snapshot=price_implied,
+    ):
+        return False
 
     epistemic = _load_optional(
         underwriting.epistemic_defense_snapshot_id,
@@ -173,6 +190,12 @@ def underwriting_bound_evidence_is_valid(
         or epistemic.guardrail_evidence_id != underwriting.guardrail_evidence_id
         or epistemic.captured_at > underwriting.captured_at
         or not epistemic.required_contracts_present
+    ):
+        return False
+    if epistemic is not None and not epistemic_package_sources_are_canonical(
+        artifact_root,
+        thesis=thesis,
+        snapshot=epistemic,
     ):
         return False
 

@@ -981,24 +981,92 @@ def _replace_pointer_if_version_matches(
     expected_bytes: bytes,
     expected_identity: tuple[int, int, int],
 ) -> bool:
-    """Replace a mutable pointer only when the version read by this writer is still current."""
+    """Conditionally publish without a check-then-rename race.
+
+    The current canonical name is first atomically claimed into an unpredictable
+    same-directory quarantine.  Verification then occurs on the stable claimed
+    pathname.  Publication uses a no-replace hard link, so a direct/non-cooperating
+    publisher that recreates the canonical name while we validate always wins.
+    """
 
     if pointer.is_symlink() or not pointer.exists():
         return False
+    quarantine = _new_publication_quarantine(pointer)
     try:
-        if _capture_file_identity(pointer) != expected_identity:
+        try:
+            os.replace(pointer, quarantine)
+        except FileNotFoundError:
             return False
-        if pointer.read_bytes() != expected_bytes:
+        if quarantine.is_symlink() or not quarantine.is_file():
             return False
-        # Recheck immediately before publication so a replaced inode/version is never knowingly
-        # overwritten. Cooperative writers use this same CAS boundary; a foreign replacement
-        # observed at either check wins and is preserved.
-        if _capture_file_identity(pointer) != expected_identity:
+        matches = bool(
+            _capture_file_identity(quarantine) == expected_identity
+            and quarantine.read_bytes() == expected_bytes
+        )
+        if not matches:
+            _restore_quarantined_file_if_absent(quarantine, pointer)
             return False
-        replacement.replace(pointer)
+        try:
+            os.link(replacement, pointer)
+        except FileExistsError:
+            # A concurrent publisher recreated the canonical name after our claim.
+            return False
         return True
-    except FileNotFoundError:
+    finally:
+        quarantine.unlink(missing_ok=True)
+
+
+def _new_publication_quarantine(path: Path) -> Path:
+    fd, name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".quarantine",
+        dir=path.parent,
+    )
+    os.close(fd)
+    return Path(name)
+
+
+def _restore_quarantined_file_if_absent(quarantine: Path, destination: Path) -> bool:
+    if quarantine.is_symlink() or not quarantine.is_file():
         return False
+    try:
+        os.link(quarantine, destination)
+        return True
+    except FileExistsError:
+        # A concurrent publisher owns the canonical name now.
+        return False
+
+
+def _unlink_pointer_if_version_matches(
+    pointer: Path,
+    *,
+    expected_bytes: bytes,
+    expected_identity: tuple[int, int, int],
+) -> bool:
+    """Delete only the exact pointer version atomically claimed by this rollback."""
+
+    if pointer.is_symlink() or not pointer.exists():
+        return False
+    quarantine = _new_publication_quarantine(pointer)
+    try:
+        try:
+            os.replace(pointer, quarantine)
+        except FileNotFoundError:
+            return False
+        if quarantine.is_symlink() or not quarantine.is_file():
+            return False
+        matches = bool(
+            _capture_file_identity(quarantine) == expected_identity
+            and quarantine.read_bytes() == expected_bytes
+        )
+        if not matches:
+            _restore_quarantined_file_if_absent(quarantine, pointer)
+            return False
+        # The owned version is now isolated at the quarantine pathname.  If a
+        # concurrent publisher has recreated `pointer`, it is left untouched.
+        return True
+    finally:
+        quarantine.unlink(missing_ok=True)
 
 
 def _pointer_version_is_current(publication: _OwnedOpportunityPublication) -> bool:
@@ -1022,10 +1090,13 @@ def _rollback_owned_opportunity_publication(
     publication: _OwnedOpportunityPublication,
     cleanup_errors: list[BaseException],
 ) -> None:
+    expected_identity = (
+        publication.pointer_inode,
+        publication.pointer_mtime_ns,
+        publication.pointer_size,
+    )
     if publication.pointer_before is not None:
-        # Restore the previous pointer only while our own published version is still current.
-        # A concurrent replacement wins; we never overwrite foreign state during rollback.
-        if not _pointer_version_is_current(publication):
+        if publication.pointer_inode < 0:
             return
         previous_temp = _write_owned_pointer_temp(
             publication.root,
@@ -1033,12 +1104,11 @@ def _rollback_owned_opportunity_publication(
             publication.pointer_before,
         )
         try:
-            current_identity = _capture_file_identity(publication.pointer)
             _replace_pointer_if_version_matches(
                 previous_temp,
                 publication.pointer,
                 expected_bytes=publication.pointer_after,
-                expected_identity=current_identity,
+                expected_identity=expected_identity,
             )
         except BaseException as exc:
             cleanup_errors.append(exc)
@@ -1047,12 +1117,15 @@ def _rollback_owned_opportunity_publication(
         # Preserve immutable directories when replacing an existing pointer. Another reader or
         # publisher may already have retained a reference to the content-addressed snapshot.
         return
-    # If another publisher has changed/replaced the pointer, ownership is no longer exclusive;
-    # preserve both the pointer and immutable directory rather than deleting foreign state.
-    if not _pointer_version_is_current(publication):
+    if publication.pointer_inode < 0:
         return
     try:
-        publication.pointer.unlink(missing_ok=True)
+        if not _unlink_pointer_if_version_matches(
+            publication.pointer,
+            expected_bytes=publication.pointer_after,
+            expected_identity=expected_identity,
+        ):
+            return
     except BaseException as exc:
         cleanup_errors.append(exc)
         return
@@ -1113,10 +1186,39 @@ def _owned_file_is_current(publication: _OwnedFilePublication) -> bool:
 
 
 def _unlink_owned_file_if_current(publication: _OwnedFilePublication) -> bool:
-    if not _owned_file_is_current(publication):
+    """Remove only the exact owned inode/version after atomically claiming its name."""
+
+    path = publication.path
+    if path.is_symlink() or not path.exists():
         return False
-    publication.path.unlink(missing_ok=True)
-    return True
+    quarantine = _new_publication_quarantine(path)
+    try:
+        try:
+            os.replace(path, quarantine)
+        except FileNotFoundError:
+            return False
+        if quarantine.is_symlink() or not quarantine.is_file():
+            return False
+        try:
+            inode, mtime_ns, size = _capture_file_identity(quarantine)
+            digest = hashlib.sha256(quarantine.read_bytes()).hexdigest()
+        except OSError:
+            _restore_quarantined_file_if_absent(quarantine, path)
+            return False
+        matches = bool(
+            inode == publication.inode
+            and mtime_ns == publication.mtime_ns
+            and size == publication.size
+            and digest == publication.sha256
+        )
+        if not matches:
+            _restore_quarantined_file_if_absent(quarantine, path)
+            return False
+        # The owned version is isolated. A foreign replacement created after the
+        # atomic claim remains at the canonical pathname and is never unlinked.
+        return True
+    finally:
+        quarantine.unlink(missing_ok=True)
 
 
 def _require_safe_run_ledger_publication(

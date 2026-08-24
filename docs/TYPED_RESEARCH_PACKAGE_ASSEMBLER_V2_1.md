@@ -57,7 +57,7 @@ Per security, selection requires the request-compatible:
 - Decision View security/evaluation-date/guardrail;
 - Expectation Gap bound to the selected Decision View, security, evaluation date, guardrail and target variable/date/unit.
 
-Persisted builder outputs are additionally checked for canonical invariants that their dataclasses alone do not enforce:
+Persisted builder outputs are additionally checked for canonical invariants that their dataclasses alone do not enforce. Derived evidence is accepted only when its persisted source contracts can also be reconstructed and the owning canonical builder reproduces the exact derived snapshot:
 
 - terminal theses cannot enter a ready package;
 - thesis/payoff/underwriting and Decision View/Expectation Gap capture ordering is causal;
@@ -82,7 +82,7 @@ Generated opportunity candidates and the opportunity set are persisted and valid
 
 All opportunity/round/run/ledger output repositories and pointer paths are checked for symlink and containment escapes before writes. Pre-existing deterministic round/run/ledger final paths are rejected before the legacy writers are invoked, preventing destructive collision cleanup.
 
-Opportunity rollback is ownership-aware and monotonic: it removes only immutable snapshot directories that this publication call actually created, and it never restores an older pointer over a concurrently changed pointer version. If ownership is ambiguous after a concurrent publisher wins a race, valid immutable state is preserved instead of deleted. Publication remains ledger-last.
+Opportunity rollback is ownership-aware and monotonic. Mutable pointer replacement and rollback deletion atomically claim the current pathname into an unpredictable same-directory quarantine before validating its version; publication/restoration uses no-replace links, so a direct concurrent publisher that recreates the canonical name always wins. Round/run rollback uses the same claim-before-delete rule and therefore cannot unlink a foreign replacement after a separate ownership check. Immutable snapshot directories are removed only when this publication call created them and ownership remains exclusive. Publication remains ledger-last.
 
 ## Safety boundary
 

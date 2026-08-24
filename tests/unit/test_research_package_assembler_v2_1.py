@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from alpha_cycle.intelligence.decision_guardrails_v2_1 import (
@@ -29,7 +30,14 @@ from alpha_cycle.intelligence.decision_view_v2_1 import (
     persist_decision_view_selection_rule,
 )
 from alpha_cycle.intelligence.epistemic_defense import (
-    EpistemicDefensePackageSnapshot,
+    CounterExplanation,
+    CounterThesisStatus,
+    MaterialityLevel,
+    build_blind_spot_snapshot,
+    build_counter_thesis_snapshot,
+    build_epistemic_defense_package,
+    persist_blind_spot_discovery,
+    persist_counter_thesis,
     persist_epistemic_defense_package,
 )
 from alpha_cycle.intelligence.expectation_gap_contract import ExpectationSemantics
@@ -50,9 +58,8 @@ from alpha_cycle.intelligence.forecast_ledger import (
 )
 from alpha_cycle.intelligence.forward_valuation import (
     ForwardValuationMetric,
-    ForwardValuationObservation,
     ForwardValuationStateSnapshot,
-    ForwardValuationStatus,
+    build_forward_valuation_state,
     persist_forward_valuation_state,
 )
 from alpha_cycle.intelligence.payoff_surface import (
@@ -62,11 +69,13 @@ from alpha_cycle.intelligence.payoff_surface import (
     persist_payoff_surface,
 )
 from alpha_cycle.intelligence.price_implied_requirement import (
-    PriceImpliedRequirementObservation,
     PriceImpliedRequirementSnapshot,
-    PriceImpliedRequirementStatus,
     ReferenceFrameKind,
+    ValuationReferencePoint,
+    build_price_implied_requirement,
+    build_valuation_reference_frame,
     persist_price_implied_requirement,
+    persist_valuation_reference_frame,
 )
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
 from alpha_cycle.intelligence.research_run_ledger_v2_1 import ResearchRunKind
@@ -86,6 +95,10 @@ from alpha_cycle.intelligence.underwriter_v2_1 import (
     build_underwriting_readiness,
     persist_underwriting_context,
     persist_underwriting_readiness,
+)
+from alpha_cycle.intelligence.valuation import (
+    ValuationEvidenceSnapshot,
+    write_valuation_evidence_snapshot,
 )
 from alpha_cycle.investment_thesis_repository_v2_1 import persist_investment_thesis
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
@@ -291,71 +304,135 @@ def _expectations(thesis: InvestmentThesisSnapshot, offset: int) -> ExpectationS
     )
 
 
-def _forward_valuation(
+def _valuation_evidence(
     thesis: InvestmentThesisSnapshot,
     expectations: ExpectationStateSnapshot,
     offset: int,
-) -> ForwardValuationStateSnapshot:
-    expectation = expectations.observations[0]
-    expectation_krw = float(expectation.value) * 1_000_000.0
-    market_cap = expectation_krw * 10.0
-    observation = ForwardValuationObservation(
-        security_id=thesis.security_id,
-        expectation_provider_id=expectation.provider_id,
-        expectation_kind=expectation.expectation_kind,
-        expectation_metric=expectation.metric,
-        target_period=expectation.target_period,
-        target_period_end=expectation.target_period_end,
-        expectation_observed_at=expectation.observed_at,
-        expectation_source_evidence_id=expectation.source_evidence_id,
-        expectation_value=float(expectation.value),
-        expectation_unit=expectation.unit,
-        expectation_value_krw=expectation_krw,
-        market_cap_krw=market_cap,
-        valuation_metric=ForwardValuationMetric.FORWARD_PE,
-        multiple=10.0,
-        status=ForwardValuationStatus.AVAILABLE,
+) -> ValuationEvidenceSnapshot:
+    market_cap = float(expectations.observations[0].value) * 1_000_000.0 * 10.0
+    return ValuationEvidenceSnapshot(
+        captured_at=NOW + timedelta(seconds=19 + offset),
+        evaluation_date=EVAL,
+        research_snapshot_id=A,
+        market_snapshot_id=C,
+        history_years=1,
+        shares=pd.DataFrame([{"ticker": thesis.security_id, "listed_stock_cnt": 1.0}]),
+        security_values=pd.DataFrame([{"ticker": thesis.security_id, "market_value": market_cap}]),
+        financial_history=pd.DataFrame([{"ticker": thesis.security_id, "revenue": 1.0}]),
+        valuation_metrics=pd.DataFrame(
+            [
+                {
+                    "ticker": thesis.security_id,
+                    "market_cap_complete": True,
+                    "market_cap": market_cap,
+                    "valuation_score": 3.0,
+                }
+            ]
+        ),
+        raw_valuation={"fixture_security_id": thesis.security_id},
+        warnings=(),
     )
-    return ForwardValuationStateSnapshot(
+
+
+def _forward_valuation(
+    valuation: ValuationEvidenceSnapshot,
+    expectations: ExpectationStateSnapshot,
+    offset: int,
+) -> ForwardValuationStateSnapshot:
+    return build_forward_valuation_state(
+        valuation,
+        expectations,
+        captured_at=NOW + timedelta(seconds=23 + offset),
+    )
+
+
+def _reference_frame(
+    thesis: InvestmentThesisSnapshot,
+    expectations: ExpectationStateSnapshot,
+    offset: int,
+):
+    expectation = expectations.observations[0]
+    return build_valuation_reference_frame(
         captured_at=NOW + timedelta(seconds=23 + offset),
         evaluation_date=EVAL,
-        valuation_evidence_snapshot_id=B,
-        expectation_state_snapshot_id=expectations.snapshot_id,
-        guardrail_evidence_id=GUARDRAIL,
-        observations=(observation,),
+        security_id=thesis.security_id,
+        reference_points=(
+            ValuationReferencePoint(
+                reference_id="fixture-price-reference",
+                metric=ForwardValuationMetric.FORWARD_PE,
+                target_period=expectation.target_period,
+                target_period_end=expectation.target_period_end,
+                reference_multiple=10.0,
+                reference_kind=ReferenceFrameKind.EXPLICIT_SCENARIO_ASSUMPTION,
+                observed_at=NOW - timedelta(hours=1),
+                rationale="Deterministic package-assembler fixture reference.",
+            ),
+        ),
     )
 
 
 def _price_implied(
-    thesis: InvestmentThesisSnapshot,
-    expectations: ExpectationStateSnapshot,
+    valuation: ValuationEvidenceSnapshot,
+    reference_frame,
     offset: int,
 ) -> PriceImpliedRequirementSnapshot:
-    expectation = expectations.observations[0]
-    implied_value = float(expectation.value) * 1_000_000.0
-    observation = PriceImpliedRequirementObservation(
-        security_id=thesis.security_id,
-        reference_id="fixture-price-reference",
-        reference_kind=ReferenceFrameKind.EXPLICIT_SCENARIO_ASSUMPTION,
-        valuation_metric=ForwardValuationMetric.FORWARD_PE,
-        implied_metric=ExpectationMetric.NET_INCOME,
-        target_period=expectation.target_period,
-        target_period_end=expectation.target_period_end,
-        reference_multiple=10.0,
-        market_cap_krw=implied_value * 10.0,
-        implied_value_krw=implied_value,
-        status=PriceImpliedRequirementStatus.AVAILABLE,
-    )
-    return PriceImpliedRequirementSnapshot(
+    return build_price_implied_requirement(
+        valuation,
+        reference_frame,
         captured_at=NOW + timedelta(seconds=24 + offset),
-        evaluation_date=EVAL,
-        security_id=thesis.security_id,
-        valuation_evidence_snapshot_id=B,
-        reference_frame_snapshot_id=C,
-        guardrail_evidence_id=GUARDRAIL,
-        observations=(observation,),
     )
 
+
+def _epistemic_sources(thesis: InvestmentThesisSnapshot, offset: int):
+    counter = build_counter_thesis_snapshot(
+        counter_thesis_id=f"fixture-counter-{thesis.security_id}",
+        snapshot_version=1,
+        parent_snapshot_id=None,
+        thesis_snapshot_id=thesis.snapshot_id,
+        captured_at=NOW + timedelta(seconds=23 + offset),
+        created_without_thesis_support_search=True,
+        independence_method="deterministic independent fixture challenge",
+        search_scope=("fixture-counter-scope",),
+        strongest_alternative_explanation_id="alternative-demand",
+        alternative_explanations=(
+            CounterExplanation(
+                explanation_id="alternative-demand",
+                statement="Observed strength could reflect a temporary demand pull-forward.",
+                mechanism="Timing rather than structural demand explains the observation.",
+                epistemic_status=EpistemicStatus.ECONOMIC_HYPOTHESIS,
+                materiality=MaterialityLevel.LOW,
+                supporting_evidence_refs=(),
+                opposing_evidence_refs=(),
+                falsifier="Demand remains durable after the fixture horizon.",
+            ),
+        ),
+        falsification_evidence_refs=(),
+        missing_evidence=(),
+        unresolved_contradictions=(),
+        status=CounterThesisStatus.ACTIVE,
+    )
+    blind = build_blind_spot_snapshot(
+        discovery_id=f"fixture-blind-{thesis.security_id}",
+        snapshot_version=1,
+        parent_snapshot_id=None,
+        thesis_snapshot_id=thesis.snapshot_id,
+        captured_at=NOW + timedelta(seconds=24 + offset),
+        existing_critical_state_variables=("demand",),
+        graph_variables_used_as_exclusion_set=True,
+        search_scope=("fixture-outside-graph-scope",),
+        discovery_method="deterministic fixture outside-graph scan",
+        search_completed=True,
+        candidates=(),
+        search_limitations=("fixture scope is intentionally narrow",),
+        no_candidate_found_reason="No additional deterministic fixture candidate.",
+    )
+    epistemic = build_epistemic_defense_package(
+        thesis,
+        counter,
+        blind,
+        captured_at=NOW + timedelta(seconds=25 + offset),
+    )
+    return counter, blind, epistemic
 
 def _components(thesis: InvestmentThesisSnapshot, offset: int):
     security_id = thesis.security_id
@@ -432,21 +509,11 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
     )
     causal_graph = _causal_graph(thesis, offset)
     expectations = _expectations(thesis, offset)
-    forward_valuation = _forward_valuation(thesis, expectations, offset)
-    price_implied = _price_implied(thesis, expectations, offset)
-    epistemic = EpistemicDefensePackageSnapshot(
-        captured_at=NOW + timedelta(seconds=25 + offset),
-        thesis_snapshot_id=thesis.snapshot_id,
-        counter_thesis_snapshot_id=A,
-        blind_spot_snapshot_id=B,
-        guardrail_evidence_id=GUARDRAIL,
-        required_contracts_present=True,
-        high_materiality_counter_explanation_count=0,
-        high_materiality_unresolved_contradiction_count=0,
-        uncovered_high_materiality_blind_spot_count=0,
-        blind_spot_promotion_candidate_count=0,
-        research_flags=(),
-    )
+    valuation = _valuation_evidence(thesis, expectations, offset)
+    reference_frame = _reference_frame(thesis, expectations, offset)
+    forward_valuation = _forward_valuation(valuation, expectations, offset)
+    price_implied = _price_implied(valuation, reference_frame, offset)
+    counter_thesis, blind_spot, epistemic = _epistemic_sources(thesis, offset)
     gap = build_decision_expectation_gap(
         view,
         expectations,
@@ -481,6 +548,10 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         forward_valuation,
         price_implied,
         epistemic,
+        valuation,
+        reference_frame,
+        counter_thesis,
+        blind_spot,
     )
 
 
@@ -530,6 +601,10 @@ def _persist_components(
             forward_valuation,
             price_implied,
             epistemic,
+            valuation,
+            reference_frame,
+            counter_thesis,
+            blind_spot,
         ) = _components(thesis, index)
         if mismatch_first_tournament and index == 0:
             underwriting = replace(
@@ -551,6 +626,10 @@ def _persist_components(
             expectations,
             output_root=tmp_path / "expectation_state",
         )
+        write_valuation_evidence_snapshot(tmp_path / "valuation_evidence", valuation)
+        persist_valuation_reference_frame(reference_frame, output_root=tmp_path)
+        persist_counter_thesis(counter_thesis, output_root=tmp_path)
+        persist_blind_spot_discovery(blind_spot, output_root=tmp_path)
         persist_forward_valuation_state(
             forward_valuation,
             output_root=tmp_path / "forward_valuation",
