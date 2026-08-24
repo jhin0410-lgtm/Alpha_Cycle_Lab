@@ -114,6 +114,10 @@ The assembler consumes the existing writer layouts:
 
 `latest_*` JSON files are validated pointers only; they do not determine PIT selection.
 
+## Final hardening validation
+
+The final review-hardening source commit `84ecd0360594826506873156a5eb464c856695c6` passed Ruff, mypy across 411 source files, and the full test suite with 1601 passed tests. Temporary hardening and diagnostic workflows/scripts were removed from that tested source commit before the normal pull-request CI retrigger.
+
 ## Frozen prospective artifacts
 
 The SK hynix 2026Q3 prospective forecast/experiment artifacts are outside this milestone and must remain unchanged.
