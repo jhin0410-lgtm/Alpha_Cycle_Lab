@@ -112,6 +112,13 @@ jobs:
           /tmp/pr303-final-hardening-venv/bin/python -m pip install --upgrade pip
           /tmp/pr303-final-hardening-venv/bin/python -m pip install -e ".[dev]"
 
+      - name: Diagnose valuation source revalidation
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/pr303-final-hardening-venv/bin/python .github/pr303_valuation_diagnostic.py
+          rm -f .github/pr303_valuation_diagnostic.py
+
       - name: Normalize changed Python files
         shell: bash
         run: |
