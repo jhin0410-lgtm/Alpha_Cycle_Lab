@@ -21,10 +21,10 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
 from alpha_cycle.intelligence.decision_view_v2_1 import (
     DECISION_VIEW_SCHEMA_VERSION,
     DecisionExpectationGapSnapshot,
-    build_decision_view,
     DecisionViewSelectionMethod,
     DecisionViewSelectionRuleSnapshot,
     DecisionViewSnapshot,
+    build_decision_view,
 )
 from alpha_cycle.intelligence.forecast_ledger import (
     FORECAST_LEDGER_SCHEMA_VERSION,
