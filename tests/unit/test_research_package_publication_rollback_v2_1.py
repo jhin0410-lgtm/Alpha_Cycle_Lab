@@ -12,7 +12,14 @@ import alpha_cycle.research_package_assembler_v2_1 as assembler
 NOW = datetime(2026, 8, 23, 9, 0, tzinfo=UTC)
 
 
-def _fake_owned_opportunity_persist(snapshot: SimpleNamespace, *, output_root: Path):
+def _fake_owned_opportunity_persist(
+    snapshot: SimpleNamespace,
+    *,
+    output_root: Path,
+    repository_root: Path | None = None,
+    repository_fd: int | None = None,
+):
+    del repository_root, repository_fd
     object_name = (
         "opportunity_candidate" if str(snapshot.snapshot_id).startswith("a") else "opportunity_set"
     )
@@ -95,8 +102,16 @@ def test_ledger_publish_failure_rolls_back_all_new_downstream_artifacts(
         _fake_owned_opportunity_persist,
     )
 
-    def persist_owned_json(*, root, repository_name, snapshot_id, payload_without_id):
-        del root, snapshot_id, payload_without_id
+    def persist_owned_json(
+        *,
+        root,
+        repository_name,
+        snapshot_id,
+        payload_without_id,
+        repository_root=None,
+        repository_fd=None,
+    ):
+        del root, snapshot_id, payload_without_id, repository_root, repository_fd
         if repository_name == "research_run_ledger_v2_1":
             raise RuntimeError("injected ledger publication failure")
         path = round_path if repository_name == "research_round_v2_1" else run_path

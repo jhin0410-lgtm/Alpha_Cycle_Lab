@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
+import stat
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -59,6 +61,7 @@ from alpha_cycle.research_package_canonical_evidence_v2_1 import (
     underwriting_bound_evidence_is_valid,
 )
 from alpha_cycle.research_package_integrity_v2_1 import (
+    ResearchPackageIntegrityError,
     decision_view_has_valid_persisted_selection,
     decision_view_matches_underwriting_tournament,
     package_integrity_blocker_codes,
@@ -94,6 +97,7 @@ class _OwnedOpportunityPublication:
     pointer_inode: int
     pointer_mtime_ns: int
     pointer_size: int
+    repository_fd: int | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,27 @@ class _OwnedFilePublication:
     mtime_ns: int
     size: int
     sha256: str
+    repository_fd: int | None = None
+    file_name: str | None = None
+
+
+@dataclass
+class _PinnedRepository:
+    public_path: Path
+    io_path: Path
+    fd: int | None
+    device: int
+    inode: int
+
+
+@dataclass
+class _PinnedPublicationRoot:
+    public_root: Path
+    io_root: Path
+    fd: int | None
+    device: int
+    inode: int
+    repositories: list[_PinnedRepository]
 
 
 @dataclass(frozen=True)
@@ -502,7 +527,12 @@ def _assemble_security_package(
                 underwriting=underwriting,
                 payoff=payoff,
             )
-        except ResearchPackageSourceRevalidationError:
+        except (
+            ResearchPackageSourceRevalidationError,
+            OSError,
+            TypeError,
+            ValueError,
+        ):
             underwriting_evidence_valid = False
         if not underwriting_evidence_valid:
             _block(
@@ -523,24 +553,29 @@ def _assemble_security_package(
                 "underwriting_payoff_binding_mismatch",
                 security_id,
             )
-    if (
-        view is not None
-        and artifact_root is not None
-        and not decision_view_has_valid_persisted_selection(
-            view,
-            artifact_root=artifact_root,
-        )
-    ):
-        _block(
-            blockers,
-            "research_package",
-            "decision_view_persisted_selection_invalid",
-            security_id,
-        )
+    if view is not None and artifact_root is not None:
+        try:
+            persisted_selection_valid = decision_view_has_valid_persisted_selection(
+                view,
+                artifact_root=artifact_root,
+            )
+        except (ResearchPackageIntegrityError, OSError, TypeError, ValueError):
+            persisted_selection_valid = False
+        if not persisted_selection_valid:
+            _block(
+                blockers,
+                "research_package",
+                "decision_view_persisted_selection_invalid",
+                security_id,
+            )
     if underwriting is not None and view is not None and underwriting.lane is UnderwritingLane.DEEP:
-        if not decision_view_matches_underwriting_tournament(
-            view, underwriting, artifact_root=artifact_root
-        ):
+        try:
+            tournament_binding_valid = decision_view_matches_underwriting_tournament(
+                view, underwriting, artifact_root=artifact_root
+            )
+        except (ResearchPackageIntegrityError, OSError, TypeError, ValueError):
+            tournament_binding_valid = False
+        if not tournament_binding_valid:
             _block(
                 blockers,
                 "research_package",
@@ -650,11 +685,7 @@ def _record_package_blockers(
     ledger: ResearchRunLedgerSnapshot,
     root: Path,
 ) -> tuple[ResearchRunLedgerSnapshot, Path | None, Path | None, bool]:
-    prior = _matching_package_blocked_run(
-        ledger,
-        request.snapshot_id,
-        blockers,
-    )
+    prior = _matching_package_blocked_run(ledger, request.snapshot_id, blockers)
     latest_request_run = _latest_request_run(ledger, request.snapshot_id)
     if (
         prior is not None
@@ -676,24 +707,47 @@ def _record_package_blockers(
         built_at=processed_at,
     )
     _require_safe_run_ledger_publication(root, run=run, ledger=next_ledger)
-    run_path, owned_run = _persist_owned_content_addressed_json(
-        root=root,
-        repository_name="research_round_run_v2_1",
-        snapshot_id=run.snapshot_id,
-        payload_without_id=run.payload_without_id(),
-    )
+    publication_root = _open_pinned_publication_root(root)
+    owned_run: _OwnedFilePublication | None = None
+    owned_ledger: _OwnedFilePublication | None = None
     try:
-        ledger_path, _owned_ledger = _persist_owned_content_addressed_json(
-            root=root,
+        run_repository = _pin_publication_repository(
+            publication_root, "research_round_run_v2_1"
+        )
+        ledger_repository = _pin_publication_repository(
+            publication_root, "research_run_ledger_v2_1"
+        )
+        if not _publication_namespace_is_current(publication_root):
+            raise RuntimeError("blocked-run publication namespace changed before creation")
+        run_path, owned_run = _persist_owned_content_addressed_json(
+            root=publication_root.public_root,
+            repository_name="research_round_run_v2_1",
+            repository_root=run_repository.io_path,
+            repository_fd=run_repository.fd,
+            snapshot_id=run.snapshot_id,
+            payload_without_id=run.payload_without_id(),
+        )
+        ledger_path, owned_ledger = _persist_owned_content_addressed_json(
+            root=publication_root.public_root,
             repository_name="research_run_ledger_v2_1",
+            repository_root=ledger_repository.io_path,
+            repository_fd=ledger_repository.fd,
             snapshot_id=next_ledger.snapshot_id,
             payload_without_id=next_ledger.payload_without_id(),
         )
+        if not _publication_namespace_is_current(publication_root):
+            raise RuntimeError("blocked-run publication namespace changed before commit")
+        return next_ledger, run_path, ledger_path, True
     except BaseException:
-        _unlink_owned_file_if_current(owned_run)
+        for publication in (owned_ledger, owned_run):
+            if publication is not None:
+                try:
+                    _unlink_owned_file_if_current(publication)
+                except BaseException:
+                    pass
         raise
-    return next_ledger, run_path, ledger_path, True
-
+    finally:
+        _close_pinned_publication_root(publication_root)
 
 def _matching_package_blocked_run(
     ledger: ResearchRunLedgerSnapshot,
@@ -744,6 +798,133 @@ def _validate_downstream_artifact_bindings(artifacts: ResearchRoundArtifacts) ->
         )
 
 
+def _directory_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _fd_directory_path(fd: int, fallback: Path) -> Path:
+    for prefix in (Path("/proc/self/fd"), Path("/dev/fd")):
+        candidate = prefix / str(fd)
+        if candidate.exists():
+            return candidate
+    return fallback
+
+
+def _open_pinned_publication_root(root: Path) -> _PinnedPublicationRoot:
+    public_root = require_trusted_artifact_root(root)
+    lexical = os.stat(public_root, follow_symlinks=False)
+    if os.name == "nt":
+        return _PinnedPublicationRoot(
+            public_root=public_root,
+            io_root=public_root,
+            fd=None,
+            device=lexical.st_dev,
+            inode=lexical.st_ino,
+            repositories=[],
+        )
+    fd = os.open(public_root, _directory_open_flags())
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (lexical.st_dev, lexical.st_ino):
+            raise ResearchPackageIntegrityError(
+                "artifact_root changed while pinning publication namespace"
+            )
+        return _PinnedPublicationRoot(
+            public_root=public_root,
+            io_root=_fd_directory_path(fd, public_root),
+            fd=fd,
+            device=opened.st_dev,
+            inode=opened.st_ino,
+            repositories=[],
+        )
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _pin_publication_repository(
+    publication_root: _PinnedPublicationRoot,
+    repository_name: str,
+) -> _PinnedRepository:
+    if not repository_name or Path(repository_name).name != repository_name:
+        raise ValueError("publication repository name must be one path component")
+    public_path = publication_root.public_root / repository_name
+    if publication_root.fd is None:
+        public_path.mkdir(parents=False, exist_ok=True)
+        if public_path.is_symlink() or not public_path.is_dir():
+            raise ResearchPackageIntegrityError(
+                f"publication repository must be a regular directory: {repository_name}"
+            )
+        stat = os.stat(public_path, follow_symlinks=False)
+        repository = _PinnedRepository(
+            public_path=public_path,
+            io_path=public_path,
+            fd=None,
+            device=stat.st_dev,
+            inode=stat.st_ino,
+        )
+        publication_root.repositories.append(repository)
+        return repository
+    try:
+        os.mkdir(repository_name, 0o755, dir_fd=publication_root.fd)
+    except FileExistsError:
+        pass
+    fd = os.open(repository_name, _directory_open_flags(), dir_fd=publication_root.fd)
+    try:
+        opened = os.fstat(fd)
+        lexical = os.stat(public_path, follow_symlinks=False)
+        if (opened.st_dev, opened.st_ino) != (lexical.st_dev, lexical.st_ino):
+            raise ResearchPackageIntegrityError(
+                f"publication repository changed while pinning: {repository_name}"
+            )
+        repository = _PinnedRepository(
+            public_path=public_path,
+            io_path=_fd_directory_path(fd, public_path),
+            fd=fd,
+            device=opened.st_dev,
+            inode=opened.st_ino,
+        )
+        publication_root.repositories.append(repository)
+        return repository
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _publication_namespace_is_current(
+    publication_root: _PinnedPublicationRoot,
+) -> bool:
+    try:
+        root_stat = os.stat(publication_root.public_root, follow_symlinks=False)
+        if (root_stat.st_dev, root_stat.st_ino) != (
+            publication_root.device,
+            publication_root.inode,
+        ):
+            return False
+        for repository in publication_root.repositories:
+            stat = os.stat(repository.public_path, follow_symlinks=False)
+            if (stat.st_dev, stat.st_ino) != (repository.device, repository.inode):
+                return False
+        return True
+    except OSError:
+        return False
+
+
+def _close_pinned_publication_root(publication_root: _PinnedPublicationRoot) -> None:
+    for repository in reversed(publication_root.repositories):
+        if repository.fd is not None:
+            os.close(repository.fd)
+            repository.fd = None
+    if publication_root.fd is not None:
+        os.close(publication_root.fd)
+        publication_root.fd = None
+
+
 def _publish_orchestrated_artifacts(
     *,
     artifacts: ResearchRoundArtifacts,
@@ -753,55 +934,110 @@ def _publish_orchestrated_artifacts(
 ) -> tuple[Path, Path, Path]:
     validate_publication_layout(root, artifacts=artifacts, run=run, ledger=ledger)
     validate_existing_opportunity_artifacts(root, artifacts)
-
+    publication_root = _open_pinned_publication_root(root)
     opportunity_publications: list[_OwnedOpportunityPublication] = []
     owned_round: _OwnedFilePublication | None = None
     owned_run: _OwnedFilePublication | None = None
     owned_ledger: _OwnedFilePublication | None = None
     try:
+        candidate_repository = _pin_publication_repository(
+            publication_root, "opportunity_candidate"
+        )
+        set_repository = (
+            _pin_publication_repository(publication_root, "opportunity_set")
+            if artifacts.opportunity_set is not None
+            else None
+        )
+        round_repository = _pin_publication_repository(
+            publication_root, "research_round_v2_1"
+        )
+        run_repository = _pin_publication_repository(
+            publication_root, "research_round_run_v2_1"
+        )
+        ledger_repository = _pin_publication_repository(
+            publication_root, "research_run_ledger_v2_1"
+        )
+        if not _publication_namespace_is_current(publication_root):
+            raise RuntimeError("publication namespace changed before artifact creation")
+
         for candidate in artifacts.opportunity_candidates:
-            publication = _persist_owned_opportunity_snapshot(candidate, output_root=root)
+            publication = _persist_owned_opportunity_snapshot(
+                candidate,
+                output_root=publication_root.public_root,
+                repository_root=candidate_repository.io_path,
+                repository_fd=candidate_repository.fd,
+            )
             opportunity_publications.append(publication)
+            if not _publication_namespace_is_current(publication_root):
+                raise RuntimeError("opportunity repository changed during publication")
             validate_persisted_opportunity_candidate(
-                root,
+                publication_root.public_root,
                 candidate,
                 require_pointer=_pointer_version_is_current(publication),
             )
+            if not _publication_namespace_is_current(publication_root):
+                raise RuntimeError("opportunity repository changed during validation")
         if artifacts.opportunity_set is not None:
+            if set_repository is None:
+                raise RuntimeError("opportunity-set repository pin missing")
             publication = _persist_owned_opportunity_snapshot(
                 artifacts.opportunity_set,
-                output_root=root,
+                output_root=publication_root.public_root,
+                repository_root=set_repository.io_path,
+                repository_fd=set_repository.fd,
             )
             opportunity_publications.append(publication)
+            if not _publication_namespace_is_current(publication_root):
+                raise RuntimeError("opportunity-set repository changed during publication")
             validate_persisted_opportunity_set(
-                root,
+                publication_root.public_root,
                 artifacts.opportunity_set,
                 require_pointer=_pointer_version_is_current(publication),
             )
+            if not _publication_namespace_is_current(publication_root):
+                raise RuntimeError("opportunity-set repository changed during validation")
 
-        round_path, owned_round = _persist_owned_content_addressed_json(
-            root=root,
+        _, owned_round = _persist_owned_content_addressed_json(
+            root=publication_root.public_root,
             repository_name="research_round_v2_1",
+            repository_root=round_repository.io_path,
+            repository_fd=round_repository.fd,
             snapshot_id=artifacts.snapshot.snapshot_id,
             payload_without_id=artifacts.snapshot.payload_without_id(),
         )
-        run_path, owned_run = _persist_owned_content_addressed_json(
-            root=root,
+        _, owned_run = _persist_owned_content_addressed_json(
+            root=publication_root.public_root,
             repository_name="research_round_run_v2_1",
+            repository_root=run_repository.io_path,
+            repository_fd=run_repository.fd,
             snapshot_id=run.snapshot_id,
             payload_without_id=run.payload_without_id(),
         )
         if not _owned_file_is_current(owned_round) or not _owned_file_is_current(owned_run):
             raise RuntimeError("round/run publication changed before ledger publication")
-        ledger_path, owned_ledger = _persist_owned_content_addressed_json(
-            root=root,
+        _, owned_ledger = _persist_owned_content_addressed_json(
+            root=publication_root.public_root,
             repository_name="research_run_ledger_v2_1",
+            repository_root=ledger_repository.io_path,
+            repository_fd=ledger_repository.fd,
             snapshot_id=ledger.snapshot_id,
             payload_without_id=ledger.payload_without_id(),
         )
         if not _owned_file_is_current(owned_round) or not _owned_file_is_current(owned_run):
             raise RuntimeError("round/run publication changed during ledger publication")
-        return round_path, run_path, ledger_path
+        if not _publication_namespace_is_current(publication_root):
+            raise RuntimeError("publication namespace changed before commit")
+        return (
+            publication_root.public_root
+            / "research_round_v2_1"
+            / f"{artifacts.snapshot.snapshot_id}.json",
+            publication_root.public_root
+            / "research_round_run_v2_1"
+            / f"{run.snapshot_id}.json",
+            publication_root.public_root
+            / "research_run_ledger_v2_1"
+            / f"{ledger.snapshot_id}.json",
+        )
     except BaseException as exc:
         cleanup_errors: list[BaseException] = []
         for owned_file in (owned_ledger, owned_run, owned_round):
@@ -818,12 +1054,15 @@ def _publish_orchestrated_artifacts(
                 "orchestrated research publication failed and rollback was incomplete"
             ) from cleanup_errors[0]
         raise exc
-
+    finally:
+        _close_pinned_publication_root(publication_root)
 
 def _persist_owned_opportunity_snapshot(
     snapshot: OpportunityCandidateSnapshot | OpportunitySetSnapshot,
     *,
     output_root: Path,
+    repository_root: Path | None = None,
+    repository_fd: int | None = None,
 ) -> _OwnedOpportunityPublication:
     if isinstance(snapshot, OpportunityCandidateSnapshot):
         object_name = "opportunity_candidate"
@@ -844,15 +1083,20 @@ def _persist_owned_opportunity_snapshot(
             "capital_allocation_recommendation_enabled": False,
             "automatic_execution_enabled": False,
         }
-    root = output_root / object_name
-    root_created = not root.exists()
-    root.mkdir(parents=True, exist_ok=True)
-    directory = _opportunity_snapshot_directory(
+    public_directory = _opportunity_snapshot_directory(
         output_root,
         object_name=object_name,
         captured_at=snapshot.captured_at,
         snapshot_id=snapshot.snapshot_id,
     )
+    if repository_root is None:
+        root = output_root / object_name
+        root_created = not root.exists()
+        root.mkdir(parents=True, exist_ok=True)
+    else:
+        root = repository_root
+        root_created = False
+    directory = root / public_directory.name
     directory_created = False
     if not directory.exists():
         temporary = Path(
@@ -921,41 +1165,78 @@ def _persist_owned_opportunity_snapshot(
             # Never recursively delete an ambiguous temporary pathname.  An incomplete
             # unreferenced temp directory is safer than following a raced replacement.
 
-    pointer = root / f"latest_{object_name}.json"
-    pointer_before = _optional_bytes(pointer)
-    pointer_before_identity = (
-        _capture_file_identity(pointer) if pointer_before is not None else None
-    )
+    pointer_name = f"latest_{object_name}.json"
+    pointer = output_root / object_name / pointer_name
+    if repository_fd is not None:
+        before_version = _read_regular_file_at(repository_fd, pointer_name)
+        pointer_before = before_version[0] if before_version is not None else None
+        pointer_before_identity = before_version[1] if before_version is not None else None
+    else:
+        pointer_before = _optional_bytes(pointer)
+        pointer_before_identity = (
+            _capture_file_identity(pointer) if pointer_before is not None else None
+        )
     pointer_after = json.dumps(
         {
             "schema_version": OPPORTUNITY_SET_SCHEMA_VERSION,
             "object_type": object_name,
             "snapshot_id": snapshot.snapshot_id,
-            "snapshot_path": str(directory),
+            "snapshot_path": str(public_directory),
         },
         ensure_ascii=False,
         indent=2,
         sort_keys=True,
     ).encode("utf-8")
-    pointer_temp = _write_owned_pointer_temp(root, pointer.name, pointer_after)
-    pointer_temp_identity = _capture_file_identity(pointer_temp)
     pointer_published_by_this_call = False
-    try:
-        if pointer_before is None:
+    if repository_fd is not None:
+        pointer_temp_name, pointer_temp_identity = _write_owned_pointer_temp_at(
+            repository_fd, pointer_name, pointer_after
+        )
+        try:
+            if pointer_before is None:
+                try:
+                    os.link(
+                        pointer_temp_name,
+                        pointer_name,
+                        src_dir_fd=repository_fd,
+                        dst_dir_fd=repository_fd,
+                        follow_symlinks=False,
+                    )
+                    pointer_published_by_this_call = True
+                except FileExistsError:
+                    pointer_published_by_this_call = False
+            elif pointer_before_identity is not None:
+                pointer_published_by_this_call = _replace_pointer_if_version_matches_at(
+                    repository_fd,
+                    pointer_temp_name,
+                    pointer_name,
+                    expected_bytes=pointer_before,
+                    expected_identity=pointer_before_identity,
+                )
+        finally:
             try:
-                os.link(pointer_temp, pointer)
-                pointer_published_by_this_call = True
-            except FileExistsError:
-                pointer_published_by_this_call = False
-        elif pointer_before_identity is not None:
-            pointer_published_by_this_call = _replace_pointer_if_version_matches(
-                pointer_temp,
-                pointer,
-                expected_bytes=pointer_before,
-                expected_identity=pointer_before_identity,
-            )
-    finally:
-        pointer_temp.unlink(missing_ok=True)
+                os.unlink(pointer_temp_name, dir_fd=repository_fd)
+            except FileNotFoundError:
+                pass
+    else:
+        pointer_temp = _write_owned_pointer_temp(root, pointer.name, pointer_after)
+        pointer_temp_identity = _capture_file_identity(pointer_temp)
+        try:
+            if pointer_before is None:
+                try:
+                    os.link(pointer_temp, pointer)
+                    pointer_published_by_this_call = True
+                except FileExistsError:
+                    pointer_published_by_this_call = False
+            elif pointer_before_identity is not None:
+                pointer_published_by_this_call = _replace_pointer_if_version_matches(
+                    pointer_temp,
+                    pointer,
+                    expected_bytes=pointer_before,
+                    expected_identity=pointer_before_identity,
+                )
+        finally:
+            pointer_temp.unlink(missing_ok=True)
     if pointer_published_by_this_call:
         inode, mtime_ns, size = pointer_temp_identity
     else:
@@ -973,7 +1254,245 @@ def _persist_owned_opportunity_snapshot(
         pointer_inode=inode,
         pointer_mtime_ns=mtime_ns,
         pointer_size=size,
+        repository_fd=repository_fd,
     )
+
+
+
+def _read_regular_file_at(
+    directory_fd: int,
+    name: str,
+) -> tuple[bytes, tuple[int, int, int]] | None:
+    if not name or Path(name).name != name:
+        raise ValueError("repository-relative file name must be one path component")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(name, flags, dir_fd=directory_fd)
+    except FileNotFoundError:
+        return None
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError(f"repository-relative file must be regular: {name}")
+        with os.fdopen(fd, "rb") as handle:
+            fd = -1
+            content = handle.read()
+        return content, (opened.st_ino, opened.st_mtime_ns, opened.st_size)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _write_owned_pointer_temp_at(
+    directory_fd: int,
+    pointer_name: str,
+    content: bytes,
+) -> tuple[str, tuple[int, int, int]]:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    for _ in range(64):
+        name = f".{pointer_name}.{secrets.token_hex(16)}.owned.tmp"
+        try:
+            fd = os.open(name, flags, 0o644, dir_fd=directory_fd)
+        except FileExistsError:
+            continue
+        try:
+            if os.name != "nt":
+                os.fchmod(fd, 0o644)
+            with os.fdopen(fd, "wb") as handle:
+                fd = -1
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+                opened = os.fstat(handle.fileno())
+            return name, (opened.st_ino, opened.st_mtime_ns, opened.st_size)
+        except BaseException:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(name, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+            raise
+    raise RuntimeError("could not allocate owned pointer temp file")
+
+
+def _new_publication_quarantine_at(directory_fd: int, name: str) -> str:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    for _ in range(64):
+        quarantine = f".{name}.{secrets.token_hex(16)}.quarantine"
+        try:
+            fd = os.open(quarantine, flags, 0o600, dir_fd=directory_fd)
+        except FileExistsError:
+            continue
+        os.close(fd)
+        return quarantine
+    raise RuntimeError("could not allocate publication quarantine")
+
+
+def _restore_quarantined_file_if_absent_at(
+    directory_fd: int,
+    quarantine: str,
+    destination: str,
+) -> bool:
+    try:
+        os.link(
+            quarantine,
+            destination,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        return True
+    except FileExistsError:
+        return False
+
+
+def _replace_pointer_if_version_matches_at(
+    directory_fd: int,
+    replacement: str,
+    pointer: str,
+    *,
+    expected_bytes: bytes,
+    expected_identity: tuple[int, int, int],
+) -> bool:
+    quarantine = _new_publication_quarantine_at(directory_fd, pointer)
+    preserve_quarantine = False
+    try:
+        try:
+            os.replace(
+                pointer,
+                quarantine,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+        except FileNotFoundError:
+            return False
+        observed = _read_regular_file_at(directory_fd, quarantine)
+        matches = bool(
+            observed is not None
+            and observed[1] == expected_identity
+            and observed[0] == expected_bytes
+        )
+        if not matches:
+            _restore_quarantined_file_if_absent_at(
+                directory_fd, quarantine, pointer
+            )
+            return False
+        try:
+            os.link(
+                replacement,
+                pointer,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            return False
+        except BaseException as publication_error:
+            try:
+                restored = _restore_quarantined_file_if_absent_at(
+                    directory_fd, quarantine, pointer
+                )
+            except BaseException as restore_error:
+                preserve_quarantine = (
+                    _read_regular_file_at(directory_fd, pointer) is None
+                )
+                raise publication_error from restore_error
+            if not restored and _read_regular_file_at(directory_fd, pointer) is None:
+                preserve_quarantine = True
+            raise
+        return True
+    finally:
+        if not preserve_quarantine:
+            try:
+                os.unlink(quarantine, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+
+
+def _unlink_pointer_if_version_matches_at(
+    directory_fd: int,
+    pointer: str,
+    *,
+    expected_bytes: bytes,
+    expected_identity: tuple[int, int, int],
+) -> bool:
+    quarantine = _new_publication_quarantine_at(directory_fd, pointer)
+    try:
+        try:
+            os.replace(
+                pointer,
+                quarantine,
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+        except FileNotFoundError:
+            return False
+        observed = _read_regular_file_at(directory_fd, quarantine)
+        matches = bool(
+            observed is not None
+            and observed[1] == expected_identity
+            and observed[0] == expected_bytes
+        )
+        if not matches:
+            _restore_quarantined_file_if_absent_at(
+                directory_fd, quarantine, pointer
+            )
+            return False
+        return True
+    finally:
+        try:
+            os.unlink(quarantine, dir_fd=directory_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _unlink_owned_file_at(
+    publication: _OwnedFilePublication,
+) -> bool:
+    if publication.repository_fd is None or publication.file_name is None:
+        return False
+    quarantine = _new_publication_quarantine_at(
+        publication.repository_fd, publication.file_name
+    )
+    try:
+        try:
+            os.replace(
+                publication.file_name,
+                quarantine,
+                src_dir_fd=publication.repository_fd,
+                dst_dir_fd=publication.repository_fd,
+            )
+        except FileNotFoundError:
+            return False
+        observed = _read_regular_file_at(publication.repository_fd, quarantine)
+        if observed is None:
+            return False
+        content, identity = observed
+        matches = bool(
+            identity
+            == (publication.inode, publication.mtime_ns, publication.size)
+            and hashlib.sha256(content).hexdigest() == publication.sha256
+        )
+        if not matches:
+            _restore_quarantined_file_if_absent_at(
+                publication.repository_fd,
+                quarantine,
+                publication.file_name,
+            )
+            return False
+        return True
+    finally:
+        try:
+            os.unlink(quarantine, dir_fd=publication.repository_fd)
+        except FileNotFoundError:
+            pass
 
 
 def _write_directory_relative_file(directory_fd: int, name: str, content: bytes) -> None:
@@ -1107,21 +1626,37 @@ def _unlink_pointer_if_version_matches(
 
 
 def _pointer_version_is_current(publication: _OwnedOpportunityPublication) -> bool:
-    if publication.pointer_inode < 0 or not publication.pointer.exists():
+    if publication.pointer_inode < 0:
         return False
-    if publication.pointer.is_symlink():
+    if publication.repository_fd is not None:
+        try:
+            observed = _read_regular_file_at(
+                publication.repository_fd, publication.pointer.name
+            )
+            return bool(
+                observed is not None
+                and observed[1]
+                == (
+                    publication.pointer_inode,
+                    publication.pointer_mtime_ns,
+                    publication.pointer_size,
+                )
+                and observed[0] == publication.pointer_after
+            )
+        except OSError:
+            return False
+    if not publication.pointer.exists() or publication.pointer.is_symlink():
         return False
     try:
-        stat = publication.pointer.stat()
+        stat_result = publication.pointer.stat()
         return bool(
-            stat.st_ino == publication.pointer_inode
-            and stat.st_mtime_ns == publication.pointer_mtime_ns
-            and stat.st_size == publication.pointer_size
+            stat_result.st_ino == publication.pointer_inode
+            and stat_result.st_mtime_ns == publication.pointer_mtime_ns
+            and stat_result.st_size == publication.pointer_size
             and publication.pointer.read_bytes() == publication.pointer_after
         )
     except OSError:
         return False
-
 
 def _rollback_owned_opportunity_publication(
     publication: _OwnedOpportunityPublication,
@@ -1132,17 +1667,48 @@ def _rollback_owned_opportunity_publication(
         publication.pointer_mtime_ns,
         publication.pointer_size,
     )
+    if publication.pointer_inode < 0:
+        return
+    if publication.repository_fd is not None:
+        try:
+            if publication.pointer_before is not None:
+                previous_temp_name, _ = _write_owned_pointer_temp_at(
+                    publication.repository_fd,
+                    publication.pointer.name,
+                    publication.pointer_before,
+                )
+                try:
+                    _replace_pointer_if_version_matches_at(
+                        publication.repository_fd,
+                        previous_temp_name,
+                        publication.pointer.name,
+                        expected_bytes=publication.pointer_after,
+                        expected_identity=expected_identity,
+                    )
+                finally:
+                    try:
+                        os.unlink(previous_temp_name, dir_fd=publication.repository_fd)
+                    except FileNotFoundError:
+                        pass
+            else:
+                _unlink_pointer_if_version_matches_at(
+                    publication.repository_fd,
+                    publication.pointer.name,
+                    expected_bytes=publication.pointer_after,
+                    expected_identity=expected_identity,
+                )
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+        return
     if publication.pointer_before is not None:
-        if publication.pointer_inode < 0:
-            return
-        previous_temp = _write_owned_pointer_temp(
+        previous_temp_path = _write_owned_pointer_temp(
             publication.root,
             publication.pointer.name,
             publication.pointer_before,
         )
         try:
             _replace_pointer_if_version_matches(
-                previous_temp,
+                previous_temp_path,
                 publication.pointer,
                 expected_bytes=publication.pointer_after,
                 expected_identity=expected_identity,
@@ -1150,25 +1716,17 @@ def _rollback_owned_opportunity_publication(
         except BaseException as exc:
             cleanup_errors.append(exc)
         finally:
-            previous_temp.unlink(missing_ok=True)
-        return
-    if publication.pointer_inode < 0:
+            previous_temp_path.unlink(missing_ok=True)
         return
     try:
-        if not _unlink_pointer_if_version_matches(
+        _unlink_pointer_if_version_matches(
             publication.pointer,
             expected_bytes=publication.pointer_after,
             expected_identity=expected_identity,
-        ):
-            return
+        )
     except BaseException as exc:
         cleanup_errors.append(exc)
-        return
-    # Content-addressed opportunity directories are immutable.  Once publication can
-    # race with non-cooperating writers, destructive rmtree-by-path is never safe: the
-    # deterministic pathname may already belong to another publisher.  Leave an
-    # unreferenced immutable directory in place; only the mutable latest pointer rolls back.
-
+    # Immutable content-addressed opportunity directories are intentionally preserved.
 
 def _persist_owned_content_addressed_json(
     *,
@@ -1176,10 +1734,16 @@ def _persist_owned_content_addressed_json(
     repository_name: str,
     snapshot_id: str,
     payload_without_id: dict[str, object],
+    repository_root: Path | None = None,
+    repository_fd: int | None = None,
 ) -> tuple[Path, _OwnedFilePublication]:
-    repository = root / repository_name
-    repository.mkdir(parents=True, exist_ok=True)
-    path = repository / f"{snapshot_id}.json"
+    public_repository = root / repository_name
+    repository = repository_root if repository_root is not None else public_repository
+    if repository_root is None:
+        repository.mkdir(parents=True, exist_ok=True)
+    file_name = f"{snapshot_id}.json"
+    public_path = public_repository / file_name
+    io_path = repository / file_name
     payload = dict(payload_without_id)
     payload["snapshot_id"] = snapshot_id
     encoded = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
@@ -1188,10 +1752,18 @@ def _persist_owned_content_addressed_json(
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags, 0o644)
-    created = os.fstat(fd)
-    owned_fd = os.dup(fd)
+    fd = -1
+    owned_fd = -1
+    created_inode: int | None = None
+    publication: _OwnedFilePublication | None = None
     try:
+        if repository_fd is not None:
+            fd = os.open(file_name, flags, 0o644, dir_fd=repository_fd)
+        else:
+            fd = os.open(io_path, flags, 0o644)
+        created = os.fstat(fd)
+        created_inode = created.st_ino
+        owned_fd = os.dup(fd)
         with os.fdopen(fd, "wb") as handle:
             fd = -1
             handle.write(encoded)
@@ -1199,26 +1771,31 @@ def _persist_owned_content_addressed_json(
             os.fsync(handle.fileno())
             completed = os.fstat(handle.fileno())
         publication = _OwnedFilePublication(
-            path=path,
+            path=public_path,
             inode=completed.st_ino,
             mtime_ns=completed.st_mtime_ns,
             size=completed.st_size,
             sha256=hashlib.sha256(encoded).hexdigest(),
+            repository_fd=repository_fd,
+            file_name=file_name if repository_fd is not None else None,
         )
         if not _owned_file_is_current(publication):
-            raise RuntimeError(f"publication path changed during creation: {path}")
-        return path, publication
+            raise RuntimeError(f"publication path changed during creation: {public_path}")
+        return public_path, publication
     except BaseException:
         if fd >= 0:
             os.close(fd)
         try:
-            _unlink_file_if_inode_matches(path, created.st_ino)
+            if publication is not None:
+                _unlink_owned_file_if_current(publication)
+            elif repository_fd is None and created_inode is not None:
+                _unlink_file_if_inode_matches(io_path, created_inode)
         except BaseException:
             pass
         raise
     finally:
-        os.close(owned_fd)
-
+        if owned_fd >= 0:
+            os.close(owned_fd)
 
 def _unlink_file_if_inode_matches(path: Path, expected_inode: int) -> bool:
     if path.is_symlink() or not path.exists():
@@ -1259,6 +1836,20 @@ def _capture_owned_file(path: Path) -> _OwnedFilePublication:
 
 
 def _owned_file_is_current(publication: _OwnedFilePublication) -> bool:
+    if publication.repository_fd is not None and publication.file_name is not None:
+        try:
+            observed = _read_regular_file_at(
+                publication.repository_fd, publication.file_name
+            )
+            if observed is None:
+                return False
+            content, identity = observed
+            return bool(
+                identity == (publication.inode, publication.mtime_ns, publication.size)
+                and hashlib.sha256(content).hexdigest() == publication.sha256
+            )
+        except OSError:
+            return False
     path = publication.path
     if path.is_symlink() or not path.is_file():
         return False
@@ -1274,10 +1865,10 @@ def _owned_file_is_current(publication: _OwnedFilePublication) -> bool:
     except OSError:
         return False
 
-
 def _unlink_owned_file_if_current(publication: _OwnedFilePublication) -> bool:
     """Remove only the exact owned inode/version after atomically claiming its name."""
-
+    if publication.repository_fd is not None and publication.file_name is not None:
+        return _unlink_owned_file_at(publication)
     path = publication.path
     if path.is_symlink() or not path.exists():
         return False
@@ -1304,12 +1895,9 @@ def _unlink_owned_file_if_current(publication: _OwnedFilePublication) -> bool:
         if not matches:
             _restore_quarantined_file_if_absent(quarantine, path)
             return False
-        # The owned version is isolated. A foreign replacement created after the
-        # atomic claim remains at the canonical pathname and is never unlinked.
         return True
     finally:
         quarantine.unlink(missing_ok=True)
-
 
 def _require_safe_run_ledger_publication(
     root: Path,
