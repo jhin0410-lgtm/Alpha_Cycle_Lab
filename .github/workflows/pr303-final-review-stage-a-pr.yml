@@ -1,0 +1,75 @@
+name: PR303 Final Review Hardening Stage A PR Runner
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.event.pull_request.head.ref == 'feature/typed-research-package-assembler-v2-1' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact PR head
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --no-tags --depth=1 origin "${PR_HEAD_SHA}"
+          git checkout -B feature/typed-research-package-assembler-v2-1 FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "${PR_HEAD_SHA}"
+
+      - name: Execute staged hardening patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'BOOT'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/pr303-final-review-stage-a.yml').read_text(encoding='utf-8')
+          marker = "          python3 - <<'PY'\n"
+          start = workflow.index(marker) + len(marker)
+          end = workflow.index("\n          PY\n", start)
+          raw = workflow[start:end]
+          code = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in raw.splitlines()
+          )
+          exec(compile(code, '<pr303-stage-a>', 'exec'), {})
+          BOOT
+
+      - name: Create isolated test environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/pr303-venv
+          /tmp/pr303-venv/bin/python -m pip install --upgrade pip
+          /tmp/pr303-venv/bin/python -m pip install -e ".[dev]"
+
+      - name: Focused regression and full quality gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          /tmp/pr303-venv/bin/ruff check src/alpha_cycle/research_package_assembler_v2_1.py tests/unit/test_research_package_final_review_round3_v2_1.py
+          /tmp/pr303-venv/bin/pytest -q tests/unit/test_research_package_final_review_round3_v2_1.py tests/unit/test_research_package_exact_head_review_round2_v2_1.py
+          /tmp/pr303-venv/bin/mypy
+          /tmp/pr303-venv/bin/pytest -q
+
+      - name: Commit exact tested Stage A files only
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/pr303-final-review-stage-a.yml .github/workflows/pr303-final-review-stage-a-pr.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/alpha_cycle/research_package_assembler_v2_1.py tests/unit/test_research_package_final_review_round3_v2_1.py .github/workflows/pr303-final-review-stage-a.yml .github/workflows/pr303-final-review-stage-a-pr.yml
+          git diff --cached --check
+          git commit -m "Harden PR303 publication repositories and blocker persistence"
+          git push origin HEAD:feature/typed-research-package-assembler-v2-1
