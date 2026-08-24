@@ -98,7 +98,11 @@ jobs:
               text = text.replace(old, new, 1)
           path.write_text(text, encoding='utf-8')
           PY
-          rm -f .github/pr303_final_hardening.py .github/workflows/pr303-final-hardening.yml
+          python3 .github/pr303_final_hardening_followup.py
+          rm -f \
+            .github/pr303_final_hardening.py \
+            .github/pr303_final_hardening_followup.py \
+            .github/workflows/pr303-final-hardening.yml
 
       - name: Create isolated Python environment
         shell: bash
