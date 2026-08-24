@@ -59,6 +59,9 @@ Per security, selection requires the request-compatible:
 
 Persisted builder outputs are additionally checked for canonical invariants that their dataclasses alone do not enforce. Derived evidence is accepted only when its persisted source contracts can also be reconstructed and the owning canonical builder reproduces the exact derived snapshot:
 
+- `ValuationEvidenceSnapshot + ExpectationStateSnapshot -> ForwardValuationStateSnapshot` is replayed through `build_forward_valuation_state(...)`;
+- `ValuationEvidenceSnapshot + ValuationReferenceFrameSnapshot -> PriceImpliedRequirementSnapshot` is replayed through `build_price_implied_requirement(...)`;
+- `InvestmentThesisSnapshot + CounterThesisSnapshot + BlindSpotDiscoverySnapshot -> EpistemicDefensePackageSnapshot` is replayed through `build_epistemic_defense_package(...)`;
 - terminal theses cannot enter a ready package;
 - thesis/payoff/underwriting and Decision View/Expectation Gap capture ordering is causal;
 - ready underwriting carries the complete active lane-specific required-element set;
