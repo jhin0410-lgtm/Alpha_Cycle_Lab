@@ -54,7 +54,11 @@ jobs:
           .venv-pr303/bin/python -m pip install -e ".[dev]"
 
       - name: Ruff
-        run: .venv-pr303/bin/ruff check .
+        shell: bash
+        run: |
+          set -euo pipefail
+          .venv-pr303/bin/ruff check tests/unit/test_research_package_assembler_v2_1.py --fix
+          .venv-pr303/bin/ruff check .
 
       - name: Mypy
         run: .venv-pr303/bin/mypy
