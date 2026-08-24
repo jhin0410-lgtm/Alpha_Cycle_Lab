@@ -65,6 +65,35 @@ jobs:
           path.write_text(text.replace(old, new), encoding='utf-8')
           PY
 
+      - name: Normalize generated Stage A regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/unit/test_research_package_final_review_round3_v2_1.py')
+          text = path.read_text(encoding='utf-8')
+          old = (
+              '    def raced_fd_path(fd: int, fallback: Path) -> Path:\n'
+              '        fd_state = os.fstat(fd)\n'
+              '        if fd_state.st_ino == repository_inode and repository.exists():\n'
+          )
+          new = (
+              '    repository_inode: int | None = None\n\n'
+              '    def raced_fd_path(fd: int, fallback: Path) -> Path:\n'
+              '        fd_state = os.fstat(fd)\n'
+              '        if (\n'
+              '            repository_inode is not None\n'
+              '            and fd_state.st_ino == repository_inode\n'
+              '            and repository.exists()\n'
+              '        ):\n'
+          )
+          if old not in text:
+              raise SystemExit('expected Stage A race regression pattern not found')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+
       - name: Create isolated test environment
         shell: bash
         run: |
