@@ -86,9 +86,9 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          test_path = Path('tests/unit/test_research_package_final_review_round3_v2_1.py')
-          test_text = test_path.read_text(encoding='utf-8')
-          test_path.write_text(test_text.replace('import os\n', '', 1), encoding='utf-8')
+          generated_test = Path('tests/unit/test_research_package_final_review_round3_v2_1.py')
+          generated_text = generated_test.read_text(encoding='utf-8')
+          generated_test.write_text(generated_text.replace('import os\n', '', 1), encoding='utf-8')
 
           source = Path('src/alpha_cycle/research_package_assembler_v2_1.py')
           text = source.read_text(encoding='utf-8')
@@ -105,6 +105,39 @@ jobs:
                   raise SystemExit(f'expected generated rollback fragment missing: {old!r}')
               text = text.replace(old, new, 1)
           source.write_text(text, encoding='utf-8')
+
+          rollback_test = Path('tests/unit/test_research_package_publication_rollback_v2_1.py')
+          rollback_text = rollback_test.read_text(encoding='utf-8')
+          old_fake = 'def _fake_owned_opportunity_persist(snapshot: SimpleNamespace, *, output_root: Path):\n'
+          new_fake = (
+              'def _fake_owned_opportunity_persist(\n'
+              '    snapshot: SimpleNamespace,\n'
+              '    *,\n'
+              '    output_root: Path,\n'
+              '    repository_root: Path | None = None,\n'
+              '    repository_fd: int | None = None,\n'
+              '):\n'
+              '    del repository_root, repository_fd\n'
+          )
+          if old_fake not in rollback_text:
+              raise SystemExit('expected rollback opportunity fake signature missing')
+          rollback_text = rollback_text.replace(old_fake, new_fake, 1)
+          old_json = '    def persist_owned_json(*, root, repository_name, snapshot_id, payload_without_id):\n        del root, snapshot_id, payload_without_id\n'
+          new_json = (
+              '    def persist_owned_json(\n'
+              '        *,\n'
+              '        root,\n'
+              '        repository_name,\n'
+              '        snapshot_id,\n'
+              '        payload_without_id,\n'
+              '        repository_root=None,\n'
+              '        repository_fd=None,\n'
+              '    ):\n'
+              '        del root, snapshot_id, payload_without_id, repository_root, repository_fd\n'
+          )
+          if old_json not in rollback_text:
+              raise SystemExit('expected rollback content-addressed fake signature missing')
+          rollback_test.write_text(rollback_text.replace(old_json, new_json, 1), encoding='utf-8')
           PY
 
       - name: Create isolated test environment
@@ -119,8 +152,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          /tmp/pr303-venv/bin/ruff check src/alpha_cycle/research_package_assembler_v2_1.py tests/unit/test_research_package_final_review_round3_v2_1.py
-          /tmp/pr303-venv/bin/pytest -q tests/unit/test_research_package_final_review_round3_v2_1.py tests/unit/test_research_package_exact_head_review_round2_v2_1.py
+          /tmp/pr303-venv/bin/ruff check src/alpha_cycle/research_package_assembler_v2_1.py tests/unit/test_research_package_final_review_round3_v2_1.py tests/unit/test_research_package_publication_rollback_v2_1.py
+          /tmp/pr303-venv/bin/pytest -q tests/unit/test_research_package_final_review_round3_v2_1.py tests/unit/test_research_package_exact_head_review_round2_v2_1.py tests/unit/test_research_package_publication_rollback_v2_1.py
           /tmp/pr303-venv/bin/mypy
           /tmp/pr303-venv/bin/pytest -q
 
@@ -131,7 +164,7 @@ jobs:
           rm -f .github/workflows/pr303-final-review-stage-a.yml .github/workflows/pr303-final-review-stage-a-pr.yml .github/pr303_stage_a_fd_patch.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/alpha_cycle/research_package_assembler_v2_1.py tests/unit/test_research_package_final_review_round3_v2_1.py .github/workflows/pr303-final-review-stage-a.yml .github/workflows/pr303-final-review-stage-a-pr.yml .github/pr303_stage_a_fd_patch.py
+          git add src/alpha_cycle/research_package_assembler_v2_1.py tests/unit/test_research_package_final_review_round3_v2_1.py tests/unit/test_research_package_publication_rollback_v2_1.py .github/workflows/pr303-final-review-stage-a.yml .github/workflows/pr303-final-review-stage-a-pr.yml .github/pr303_stage_a_fd_patch.py
           git diff --cached --check
           git commit -m "Harden PR303 descriptor-relative publication integrity"
           git push origin HEAD:feature/typed-research-package-assembler-v2-1
