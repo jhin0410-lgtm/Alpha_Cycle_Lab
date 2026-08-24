@@ -92,7 +92,11 @@ def test_fast_lane_package_does_not_require_forecast_tournament_binding(
         requested_lane=UnderwritingLane.FAST,
         horizon_trading_days=120,
     )
-    monkeypatch.setattr(assembler, "package_integrity_blocker_codes", lambda *args: ())
+    monkeypatch.setattr(
+        assembler,
+        "package_integrity_blocker_codes",
+        lambda *args, **kwargs: (),
+    )
 
     def fail_if_called(*args, **kwargs):
         del args, kwargs
@@ -186,7 +190,11 @@ def test_fast_lane_still_validates_persisted_decision_view(
         requested_lane=UnderwritingLane.FAST,
         horizon_trading_days=120,
     )
-    monkeypatch.setattr(assembler, "package_integrity_blocker_codes", lambda *args: ())
+    monkeypatch.setattr(
+        assembler,
+        "package_integrity_blocker_codes",
+        lambda *args, **kwargs: (),
+    )
     monkeypatch.setattr(
         assembler,
         "decision_view_has_valid_persisted_selection",
@@ -290,7 +298,11 @@ def test_ambiguous_component_selection_becomes_structured_blocker(
         requested_lane=UnderwritingLane.FAST,
         horizon_trading_days=120,
     )
-    monkeypatch.setattr(assembler, "package_integrity_blocker_codes", lambda *args: ())
+    monkeypatch.setattr(
+        assembler,
+        "package_integrity_blocker_codes",
+        lambda *args, **kwargs: (),
+    )
     blockers = []
 
     package = assembler._assemble_security_package(
