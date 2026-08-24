@@ -56,9 +56,12 @@ def test_forward_valuation_requires_real_market_cap_source(tmp_path: Path) -> No
     forward = components[9]
     forged = replace(forward, valuation_evidence_snapshot_id="f" * 64)
 
+    # The materialized fixture is internally consistent but has no independently authoritative
+    # valuation/provider acquisition contract. Production therefore rejects both the nominal and
+    # forged variants instead of promoting synthetic source identity into Deep authority.
     assert forward_valuation_sources_are_canonical(
         tmp_path, snapshot=forward, expectations=expectations
-    ) is True
+    ) is False
     assert forward_valuation_sources_are_canonical(
         tmp_path, snapshot=forged, expectations=expectations
     ) is False
@@ -69,7 +72,7 @@ def test_price_implied_requires_real_valuation_and_reference_frame(tmp_path: Pat
     price_implied = components[10]
     forged = replace(price_implied, reference_frame_snapshot_id="f" * 64)
 
-    assert price_implied_sources_are_canonical(tmp_path, snapshot=price_implied) is True
+    assert price_implied_sources_are_canonical(tmp_path, snapshot=price_implied) is False
     assert price_implied_sources_are_canonical(tmp_path, snapshot=forged) is False
 
 
