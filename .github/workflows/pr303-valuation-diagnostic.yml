@@ -7,6 +7,10 @@ on:
     paths:
       - .github/workflows/pr303-valuation-diagnostic.yml
 
+permissions:
+  issues: write
+  pull-requests: write
+
 jobs:
   diagnose:
     runs-on: ubuntu-24.04
@@ -81,3 +85,20 @@ jobs:
           python3 -m venv /tmp/pr303-diag
           /tmp/pr303-diag/bin/python -m pip install -e ".[dev]" >/dev/null
           /tmp/pr303-diag/bin/python .github/pr303_valuation_diagnostic.py
+
+      - name: Report diagnostic run
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="PR303 valuation diagnostic run id: ${GITHUB_RUN_ID}; head: ${GITHUB_SHA}; conclusion: ${JOB_STATUS}."
+          payload="$(BODY="$body" python3 -c 'import json,os; print(json.dumps({"body": os.environ["BODY"]}))')"
+          curl --fail-with-body -sS \
+            -X POST \
+            -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/303/comments" \
+            -d "$payload"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          JOB_STATUS: ${{ job.status }}
