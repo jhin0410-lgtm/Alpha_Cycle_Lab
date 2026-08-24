@@ -21,14 +21,24 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
     UncertaintyLevel,
 )
 from alpha_cycle.intelligence.decision_view_v2_1 import (
-    ConsensusGapObservation,
-    DecisionExpectationGapSnapshot,
     DecisionViewSnapshot,
-    PriceImpliedGapObservation,
+    build_decision_expectation_gap,
     build_decision_view_selection_rule,
     persist_decision_expectation_gap,
     persist_decision_view,
     persist_decision_view_selection_rule,
+)
+from alpha_cycle.intelligence.epistemic_defense import (
+    EpistemicDefensePackageSnapshot,
+    persist_epistemic_defense_package,
+)
+from alpha_cycle.intelligence.expectation_gap_contract import ExpectationSemantics
+from alpha_cycle.intelligence.expectation_state import (
+    CertifiedExpectationObservation,
+    ExpectationKind,
+    ExpectationMetric,
+    ExpectationStateSnapshot,
+    persist_expectation_state,
 )
 from alpha_cycle.intelligence.forecast_ledger import (
     ForecasterKind,
@@ -38,20 +48,43 @@ from alpha_cycle.intelligence.forecast_ledger import (
     PrimaryErrorMetric,
     persist_forecast_registration,
 )
+from alpha_cycle.intelligence.forward_valuation import (
+    ForwardValuationMetric,
+    ForwardValuationObservation,
+    ForwardValuationStateSnapshot,
+    ForwardValuationStatus,
+    persist_forward_valuation_state,
+)
 from alpha_cycle.intelligence.payoff_surface import (
     PayoffScenario,
     PayoffSurfaceSnapshot,
     ScenarioLabel,
     persist_payoff_surface,
 )
+from alpha_cycle.intelligence.price_implied_requirement import (
+    PriceImpliedRequirementObservation,
+    PriceImpliedRequirementSnapshot,
+    PriceImpliedRequirementStatus,
+    ReferenceFrameKind,
+    persist_price_implied_requirement,
+)
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
 from alpha_cycle.intelligence.research_run_ledger_v2_1 import ResearchRunKind
+from alpha_cycle.intelligence.semiconductor_causal_graph import (
+    CausalEdge,
+    CausalEdgeDirection,
+    CausalNode,
+    CausalNodeType,
+    CriticalStateVariable,
+    TransmissionLag,
+    build_semiconductor_causal_graph,
+    persist_semiconductor_causal_graph,
+)
 from alpha_cycle.intelligence.underwriter_v2_1 import (
-    SUPPLEMENTAL_DEEP_ELEMENTS,
-    ForecastTournamentAssessment,
     UnderwritingLane,
-    UnderwritingReadiness,
-    UnderwritingReadinessSnapshot,
+    build_underwriting_context,
+    build_underwriting_readiness,
+    persist_underwriting_context,
     persist_underwriting_readiness,
 )
 from alpha_cycle.investment_thesis_repository_v2_1 import persist_investment_thesis
@@ -65,19 +98,9 @@ EVAL = date(2026, 8, 23)
 TARGET = date(2026, 12, 31)
 ACTIVE_GUARDRAILS = load_decision_system_v21_guardrails()
 GUARDRAIL = ACTIVE_GUARDRAILS.evidence_id
-DEEP_REQUIRED_ELEMENTS = (
-    ACTIVE_GUARDRAILS.deep_lane_required_elements + SUPPLEMENTAL_DEEP_ELEMENTS
-)
 A = "a" * 64
 B = "b" * 64
 C = "c" * 64
-D = "d" * 64
-E = "e" * 64
-F = "f" * 64
-CAUSAL_GRAPH_ID = "1" * 64
-FORWARD_VALUATION_ID = "2" * 64
-PRICE_IMPLIED_ID = "3" * 64
-EPISTEMIC_DEFENSE_ID = "4" * 64
 
 
 def _uncertainty() -> ThesisUncertainty:
@@ -192,6 +215,148 @@ def _registration(
     )
 
 
+def _causal_graph(thesis: InvestmentThesisSnapshot, offset: int):
+    states = tuple(CriticalStateVariable)
+    nodes = tuple(
+        CausalNode(
+            node_id=f"state-{state.value}",
+            label=state.value,
+            node_type=CausalNodeType.CRITICAL_STATE,
+            description=f"Fixture critical state {state.value}.",
+            critical_state_variable=state,
+        )
+        for state in states
+    )
+    edge = CausalEdge(
+        edge_id="fixture-transmission",
+        source_node_id=nodes[0].node_id,
+        target_node_id=nodes[1].node_id,
+        mechanism="Fixture transmission remains falsifiable.",
+        epistemic_status=EpistemicStatus.ECONOMIC_HYPOTHESIS,
+        direction=CausalEdgeDirection.POSITIVE,
+        lag=TransmissionLag(minimum_days=1),
+        regime_applicability=("fixture-regime",),
+        evidence_refs=(),
+        opposing_evidence_refs=(),
+        falsifier="Observed transmission does not occur.",
+    )
+    return build_semiconductor_causal_graph(
+        graph_id=f"fixture-{thesis.security_id}",
+        snapshot_version=1,
+        parent_snapshot_id=None,
+        captured_at=NOW + timedelta(seconds=21 + offset),
+        evaluation_date=EVAL.isoformat(),
+        security_id=thesis.security_id,
+        nodes=nodes,
+        edges=(edge,),
+        source_snapshot_ids=(A,),
+    )
+
+
+def _expectations(thesis: InvestmentThesisSnapshot, offset: int) -> ExpectationStateSnapshot:
+    semantics = ExpectationSemantics(
+        provider_id="provider-a",
+        provider_semantics_certified=True,
+        target_period_semantics_certified=True,
+        metric_semantics_certified=True,
+        aggregation_semantics_certified=True,
+        observation_timestamp_certified=True,
+        provider_vintage_certified=False,
+        comparable_prior_snapshot_available=False,
+        comparable_snapshot_scope_certified=False,
+        revision_calculation_certified=False,
+        numeric_evidence_available=True,
+        source_scope="fixture-consensus",
+    )
+    observation = CertifiedExpectationObservation(
+        security_id=thesis.security_id,
+        metric=ExpectationMetric.NET_INCOME,
+        target_period="2026",
+        target_period_end=TARGET,
+        expectation_kind=ExpectationKind.MARKET_CONSENSUS,
+        value=18_000_000.0 + offset,
+        unit="KRW_million",
+        observed_at=NOW - timedelta(hours=1),
+        source_evidence_id=A,
+        semantics=semantics,
+        market_consensus_certified=True,
+        aggregation_method="fixture-median",
+        sample_count=3,
+    )
+    return ExpectationStateSnapshot(
+        captured_at=NOW + timedelta(seconds=22 + offset),
+        evaluation_date=EVAL,
+        observations=(observation,),
+        source_snapshot_ids=(A,),
+    )
+
+
+def _forward_valuation(
+    thesis: InvestmentThesisSnapshot,
+    expectations: ExpectationStateSnapshot,
+    offset: int,
+) -> ForwardValuationStateSnapshot:
+    expectation = expectations.observations[0]
+    expectation_krw = float(expectation.value) * 1_000_000.0
+    market_cap = expectation_krw * 10.0
+    observation = ForwardValuationObservation(
+        security_id=thesis.security_id,
+        expectation_provider_id=expectation.provider_id,
+        expectation_kind=expectation.expectation_kind,
+        expectation_metric=expectation.metric,
+        target_period=expectation.target_period,
+        target_period_end=expectation.target_period_end,
+        expectation_observed_at=expectation.observed_at,
+        expectation_source_evidence_id=expectation.source_evidence_id,
+        expectation_value=float(expectation.value),
+        expectation_unit=expectation.unit,
+        expectation_value_krw=expectation_krw,
+        market_cap_krw=market_cap,
+        valuation_metric=ForwardValuationMetric.FORWARD_PE,
+        multiple=10.0,
+        status=ForwardValuationStatus.AVAILABLE,
+    )
+    return ForwardValuationStateSnapshot(
+        captured_at=NOW + timedelta(seconds=23 + offset),
+        evaluation_date=EVAL,
+        valuation_evidence_snapshot_id=B,
+        expectation_state_snapshot_id=expectations.snapshot_id,
+        guardrail_evidence_id=GUARDRAIL,
+        observations=(observation,),
+    )
+
+
+def _price_implied(
+    thesis: InvestmentThesisSnapshot,
+    expectations: ExpectationStateSnapshot,
+    offset: int,
+) -> PriceImpliedRequirementSnapshot:
+    expectation = expectations.observations[0]
+    implied_value = float(expectation.value) * 1_000_000.0
+    observation = PriceImpliedRequirementObservation(
+        security_id=thesis.security_id,
+        reference_id="fixture-price-reference",
+        reference_kind=ReferenceFrameKind.EXPLICIT_SCENARIO_ASSUMPTION,
+        valuation_metric=ForwardValuationMetric.FORWARD_PE,
+        implied_metric=ExpectationMetric.NET_INCOME,
+        target_period=expectation.target_period,
+        target_period_end=expectation.target_period_end,
+        reference_multiple=10.0,
+        market_cap_krw=implied_value * 10.0,
+        implied_value_krw=implied_value,
+        status=PriceImpliedRequirementStatus.AVAILABLE,
+    )
+    return PriceImpliedRequirementSnapshot(
+        captured_at=NOW + timedelta(seconds=24 + offset),
+        evaluation_date=EVAL,
+        security_id=thesis.security_id,
+        valuation_evidence_snapshot_id=B,
+        reference_frame_snapshot_id=C,
+        guardrail_evidence_id=GUARDRAIL,
+        observations=(observation,),
+    )
+
+
 def _components(thesis: InvestmentThesisSnapshot, offset: int):
     security_id = thesis.security_id
     selected_registration = _registration(
@@ -210,6 +375,7 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         dependency_cluster_id=f"benchmark-{security_id}",
         forecast_value=18_000_000.0 + offset,
     )
+    registrations = (selected_registration, benchmark_registration)
     selection_rule = build_decision_view_selection_rule(
         rule_id=f"fixture-selection-{security_id}",
         registered_at=NOW - timedelta(hours=4),
@@ -251,107 +417,70 @@ def _components(thesis: InvestmentThesisSnapshot, offset: int):
         forecast_origin=NOW - timedelta(hours=2),
         information_cutoff=NOW - timedelta(hours=3),
         tournament_forecast_snapshot_ids=tuple(
-            sorted(
-                (
-                    selected_registration.snapshot_id,
-                    benchmark_registration.snapshot_id,
-                )
-            )
+            sorted(item.snapshot_id for item in registrations)
         ),
         tournament_dependency_overlap=False,
         guardrail_evidence_id=GUARDRAIL,
     )
-    gap = DecisionExpectationGapSnapshot(
+    context = build_underwriting_context(
+        thesis,
+        captured_at=NOW + timedelta(seconds=18 + offset),
+        evaluation_date=EVAL,
+        transmission_evidence_refs=(A,),
+        opportunity_set_comparison_refs=(B,),
+        portfolio_overlap_evidence_refs=(C,),
+    )
+    causal_graph = _causal_graph(thesis, offset)
+    expectations = _expectations(thesis, offset)
+    forward_valuation = _forward_valuation(thesis, expectations, offset)
+    price_implied = _price_implied(thesis, expectations, offset)
+    epistemic = EpistemicDefensePackageSnapshot(
+        captured_at=NOW + timedelta(seconds=25 + offset),
+        thesis_snapshot_id=thesis.snapshot_id,
+        counter_thesis_snapshot_id=A,
+        blind_spot_snapshot_id=B,
+        guardrail_evidence_id=GUARDRAIL,
+        required_contracts_present=True,
+        high_materiality_counter_explanation_count=0,
+        high_materiality_unresolved_contradiction_count=0,
+        uncovered_high_materiality_blind_spot_count=0,
+        blind_spot_promotion_candidate_count=0,
+        research_flags=(),
+    )
+    gap = build_decision_expectation_gap(
+        view,
+        expectations,
         captured_at=NOW + timedelta(seconds=40 + offset),
         evaluation_date=EVAL,
-        decision_view_snapshot_id=view.snapshot_id,
-        expectation_state_snapshot_id=F,
-        price_implied_requirement_snapshot_id=PRICE_IMPLIED_ID,
-        security_id=security_id,
-        target_variable=view.target_variable,
-        target_date=view.target_date,
-        unit=view.unit,
-        consensus_gaps=(
-            ConsensusGapObservation(
-                provider_id="provider-a",
-                source_evidence_id=A,
-                observed_at=NOW - timedelta(hours=1),
-                decision_value=view.selected_forecast_value,
-                consensus_value=18_000_000.0,
-                unit=view.unit,
-                absolute_gap=view.selected_forecast_value - 18_000_000.0,
-                relative_gap=(view.selected_forecast_value - 18_000_000.0)
-                / 18_000_000.0,
-            ),
-        ),
-        price_implied_gaps=(
-            PriceImpliedGapObservation(
-                reference_id="fixture-price-reference",
-                reference_kind="forward_multiple",
-                reference_multiple=10.0,
-                decision_value_krw=view.selected_forecast_value * 1_000_000.0,
-                implied_value_krw=18_000_000.0 * 1_000_000.0,
-                absolute_gap_krw=(
-                    view.selected_forecast_value - 18_000_000.0
-                ) * 1_000_000.0,
-                relative_gap=(
-                    view.selected_forecast_value - 18_000_000.0
-                ) / 18_000_000.0,
-            ),
-        ),
-        flags=(),
-        guardrail_evidence_id=GUARDRAIL,
+        price_implied=price_implied,
     )
-    tournament = ForecastTournamentAssessment(
-        comparable=True,
-        forecast_snapshot_ids=(
-            selected_registration.snapshot_id,
-            benchmark_registration.snapshot_id,
-        ),
-        forecast_ids=(
-            selected_registration.forecast_id,
-            benchmark_registration.forecast_id,
-        ),
-        security_id=security_id,
-        target_variable=view.target_variable,
-        target_date=view.target_date,
-        unit=view.unit,
-        forecast_origin=view.forecast_origin,
-        information_cutoff=view.information_cutoff,
-        primary_error_metric="absolute_error",
-        distinct_forecaster_count=2,
-        dependency_cluster_count=2,
-        blockers=(),
-        flags=(),
-    )
-    underwriting = UnderwritingReadinessSnapshot(
+    underwriting = build_underwriting_readiness(
+        thesis,
+        context,
+        lane=UnderwritingLane.DEEP,
         captured_at=NOW + timedelta(seconds=50 + offset),
         evaluation_date=EVAL,
-        thesis_snapshot_id=thesis.snapshot_id,
-        security_id=security_id,
-        lane=UnderwritingLane.DEEP,
-        readiness=UnderwritingReadiness.DEEP_LANE_READY_FOR_HUMAN_REVIEW,
-        guardrail_evidence_id=GUARDRAIL,
-        context_snapshot_id=C,
-        causal_graph_snapshot_id=CAUSAL_GRAPH_ID,
-        forecast_tournament=tournament,
-        expectation_state_snapshot_id=F,
-        forward_valuation_snapshot_id=FORWARD_VALUATION_ID,
-        price_implied_requirement_snapshot_id=PRICE_IMPLIED_ID,
-        payoff_surface_snapshot_id=payoff.snapshot_id,
-        epistemic_defense_snapshot_id=EPISTEMIC_DEFENSE_ID,
-        required_elements_satisfied=DEEP_REQUIRED_ELEMENTS,
-        required_elements_missing=(),
-        blockers=(),
-        flags=(),
+        forecasts=registrations,
+        causal_graph=causal_graph,
+        expectations=expectations,
+        forward_valuation=forward_valuation,
+        price_implied=price_implied,
+        payoff_surface=payoff,
+        epistemic_defense=epistemic,
     )
     return (
         payoff,
         view,
         gap,
         underwriting,
-        (selected_registration, benchmark_registration),
+        registrations,
         selection_rule,
+        context,
+        causal_graph,
+        expectations,
+        forward_valuation,
+        price_implied,
+        epistemic,
     )
 
 
@@ -388,9 +517,20 @@ def _persist_components(
     mismatch_first_tournament: bool = False,
 ) -> None:
     for index, thesis in enumerate(theses):
-        payoff, view, gap, underwriting, registrations, selection_rule = _components(
-            thesis, index
-        )
+        (
+            payoff,
+            view,
+            gap,
+            underwriting,
+            registrations,
+            selection_rule,
+            context,
+            causal_graph,
+            expectations,
+            forward_valuation,
+            price_implied,
+            epistemic,
+        ) = _components(thesis, index)
         if mismatch_first_tournament and index == 0:
             underwriting = replace(
                 underwriting,
@@ -402,6 +542,21 @@ def _persist_components(
         persist_decision_view_selection_rule(selection_rule, output_root=tmp_path)
         for registration in registrations:
             persist_forecast_registration(registration, output_root=tmp_path)
+        persist_underwriting_context(context, output_root=tmp_path)
+        persist_semiconductor_causal_graph(
+            causal_graph,
+            output_root=tmp_path / "semiconductor_causal_graph",
+        )
+        persist_expectation_state(
+            expectations,
+            output_root=tmp_path / "expectation_state",
+        )
+        persist_forward_valuation_state(
+            forward_valuation,
+            output_root=tmp_path / "forward_valuation",
+        )
+        persist_price_implied_requirement(price_implied, output_root=tmp_path)
+        persist_epistemic_defense_package(epistemic, output_root=tmp_path)
         persist_payoff_surface(payoff, output_root=tmp_path / "payoff_surface")
         persist_decision_view(view, output_root=tmp_path)
         persist_decision_expectation_gap(gap, output_root=tmp_path)
