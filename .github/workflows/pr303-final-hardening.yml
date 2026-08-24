@@ -33,6 +33,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/pr303_final_hardening.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''def replace_between(path: str, start: str, end: str, replacement: str) -> None:
+              text = read(path)
+              pattern = re.compile(re.escape(start) + r".*?(?=" + re.escape(end) + r")", re.S)
+              updated, count = pattern.subn(replacement.rstrip() + "\\n\\n", text, count=1)
+              if count != 1:
+                  raise RuntimeError(f"{path}: could not replace block {start!r} -> {end!r}")
+              write(path, updated)
+          '''
+          new = '''def replace_between(path: str, start: str, end: str, replacement: str) -> None:
+              text = read(path)
+              try:
+                  start_index = text.index(start)
+                  end_index = text.index(end, start_index + len(start))
+              except ValueError as exc:
+                  raise RuntimeError(
+                      f"{path}: could not replace block {start!r} -> {end!r}"
+                  ) from exc
+              updated = text[:start_index] + replacement.rstrip() + "\\n\\n" + text[end_index:]
+              write(path, updated)
+          '''
+          if old not in text:
+              raise SystemExit('replace_between helper did not match expected script text')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
           python3 .github/pr303_final_hardening.py
           rm -f .github/pr303_final_hardening.py .github/workflows/pr303-final-hardening.yml
 
@@ -92,16 +120,16 @@ jobs:
         run: |
           set -euo pipefail
           body="PR303 final seven-finding hardening passed Ruff, mypy, and full pytest. Tested commit pushed: ${TESTED_HEAD}. Actions run id: ${GITHUB_RUN_ID}."
+          payload="$(BODY="$body" python3 -c 'import json,os; print(json.dumps({"body": os.environ["BODY"]}))')"
           curl --fail-with-body -sS \
             -X POST \
             -H "Authorization: Bearer ${GITHUB_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/303/comments" \
-            -d "$(python3 -c 'import json,os; print(json.dumps({"body": os.environ["BODY"]}))')"
+            -d "$payload"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TESTED_HEAD: ${{ steps.publish.outputs.tested_head }}
-          BODY: PR303 final seven-finding hardening succeeded.
 
       - name: Report failed gate
         if: failure()
