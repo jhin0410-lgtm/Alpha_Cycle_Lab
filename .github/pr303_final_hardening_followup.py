@@ -14,10 +14,34 @@ def replace_once(path: str, old: str, new: str) -> None:
     target.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
-# CSV round-trips may materialize boolean columns as numpy.bool_.  Accept only
-# actual Python/numpy booleans, then compare their canonical Python value.
+# CSV round-trips must preserve identifier semantics and canonical nulls.  Symbols
+# such as 000660 are identifiers, not numbers, while CSV NaN and in-memory None
+# represent the same canonical valuation null.
 SOURCE = "src/alpha_cycle/research_package_source_revalidation_v2_1.py"
 replace_once(SOURCE, "import pandas as pd\n", "import numpy as np\nimport pandas as pd\n")
+replace_once(
+    SOURCE,
+    '''from alpha_cycle.intelligence.valuation import (
+    VALUATION_SCHEMA_VERSION,
+    ValuationEvidenceSnapshot,
+    _valuation_metrics,
+)
+''',
+    '''from alpha_cycle.intelligence.valuation import (
+    VALUATION_SCHEMA_VERSION,
+    ValuationEvidenceSnapshot,
+    _records,
+    _valuation_metrics,
+)
+''',
+)
+replace_once(
+    SOURCE,
+    '''        if column in {"ticker", "stock_code", "corp_code", "report_code"}
+''',
+    '''        if column in {"ticker", "stock_code", "corp_code", "report_code", "symbol"}
+''',
+)
 replace_once(
     SOURCE,
     '''        raw_priced = row.get("priced")
@@ -33,6 +57,33 @@ replace_once(
         expected_priced = price is not None
         if bool(raw_priced) is not expected_priced:
             return False
+''',
+)
+replace_once(
+    SOURCE,
+    '''    try:
+        recomputed = _valuation_metrics(values, snapshot.financial_history)
+        pd.testing.assert_frame_equal(
+            recomputed.reset_index(drop=True),
+            snapshot.valuation_metrics.reset_index(drop=True),
+            check_dtype=False,
+            check_exact=False,
+            rtol=1e-12,
+            atol=1e-6,
+        )
+    except (AssertionError, KeyError, TypeError, ValueError):
+        return False
+    return True
+''',
+    '''    try:
+        recomputed = _valuation_metrics(values, snapshot.financial_history)
+        if _records(recomputed.reset_index(drop=True)) != _records(
+            snapshot.valuation_metrics.reset_index(drop=True)
+        ):
+            return False
+    except (KeyError, TypeError, ValueError):
+        return False
+    return True
 ''',
 )
 
