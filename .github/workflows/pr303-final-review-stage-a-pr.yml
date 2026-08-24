@@ -85,9 +85,26 @@ jobs:
           python3 .github/pr303_stage_a_fd_patch.py
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('tests/unit/test_research_package_final_review_round3_v2_1.py')
-          text = path.read_text(encoding='utf-8')
-          path.write_text(text.replace('import os\n', '', 1), encoding='utf-8')
+
+          test_path = Path('tests/unit/test_research_package_final_review_round3_v2_1.py')
+          test_text = test_path.read_text(encoding='utf-8')
+          test_path.write_text(test_text.replace('import os\n', '', 1), encoding='utf-8')
+
+          source = Path('src/alpha_cycle/research_package_assembler_v2_1.py')
+          text = source.read_text(encoding='utf-8')
+          replacements = (
+              ('previous_temp, _ = _write_owned_pointer_temp_at(', 'previous_temp_name, _ = _write_owned_pointer_temp_at('),
+              ('publication.repository_fd,\n                        previous_temp,\n                        publication.pointer.name,', 'publication.repository_fd,\n                        previous_temp_name,\n                        publication.pointer.name,'),
+              ('os.unlink(previous_temp, dir_fd=publication.repository_fd)', 'os.unlink(previous_temp_name, dir_fd=publication.repository_fd)'),
+              ('previous_temp = _write_owned_pointer_temp(\n            publication.root,', 'previous_temp_path = _write_owned_pointer_temp(\n            publication.root,'),
+              ('_replace_pointer_if_version_matches(\n                previous_temp,\n                publication.pointer,', '_replace_pointer_if_version_matches(\n                previous_temp_path,\n                publication.pointer,'),
+              ('previous_temp.unlink(missing_ok=True)', 'previous_temp_path.unlink(missing_ok=True)'),
+          )
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'expected generated rollback fragment missing: {old!r}')
+              text = text.replace(old, new, 1)
+          source.write_text(text, encoding='utf-8')
           PY
 
       - name: Create isolated test environment
