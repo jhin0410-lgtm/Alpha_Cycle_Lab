@@ -71,7 +71,10 @@ def test_unproven_deep_authority_blocks_before_orchestration(tmp_path: Path) -> 
     assert receipt.orchestrated is None
     assert receipt.run is not None
     assert receipt.run.kind is ResearchRunKind.PRE_ORCHESTRATION_BLOCKED
-    assert receipt.blockers
+    assert any(
+        blocker.code == "underwriting_persisted_evidence_canonical_mismatch"
+        for blocker in receipt.blockers
+    )
     assert not (tmp_path / "opportunity_candidate").exists()
     assert not (tmp_path / "opportunity_set").exists()
     assert not (tmp_path / "research_round_v2_1").exists()
