@@ -10,7 +10,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
+from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import (
+    ResearchRoundMode,
+    ResearchRoundStatus,
+)
 from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 from alpha_cycle.live_typed_source_manifest_v2_1 import (
     freeze_live_typed_source_manifest,
@@ -125,6 +128,16 @@ def run_live_typed_research_round(
             artifact_root=root,
         )
     observatory = load_latest_observatory_state(root)
+    round_status = (
+        assembly.orchestrated.snapshot.status
+        if assembly is not None and assembly.orchestrated is not None
+        else None
+    )
+    ready_statuses = {
+        ResearchRoundStatus.PROSPECTIVE_READY_FOR_REGISTRATION,
+        ResearchRoundStatus.PROSPECTIVE_REGISTERED,
+        ResearchRoundStatus.REPLAY_READY,
+    }
     payload: dict[str, object] = {
         "schema_version": 1,
         "mode": mode.value,
@@ -135,8 +148,9 @@ def run_live_typed_research_round(
         "thesis": thesis_receipt.payload(),
         "preflight": preflight.payload(),
         "assembly": assembly.payload() if assembly is not None else None,
+        "research_round_status": round_status.value if round_status is not None else None,
         "observatory_ledger_snapshot_id": observatory.snapshot_id if observatory else None,
-        "ready": bool(assembly is not None and assembly.full_package_ready),
+        "ready": round_status in ready_statuses,
         "network_collection_enabled": False,
         "provider_authority_certified": False,
         "valuation_authority_certified": False,
