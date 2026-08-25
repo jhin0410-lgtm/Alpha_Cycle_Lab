@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 from alpha_cycle.intelligence.decision_thesis_v2 import (
@@ -212,3 +213,41 @@ def test_future_thesis_does_not_satisfy_preflight(tmp_path) -> None:
         artifact_root=tmp_path,
     )
     assert {item.security_id for item in receipt.blockers} == {"000660", "005930"}
+
+
+def test_expected_binding_selects_exact_snapshot_instead_of_hash_tie_winner(
+    tmp_path,
+) -> None:
+    _request(tmp_path)
+    captured_at = NOW + timedelta(seconds=10)
+    first = replace(
+        _thesis("000660", captured_at),
+        thesis_id="source-family-a",
+        variant_view="Source family A; no investment conclusion.",
+    )
+    second = replace(
+        _thesis("000660", captured_at),
+        thesis_id="source-family-b",
+        variant_view="Source family B; no investment conclusion.",
+    )
+    expected = min((first, second), key=lambda item: item.snapshot_id)
+    samsung = _thesis("005930", captured_at)
+    for thesis in (first, second, samsung):
+        persist_investment_thesis(thesis, artifact_root=tmp_path)
+
+    receipt = preflight_pending_request_theses(
+        request_id="live-semiconductor-round",
+        run_id="preflight-exact-binding",
+        processed_at=NOW + timedelta(minutes=1),
+        artifact_root=tmp_path,
+        expected_thesis_snapshot_ids=(
+            ("000660", expected.snapshot_id),
+            ("005930", samsung.snapshot_id),
+        ),
+    )
+
+    assert receipt.ready_for_package_assembly is True
+    assert tuple(item.snapshot_id for item in receipt.thesis_snapshots) == (
+        expected.snapshot_id,
+        samsung.snapshot_id,
+    )

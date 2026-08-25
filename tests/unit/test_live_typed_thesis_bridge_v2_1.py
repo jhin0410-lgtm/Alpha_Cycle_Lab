@@ -447,3 +447,30 @@ def test_result_repository_symlink_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="repository cannot be a symlink"):
         _persist_result(tmp_path, {"safe": True})
+
+
+def test_thesis_repository_symlink_is_rejected_before_persistence(tmp_path: Path) -> None:
+    market_dir, research_dir, captured_at = _persist_sources(tmp_path)
+    manifest = freeze_live_typed_source_manifest(
+        artifact_root=tmp_path,
+        source_directories={"market": market_dir, "research": research_dir},
+        evaluation_date=date(2026, 8, 25),
+        research_cutoff_at=captured_at + timedelta(minutes=20),
+        frozen_at=captured_at + timedelta(minutes=10),
+    )
+    outside = tmp_path / "outside-theses"
+    outside.mkdir()
+    repository = tmp_path / "investment_thesis_v2_1"
+    try:
+        os.symlink(outside, repository, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    with pytest.raises(ValueError, match="thesis repository cannot be a symlink"):
+        produce_source_backed_theses(
+            manifest,
+            artifact_root=tmp_path,
+            security_ids=("000660",),
+            horizon_trading_days=120,
+            captured_at=captured_at + timedelta(minutes=15),
+        )

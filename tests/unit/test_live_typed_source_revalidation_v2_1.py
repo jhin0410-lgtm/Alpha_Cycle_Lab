@@ -200,6 +200,22 @@ def test_research_pit_uses_korean_source_civil_date(tmp_path: Path) -> None:
     assert replayed.snapshot_id == snapshot.snapshot_id
 
 
+def test_research_revalidation_preserves_round_trip_float_identity(tmp_path: Path) -> None:
+    market = _market_snapshot()
+    original = _research_snapshot(market.snapshot_id)
+    financials = original.financials.copy()
+    financials["value"] = financials["value"].astype(float)
+    financials.loc[0, "value"] = 0.08845845059190371
+    macro = original.macro.copy()
+    macro.loc[0, "value"] = 0.08845845059190371
+    snapshot = replace(original, financials=financials, macro=macro)
+    files = write_fundamental_macro_snapshot(tmp_path / "research", snapshot)
+
+    replayed = revalidate_research_snapshot(files[0].parent)
+
+    assert replayed.snapshot_id == snapshot.snapshot_id
+
+
 def test_market_revalidation_rejects_self_declared_forged_snapshot_id(tmp_path: Path) -> None:
     snapshot = _market_snapshot()
     files = write_market_intelligence_snapshot(tmp_path / "market", snapshot)

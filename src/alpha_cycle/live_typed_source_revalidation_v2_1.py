@@ -314,7 +314,7 @@ def _read_frame(
             f"snapshot CSV must be a regular file: {path}"
         )
     try:
-        return pd.read_csv(path, dtype=dtype)
+        return pd.read_csv(path, dtype=dtype, float_precision="round_trip")
     except (OSError, UnicodeDecodeError, pd.errors.ParserError, ValueError) as exc:
         raise LiveTypedSourceRevalidationError(
             f"cannot decode snapshot CSV: {path}"

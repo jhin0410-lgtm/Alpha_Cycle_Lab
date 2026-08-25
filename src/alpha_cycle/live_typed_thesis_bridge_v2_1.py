@@ -105,6 +105,7 @@ def produce_source_backed_theses(
         {str(key): value for key, value in row.items()}
         for row in canonical_research.financials.to_dict(orient="records")
     )
+    thesis_repository = _trusted_thesis_repository(root)
 
     theses: list[InvestmentThesisSnapshot] = []
     paths: list[Path] = []
@@ -162,7 +163,7 @@ def produce_source_backed_theses(
             horizon_trading_days=horizon_trading_days,
             captured_at=captured_at,
         )
-        path = root / "investment_thesis_v2_1" / f"{thesis.snapshot_id}.json"
+        path = thesis_repository / f"{thesis.snapshot_id}.json"
         if path.exists():
             if load_investment_thesis(path) != thesis:
                 raise ValueError("existing investment thesis conflicts with canonical replay")
@@ -334,6 +335,19 @@ def _required_source(
     if len(matches) != 1:
         raise ValueError(f"source manifest requires exactly one {role!r} source")
     return matches[0]
+
+
+def _trusted_thesis_repository(root: Path) -> Path:
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("artifact_root must be a real directory")
+    trusted_root = root.resolve()
+    repository = trusted_root / "investment_thesis_v2_1"
+    if repository.is_symlink():
+        raise ValueError("investment thesis repository cannot be a symlink")
+    repository.mkdir(parents=True, exist_ok=True)
+    if not repository.is_dir() or repository.resolve().parent != trusted_root:
+        raise ValueError("investment thesis repository escapes artifact_root")
+    return repository
 
 
 def _canonical_security_ids(security_ids: tuple[str, ...]) -> tuple[str, ...]:

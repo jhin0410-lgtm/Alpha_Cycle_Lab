@@ -134,10 +134,6 @@ def preflight_pending_request_theses(
         theses: list[InvestmentThesisSnapshot] = []
         blockers: list[ResearchRoundBlocker] = []
         for security_id in _unique_security_ids(request.security_ids):
-            thesis = thesis_index.find_latest(
-                security_id=security_id,
-                horizon_trading_days=request.horizon_trading_days,
-            )
             expected_id = (
                 expected_by_security.get(security_id)
                 if expected_by_security is not None
@@ -156,20 +152,32 @@ def preflight_pending_request_theses(
                     )
                 )
                 continue
-            if thesis is not None and expected_id is not None and thesis.snapshot_id != expected_id:
-                blockers.append(
-                    ResearchRoundBlocker(
-                        component="thesis",
-                        code="source_backed_thesis_binding_mismatch",
-                        detail=(
-                            "the latest persisted thesis does not match the exact thesis "
-                            "produced from the current frozen source manifest"
-                        ),
-                        security_id=security_id,
-                        snapshot_id=expected_id,
+            if expected_id is not None:
+                thesis = thesis_index.snapshots_by_id.get(expected_id)
+                if (
+                    thesis is None
+                    or thesis.captured_at > cutoff
+                    or thesis.security_id != security_id
+                    or thesis.horizon_trading_days != request.horizon_trading_days
+                ):
+                    blockers.append(
+                        ResearchRoundBlocker(
+                            component="thesis",
+                            code="source_backed_thesis_binding_mismatch",
+                            detail=(
+                                "the exact thesis produced from the current frozen source "
+                                "manifest is not eligible for this request and cutoff"
+                            ),
+                            security_id=security_id,
+                            snapshot_id=expected_id,
+                        )
                     )
+                    continue
+            else:
+                thesis = thesis_index.find_latest(
+                    security_id=security_id,
+                    horizon_trading_days=request.horizon_trading_days,
                 )
-                continue
             if thesis is None:
                 blockers.append(
                     ResearchRoundBlocker(
