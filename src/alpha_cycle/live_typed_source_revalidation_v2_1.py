@@ -308,6 +308,7 @@ def _read_frame(
     path: Path,
     *,
     dtype: dict[str, str] | None = None,
+    empty_as_na: bool = True,
 ) -> pd.DataFrame:
     if path.is_symlink() or not path.is_file():
         raise LiveTypedSourceRevalidationError(
@@ -319,7 +320,7 @@ def _read_frame(
             dtype=dtype,
             float_precision="round_trip",
             keep_default_na=False,
-            na_values=[""],
+            na_values=[""] if empty_as_na else None,
         )
     except (OSError, UnicodeDecodeError, pd.errors.ParserError, ValueError) as exc:
         raise LiveTypedSourceRevalidationError(
@@ -359,6 +360,7 @@ def _read_disclosure_frame(path: Path) -> pd.DataFrame:
             "rcept_no": "string",
             "corp_class": "string",
         },
+        empty_as_na=False,
     )
 
 

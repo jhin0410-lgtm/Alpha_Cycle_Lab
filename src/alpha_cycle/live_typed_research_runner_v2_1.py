@@ -65,6 +65,10 @@ def run_live_typed_research_round(
             raise ValueError("REPLAY requires manifest_path")
         if any(item is not None for item in (market_source_directory, research_source_directory)):
             raise ValueError("REPLAY cannot select mutable source directories")
+        if evaluation_date is not None or research_cutoff_at is not None:
+            raise ValueError(
+                "REPLAY takes evaluation_date and research_cutoff_at from the manifest"
+            )
         manifest = load_live_typed_source_manifest(manifest_path)
     else:
         if manifest_path is not None:
@@ -97,10 +101,13 @@ def run_live_typed_research_round(
         captured_at=manifest.research_cutoff_at,
     )
     recorded_at = processed_at - timedelta(microseconds=2)
+    requested_at = (
+        recorded_at if mode is ResearchRoundMode.REPLAY else manifest.frozen_at
+    )
     preflight_at = processed_at - timedelta(microseconds=1)
     request_receipt = record_analysis_request(
         request_id=request_id,
-        requested_at=manifest.frozen_at,
+        requested_at=requested_at,
         recorded_at=recorded_at,
         evaluation_date=manifest.evaluation_date,
         horizon_trading_days=horizon_trading_days,

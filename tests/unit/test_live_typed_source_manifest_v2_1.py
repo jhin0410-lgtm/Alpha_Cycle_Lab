@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -300,3 +301,36 @@ def test_manifest_rejects_duplicate_role_and_freeze_after_cutoff(tmp_path: Path)
         replace(manifest, sources=(manifest.sources[0], manifest.sources[0]))
     with pytest.raises(ValueError, match="frozen_at cannot follow"):
         replace(manifest, frozen_at=captured_at + timedelta(hours=2))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="directory junctions are Windows-specific")
+def test_persist_rejects_junction_backed_repository(tmp_path: Path) -> None:
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    captured_at = datetime(2026, 8, 25, 6, 0, tzinfo=UTC)
+    source = _write_source_snapshot(
+        artifact_root,
+        role="market-intelligence",
+        snapshot_id="c" * 64,
+        captured_at=captured_at,
+        evaluation_date=None,
+        content="stable",
+    )
+    manifest = freeze_live_typed_source_manifest(
+        artifact_root=artifact_root,
+        source_directories={"market": source},
+        evaluation_date=date(2026, 8, 25),
+        research_cutoff_at=captured_at + timedelta(hours=1),
+        frozen_at=captured_at + timedelta(minutes=30),
+    )
+    outside = tmp_path / "outside-manifests"
+    outside.mkdir()
+    repository = artifact_root / "live_typed_source_manifest_v2_1"
+    subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(repository), str(outside)],
+        check=True,
+        capture_output=True,
+    )
+
+    with pytest.raises(LiveTypedSourceManifestError, match="escapes artifact_root"):
+        persist_live_typed_source_manifest(manifest, artifact_root=artifact_root)

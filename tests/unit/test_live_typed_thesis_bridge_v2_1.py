@@ -32,6 +32,7 @@ from alpha_cycle.live_typed_research_runner_v2_1 import (
 from alpha_cycle.live_typed_source_manifest_v2_1 import freeze_live_typed_source_manifest
 from alpha_cycle.live_typed_thesis_bridge_v2_1 import produce_source_backed_theses
 from alpha_cycle.providers.tossinvest import Candle, MarketPrice
+from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
 
 
 def _persist_sources(
@@ -310,6 +311,32 @@ def test_one_command_runner_reaches_observatory_with_honest_package_blockers(
     )
     assert replay.payload()["mode"] == "replay"
     assert replay.payload()["network_collection_enabled"] is False
+    observatory = load_latest_observatory_state(tmp_path)
+    assert observatory is not None
+    replay_request = next(
+        item for item in observatory.ledger.requests if item.request_id == "live-v2-1-replay"
+    )
+    assert replay_request.requested_at == cutoff + timedelta(minutes=2, microseconds=-2)
+
+    for replay_dates in (
+        {"evaluation_date": date(2026, 8, 25)},
+        {"research_cutoff_at": cutoff},
+    ):
+        with pytest.raises(ValueError, match="takes evaluation_date and research_cutoff_at"):
+            run_live_typed_research_round(
+                artifact_root=tmp_path,
+                mode=ResearchRoundMode.REPLAY,
+                request_id="ignored-replay-date",
+                run_id="ignored-replay-date-run",
+                round_id="ignored-replay-date-round",
+                processed_at=cutoff + timedelta(minutes=3),
+                security_ids=("000660", "005930"),
+                horizon_trading_days=120,
+                requested_lane=UnderwritingLane.DEEP,
+                request_text="Replay dates must come only from the manifest.",
+                manifest_path=Path(str(payload["source_manifest_path"])),
+                **replay_dates,
+            )
 
 
 def test_missing_requested_ticker_is_a_structured_source_blocker(tmp_path: Path) -> None:
