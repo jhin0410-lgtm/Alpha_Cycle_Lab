@@ -44,15 +44,27 @@ CAPTURED = datetime(2026, 8, 10, 13, 33, tzinfo=KST)
 EVALUATION_DATE = date(2026, 8, 10)
 
 
-def _payload(symbol: str) -> dict[str, object]:
+def _payload(
+    symbol: str,
+    *,
+    reported_symbol: str | None = None,
+    rt_cd: str = "0",
+    null_field: bool = False,
+) -> dict[str, object]:
     seed = 100 if symbol == "000660" else 200
     row = {f"data{index}": str(seed + index) for index in range(1, 6)}
+    output2 = [dict(row) for _ in range(6)]
+    if null_field:
+        output2[0]["data4"] = None
     return {
-        "rt_cd": "0",
+        "rt_cd": rt_cd,
         "msg_cd": "MCA00000",
         "msg1": "ok",
-        "output1": {"sht_cd": f"A{symbol}", "estdate": "20260630"},
-        "output2": [dict(row) for _ in range(6)],
+        "output1": {
+            "sht_cd": f"A{reported_symbol or symbol}",
+            "estdate": "20260630",
+        },
+        "output2": output2,
         "output3": [dict(row) for _ in range(3)],
         "output4": [
             {"dt": "2023.12"},
@@ -64,21 +76,43 @@ def _payload(symbol: str) -> dict[str, object]:
     }
 
 
-def _source(tmp_path: Path) -> Path:
+def _source(
+    tmp_path: Path,
+    *,
+    future_record: bool = False,
+    reported_symbol: str | None = None,
+    rt_cd: str = "0",
+    null_field: bool = False,
+) -> Path:
     records = tuple(
         KisEstimatePerformEvidence(
             symbol=symbol,
-            retrieved_at=CAPTURED - timedelta(seconds=offset),
+            retrieved_at=(
+                CAPTURED + timedelta(minutes=1)
+                if future_record and symbol == "005930"
+                else CAPTURED - timedelta(seconds=offset)
+            ),
             endpoint=KIS_ESTIMATE_PERFORM_ENDPOINT,
             tr_id=KIS_ESTIMATE_PERFORM_TR_ID,
             source_scope=KIS_RESEARCH_SOURCE_SCOPE,
             raw_response_sha256=("a" if symbol == "000660" else "b") * 64,
-            raw_payload=_payload(symbol),
+            raw_payload=_payload(
+                symbol,
+                reported_symbol=(
+                    reported_symbol if symbol == "000660" else None
+                ),
+                rt_cd=rt_cd,
+                null_field=null_field and symbol == "000660",
+            ),
         )
         for offset, symbol in enumerate(("000660", "005930"), start=1)
     )
     snapshot = ExpectationIntelligenceSnapshot(
-        captured_at=max(item.retrieved_at for item in records),
+        captured_at=(
+            CAPTURED - timedelta(seconds=1)
+            if future_record
+            else max(item.retrieved_at for item in records)
+        ),
         provider="korea_investment_openapi",
         source_scope=KIS_RESEARCH_SOURCE_SCOPE,
         records=records,
@@ -199,6 +233,36 @@ def test_future_source_and_future_revision_cutoffs_are_rejected(tmp_path: Path) 
         )
 
 
+def test_record_after_cutoff_and_stale_manifest_capture_are_rejected(tmp_path: Path) -> None:
+    source = _source(tmp_path, future_record=True)
+    with pytest.raises(ProviderForwardAuthorityError, match="retrieved after|latest record"):
+        build_kis_provider_authority(
+            source,
+            evaluation_date=EVALUATION_DATE,
+            research_cutoff_at=CAPTURED,
+        )
+
+
+def test_provider_reported_security_must_match_requested_record(tmp_path: Path) -> None:
+    source = _source(tmp_path, reported_symbol="005930")
+    with pytest.raises(ProviderForwardAuthorityError, match="reported security"):
+        build_kis_provider_authority(
+            source,
+            evaluation_date=EVALUATION_DATE,
+            research_cutoff_at=CAPTURED,
+        )
+
+
+def test_unsuccessful_kis_envelope_is_rejected(tmp_path: Path) -> None:
+    source = _source(tmp_path, rt_cd="1")
+    with pytest.raises(ProviderForwardAuthorityError, match="not successful"):
+        build_kis_provider_authority(
+            source,
+            evaluation_date=EVALUATION_DATE,
+            research_cutoff_at=CAPTURED,
+        )
+
+
 def test_stale_revision_substitution_is_rejected(tmp_path: Path) -> None:
     directory, _ = _published(tmp_path)
     with pytest.raises(ProviderForwardAuthorityError, match="stale or substituted"):
@@ -274,16 +338,8 @@ def test_latest_endpoint_never_claims_complete_revision_history(tmp_path: Path) 
 
 
 def test_unsupported_field_is_not_converted_to_zero(tmp_path: Path) -> None:
-    source = _source(tmp_path)
-    raw_path = source / "raw_estimate_perform.json"
-    _rewrite_json(raw_path, lambda value: value["000660"]["output2"][0].__setitem__("data4", None))
-    records_path = source / "records.json"
-    _rewrite_json(
-        records_path,
-        lambda value: value[0]["raw_payload"]["output2"][0].__setitem__("data4", None),
-    )
-    # The source snapshot hash now also disagrees; either condition must fail closed.
-    with pytest.raises(ProviderForwardAuthorityError):
+    source = _source(tmp_path, null_field=True)
+    with pytest.raises(ProviderForwardAuthorityError, match="cannot become zero"):
         build_kis_provider_authority(
             source, evaluation_date=EVALUATION_DATE, research_cutoff_at=CAPTURED
         )
@@ -338,6 +394,24 @@ def test_duplicate_revision_identity_is_ambiguous_and_fails_closed(tmp_path: Pat
     directory, artifact = _published(tmp_path)
     duplicate = directory.parent / f"duplicate__{artifact.artifact_id[:12]}"
     shutil.copytree(directory, duplicate)
+    assert not expectation_sources_are_canonical(
+        tmp_path, snapshot=_self_certified_expectation(artifact.artifact_id)
+    )
+
+
+def test_repository_enumeration_error_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory, artifact = _published(tmp_path)
+    repository = directory.parent
+    original = Path.iterdir
+
+    def unreadable(path: Path):
+        if path == repository:
+            raise PermissionError("unreadable provider repository")
+        return original(path)
+
+    monkeypatch.setattr(Path, "iterdir", unreadable)
     assert not expectation_sources_are_canonical(
         tmp_path, snapshot=_self_certified_expectation(artifact.artifact_id)
     )

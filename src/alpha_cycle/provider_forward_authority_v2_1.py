@@ -117,6 +117,15 @@ class ProviderForwardAuthorityArtifact:
             raise ProviderForwardAuthorityError("symbols must be unique and sorted")
         if tuple(item[0] for item in self.retrieved_at_by_symbol) != self.symbols:
             raise ProviderForwardAuthorityError("retrieval metadata does not match symbols")
+        retrieval_times = tuple(item[1] for item in self.retrieved_at_by_symbol)
+        if any(value.tzinfo is None for value in retrieval_times):
+            raise ProviderForwardAuthorityError("retrieved_at must be timezone-aware")
+        if any(value > self.research_cutoff_at for value in retrieval_times):
+            raise ProviderForwardAuthorityError("provider record retrieved after research cutoff")
+        if not retrieval_times or max(retrieval_times) != self.source_captured_at:
+            raise ProviderForwardAuthorityError(
+                "source_captured_at must equal the latest record retrieval"
+            )
         if tuple(item[0] for item in self.original_response_sha256_by_symbol) != self.symbols:
             raise ProviderForwardAuthorityError("response hashes do not match symbols")
         for _, value in self.original_response_sha256_by_symbol:
@@ -467,6 +476,16 @@ def _reconstruct_snapshot(
         payload = record.get("raw_payload")
         if not isinstance(payload, dict):
             raise ProviderForwardAuthorityError("source raw_payload is not an object")
+        if payload.get("rt_cd") != "0":
+            raise ProviderForwardAuthorityError("KIS source response is not successful")
+        output1 = payload.get("output1")
+        if not isinstance(output1, dict):
+            raise ProviderForwardAuthorityError("KIS source output1 is not an object")
+        reported_security = str(output1.get("sht_cd", "")).strip()
+        if reported_security.startswith("A"):
+            reported_security = reported_security[1:]
+        if reported_security != str(record.get("symbol", "")):
+            raise ProviderForwardAuthorityError("provider-reported security mismatch")
         item = KisEstimatePerformEvidence(
             symbol=str(record.get("symbol", "")),
             retrieved_at=_aware_datetime(record.get("retrieved_at"), "retrieved_at"),

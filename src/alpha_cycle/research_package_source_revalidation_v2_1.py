@@ -70,13 +70,16 @@ def expectation_sources_are_canonical(
     for observation in snapshot.observations:
         if observation.provider_id != PROVIDER_ID:
             return False
-        matches = tuple(
-            path
-            for path in repository.iterdir()
-            if path.is_dir()
-            and not path.is_symlink()
-            and path.name.endswith(f"__{observation.source_evidence_id[:12]}")
-        )
+        try:
+            matches = tuple(
+                path
+                for path in repository.iterdir()
+                if path.is_dir()
+                and not path.is_symlink()
+                and path.name.endswith(f"__{observation.source_evidence_id[:12]}")
+            )
+        except OSError:
+            return False
         if len(matches) != 1:
             return False
         try:
