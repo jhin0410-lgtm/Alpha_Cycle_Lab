@@ -24,6 +24,10 @@ from alpha_cycle.intelligence.market import (
     write_market_intelligence_snapshot,
 )
 from alpha_cycle.intelligence.technical import calculate_technical_features
+from alpha_cycle.intelligence.valuation import (
+    ValuationEvidenceSnapshot,
+    write_valuation_evidence_snapshot,
+)
 from alpha_cycle.providers.tossinvest import Candle, MarketPrice
 from alpha_cycle.valuation_authority_v2_1 import (
     AuthorityClass,
@@ -166,34 +170,43 @@ def _sources(tmp_path: Path) -> tuple[Path, Path, Path]:
     market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
     research = _research(market.snapshot_id)
     research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research)[0].parent
-    legacy = tmp_path / "legacy" / f"20260825T063000000000Z__{'a' * 12}"
-    legacy.mkdir(parents=True)
-    snapshot_id = "a" * 64
-    files = [
-        "shares.csv",
-        "security_values.csv",
-        "financial_history.csv",
-        "valuation_metrics.csv",
-        "raw_valuation.json",
-    ]
-    for name in files:
-        (legacy / name).write_text(
-            "{}" if name.endswith(".json") else "ticker\n000660\n005930\n", encoding="utf-8"
-        )
-    (legacy / "manifest.json").write_text(
-        json.dumps(
+    shares = pd.DataFrame(
+        [
             {
-                "snapshot_id": snapshot_id,
-                "captured_at": (CAPTURED - timedelta(minutes=10)).isoformat(),
-                "evaluation_date": "2026-08-25",
-                "research_snapshot_id": research.snapshot_id,
-                "market_snapshot_id": market.snapshot_id,
-                "symbols": ["000660", "005930"],
-                "files": files,
+                "ticker": ticker,
+                "security_class": "common",
+                "issued_shares": shares,
+                "treasury_shares": 0,
             }
-        ),
-        encoding="utf-8",
+            for ticker, shares in (("000660", 100), ("005930", 200))
+        ]
     )
+    metrics = pd.DataFrame(
+        [
+            {
+                "ticker": ticker,
+                "market_cap_complete": False,
+                "valuation_score": None,
+            }
+            for ticker in ("000660", "005930")
+        ]
+    )
+    legacy_snapshot = ValuationEvidenceSnapshot(
+        captured_at=CAPTURED - timedelta(minutes=10),
+        evaluation_date=date(2026, 8, 25),
+        research_snapshot_id=research.snapshot_id,
+        market_snapshot_id=market.snapshot_id,
+        history_years=3,
+        shares=shares,
+        security_values=pd.DataFrame({"ticker": ["000660", "005930"]}),
+        financial_history=pd.DataFrame({"ticker": ["000660", "005930"]}),
+        valuation_metrics=metrics,
+        raw_valuation={
+            "source_research_snapshot_id": research.snapshot_id,
+            "source_market_snapshot_id": market.snapshot_id,
+        },
+    )
+    legacy = write_valuation_evidence_snapshot(tmp_path / "legacy", legacy_snapshot)[0].parent
     return market_dir, research_dir, legacy
 
 
@@ -231,6 +244,7 @@ def test_writer_backed_actuals_and_price_replay_without_valuation_promotion(tmp_
     assert inputs["current_price"].value == 1_647_000
     assert inputs["trailing_net_income"].value == 42_947_902_000_000
     assert inputs["book_equity"].authority_class is AuthorityClass.AUTHORITATIVE_SOURCE
+    assert inputs["book_equity"].currency == "KRW"
     assert (
         inputs["cash_and_cash_equivalents"].authority_class is AuthorityClass.AUTHORITATIVE_SOURCE
     )
@@ -295,19 +309,17 @@ def test_persist_replay_and_upstream_revalidation_round_trip(tmp_path: Path) -> 
     )
 
 
-def test_modified_share_source_changes_exact_content_lineage(tmp_path: Path) -> None:
-    original, market, research, legacy = _artifact(tmp_path)
+def test_modified_share_source_is_rejected_by_canonical_replay(tmp_path: Path) -> None:
+    _, market, research, legacy = _artifact(tmp_path)
     (legacy / "shares.csv").write_text("ticker,issued_shares\n000660,1\n", encoding="utf-8")
-    changed = build_valuation_authority(
-        market_directory=market,
-        research_directory=research,
-        legacy_valuation_directory=legacy,
-        security_id="000660",
-        captured_at=CAPTURED,
-    )
-    assert changed.legacy_valuation_content_id != original.legacy_valuation_content_id
-    assert changed.artifact_id != original.artifact_id
-    assert next(item for item in changed.inputs if item.role == "share_count").value is None
+    with pytest.raises(ValuationAuthorityError, match="canonical identity"):
+        build_valuation_authority(
+            market_directory=market,
+            research_directory=research,
+            legacy_valuation_directory=legacy,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
 
 
 def test_forged_authority_json_fails_digest_before_it_can_self_authorize(tmp_path: Path) -> None:
@@ -346,6 +358,30 @@ def test_unknown_field_tamper_with_updated_file_hash_remains_noncanonical(tmp_pa
     )
     with pytest.raises(ValuationAuthorityError, match="fields"):
         replay_persisted_valuation_authority(directory)
+
+
+def test_manifest_duplicate_identity_tamper_is_rejected(tmp_path: Path) -> None:
+    artifact, market, research, legacy = _artifact(tmp_path)
+    directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
+    _rewrite(
+        directory / "manifest.json",
+        lambda value: value.__setitem__("security_id", "005930"),
+    )
+    with pytest.raises(ValuationAuthorityError, match="manifest identity"):
+        replay_persisted_valuation_authority(directory)
+
+
+def test_empty_legacy_file_claim_cannot_receive_class_b(tmp_path: Path) -> None:
+    market, research, legacy = _sources(tmp_path)
+    _rewrite(legacy / "manifest.json", lambda value: value.__setitem__("files", []))
+    with pytest.raises(ValuationAuthorityError, match="file set"):
+        build_valuation_authority(
+            market_directory=market,
+            research_directory=research,
+            legacy_valuation_directory=legacy,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
 
 
 @pytest.mark.parametrize(
@@ -441,6 +477,52 @@ def test_future_financial_actual_cannot_enter_trailing_valuation(tmp_path: Path)
     assert inputs["trailing_net_income"].value is None
     assert inputs["trailing_net_income"].authority_class is AuthorityClass.UNSUPPORTED
     assert inputs["book_equity"].value is None
+    trailing = next(item for item in artifact.methods if item.method is ValuationMethod.TRAILING_PE)
+    assert "trailing_net_income_authority_missing" in trailing.blockers
+    assert "trailing_net_income_authority_missing" in artifact.payload_without_id()["blockers"]
+
+
+@pytest.mark.parametrize(
+    "policy,expected",
+    [
+        (RevisionPolicy.FIRST_RELEASE, 42_947_902_000_000),
+        (RevisionPolicy.LATEST_KNOWN, 43_000_000_000_000),
+    ],
+)
+def test_financial_revision_policy_selects_one_known_revision(
+    tmp_path: Path, policy: RevisionPolicy, expected: int
+) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    original = _research(market.snapshot_id)
+    base = (
+        original.financials.loc[
+            original.financials["ticker"].astype(str).eq("000660")
+            & original.financials["metric"].astype(str).str.startswith("CIS:ifrs-full_ProfitLoss#")
+        ]
+        .iloc[0]
+        .copy()
+    )
+    base["value"] = 43_000_000_000_000
+    base["revision_id"] = "000660-profit-correction"
+    base["revision_sequence"] = 1
+    base["available_date"] = date(2026, 4, 1)
+    revised = validate_financial_statements(
+        pd.concat([original.financials, pd.DataFrame([base])], ignore_index=True)
+    )
+    research_snapshot = replace(original, revision_policy=policy, financials=revised)
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research_snapshot)[
+        0
+    ].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        legacy_valuation_directory=None,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    income = next(item for item in artifact.inputs if item.role == "trailing_net_income")
+    assert income.value == expected
 
 
 def test_price_mutation_is_detected_by_upstream_replay(tmp_path: Path) -> None:

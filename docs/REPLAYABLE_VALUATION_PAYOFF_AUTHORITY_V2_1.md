@@ -13,7 +13,7 @@ The repository audit found these distinct paths:
 | --- | --- | --- |
 | Canonically replayed market `prices.csv` plus raw capture | Exact writer identity, PIT checks, KRW price | A: authoritative persisted source |
 | Canonically replayed OpenDART company actuals | Exact writer identity and filing availability | A: authoritative persisted actual |
-| `ValuationEvidenceSnapshot` share rows and market-cap arithmetic | Self-consistent normalized OpenDART payload and CSVs | B: replayable but semantically insufficient for share authority |
+| `ValuationEvidenceSnapshot` share rows and market-cap arithmetic | Self-consistent normalized OpenDART payload and CSVs | B only after exact canonical replay; the current real snapshot fails that stricter replay and is treated as E |
 | Market cap, trailing P/E, and P/B | Derived from the class-B share basis | blocked; never promoted to C |
 | Cash actual | Official CFS actual | A |
 | Complete debt and EV bridge | No certified complete debt taxonomy/basis | E: unsupported |
@@ -58,12 +58,14 @@ checks remain unchanged.
 
 Both acceptances replayed market snapshot
 `8044d3b023eb8d70b6f0efed64861483fb5c4ce70141ba8df49cba51f8e79990`, research snapshot
-`c646cba2d4d855b77fde538e8637d60b45c861752c80e960554a8f38c850ecea`, and legacy valuation
-snapshot `4eea4d515e77725c201ca773c95c651c87d0d48f28cca11b397c93c917161bdb` fully offline.
+`c646cba2d4d855b77fde538e8637d60b45c861752c80e960554a8f38c850ecea` fully offline. The
+legacy valuation snapshot `4eea4d515e77725c201ca773c95c651c87d0d48f28cca11b397c93c917161bdb`
+did not reproduce its declared identity under the strict replay and was therefore excluded rather
+than promoted to class B.
 
 | Acceptance | 000660 SK hynix | 005930 Samsung Electronics |
 | --- | ---: | ---: |
-| Authority artifact | `78ed8ac2e953911f7b2ae07f287aa14aa2d92e5c028f2e52741cd45fb583d9df` | `28ccade94d6590430e7cf9293591ee1ae9a74019611fba7c0ff437abe48d2837` |
+| Authority artifact | `627fff6ae931e3ec82cf3b79cef1dd73c8a4ebfcdfa9208dcf35ff773025158d` | `0c521431d7e12bc3c3d62905c5493ed8957c7a7bfefeadd890bbb6e1da4fdc0f` |
 | Trusted current price | KRW 1,647,000/share | KRW 273,500/share |
 | Trusted FY2025 net income | KRW 42,947,902m | KRW 45,206,805m |
 | Trusted FY2025 book equity | KRW 120,666,751m | KRW 436,320,337m |

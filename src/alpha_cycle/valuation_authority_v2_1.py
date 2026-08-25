@@ -23,6 +23,8 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from alpha_cycle.data.research import RevisionPolicy
+from alpha_cycle.intelligence.valuation import ValuationEvidenceSnapshot
 from alpha_cycle.live_typed_source_revalidation_v2_1 import (
     revalidate_market_snapshot,
     revalidate_research_snapshot,
@@ -236,6 +238,7 @@ class ValuationAuthorityArtifact:
         blockers = sorted(
             {blocker for method in self.methods for blocker in method.blockers}
             | {blocker for scenario in self.scenarios for blocker in scenario.blockers}
+            | {item.blocker for item in self.inputs if item.blocker is not None}
         )
         return {
             "schema_version": SCHEMA_VERSION,
@@ -319,6 +322,7 @@ def build_valuation_authority(
         security_id,
         research.snapshot_id,
         evaluation_date=research.evaluation_date,
+        revision_policy=research.revision_policy,
     )
     inputs = tuple(
         sorted(
@@ -391,7 +395,7 @@ def build_valuation_authority(
             key=lambda item: item.role,
         )
     )
-    methods = _blocked_methods()
+    methods = _blocked_methods(inputs)
     scenario_blockers = ("scenario_input_authority_missing", "valuation_method_ineligible")
     scenarios = tuple(
         ScenarioAuthority(
@@ -504,6 +508,12 @@ def replay_persisted_valuation_authority(
     declared = str(manifest.get("artifact_id", ""))
     if artifact.artifact_id != declared or payload.get("artifact_id") != declared:
         raise ValuationAuthorityError("authority canonical identity mismatch")
+    if (
+        manifest.get("captured_at") != artifact.captured_at.isoformat()
+        or manifest.get("evaluation_date") != artifact.evaluation_date.isoformat()
+        or manifest.get("security_id") != artifact.security_id
+    ):
+        raise ValuationAuthorityError("authority manifest identity mismatch")
     if expected_artifact_id is not None and declared != expected_artifact_id:
         raise ValuationAuthorityError("unexpected valuation authority identity")
     expected_name = (
@@ -547,6 +557,7 @@ def _trusted_actual_inputs(
     source_id: str,
     *,
     evaluation_date: date,
+    revision_policy: RevisionPolicy,
 ) -> tuple[ValuationInput, ...]:
     specs = {
         "trailing_net_income": r"^(?:CIS|IS):ifrs-full_ProfitLoss#",
@@ -562,6 +573,30 @@ def _trusted_actual_inputs(
             candidates["period_end"].astype(str).le(evaluation_date.isoformat())
             & candidates["available_date"].astype(str).le(evaluation_date.isoformat())
         ]
+        if not candidates.empty:
+            ordered = candidates.sort_values(
+                [
+                    "metric",
+                    "period_end",
+                    "fiscal_period",
+                    "available_date",
+                    "revision_sequence",
+                    "retrieved_at",
+                    "revision_id",
+                ],
+                kind="stable",
+            )
+            grouped = ordered.groupby(
+                ["ticker", "metric", "period_end", "fiscal_period"],
+                sort=True,
+                dropna=False,
+                group_keys=False,
+            )
+            candidates = (
+                grouped.head(1)
+                if revision_policy is RevisionPolicy.FIRST_RELEASE
+                else grouped.tail(1)
+            )
         if candidates.empty:
             result.append(
                 ValuationInput(
@@ -598,14 +633,35 @@ def _trusted_actual_inputs(
             )
             continue
         row = latest.sort_values("metric", kind="stable").iloc[0]
+        unit = str(row["unit"]).strip().upper()
+        raw_currency = row.get("currency")
+        currency = None if pd.isna(raw_currency) else str(raw_currency).strip().upper()
+        if currency is None and unit == "KRW":
+            currency = "KRW"
+        if unit != "KRW" or currency != "KRW":
+            result.append(
+                ValuationInput(
+                    role,
+                    AuthorityClass.UNSUPPORTED,
+                    source_id,
+                    None,
+                    unit or None,
+                    currency,
+                    None,
+                    None,
+                    "CFS",
+                    f"{role}_currency_or_unit_unsupported",
+                )
+            )
+            continue
         result.append(
             ValuationInput(
                 role=role,
                 authority_class=AuthorityClass.AUTHORITATIVE_SOURCE,
                 source_evidence_id=source_id,
                 value=float(values[0]),
-                unit=str(row["unit"]),
-                currency=str(row["currency"]),
+                unit=unit,
+                currency=currency,
                 period_end=date.fromisoformat(str(row["period_end"])),
                 available_date=date.fromisoformat(str(row["available_date"])),
                 statement_basis="CFS official actual",
@@ -636,6 +692,8 @@ def _legacy_binding(
         "market_snapshot_id",
         "files",
         "symbols",
+        "history_years",
+        "warnings",
     }
     if not required.issubset(manifest):
         raise ValuationAuthorityError("legacy valuation manifest is incomplete")
@@ -652,8 +710,49 @@ def _legacy_binding(
     if not isinstance(symbols, list) or security_id not in symbols:
         raise ValuationAuthorityError("legacy valuation does not contain security")
     declared = manifest["files"]
-    if not isinstance(declared, list):
-        raise ValuationAuthorityError("legacy valuation file list is invalid")
+    expected_files = [
+        "shares.csv",
+        "security_values.csv",
+        "financial_history.csv",
+        "valuation_metrics.csv",
+        "raw_valuation.json",
+    ]
+    if declared != expected_files:
+        raise ValuationAuthorityError("legacy valuation file set is not canonical")
+    try:
+        snapshot = ValuationEvidenceSnapshot(
+            captured_at=datetime.fromisoformat(str(manifest["captured_at"])),
+            evaluation_date=date.fromisoformat(str(manifest["evaluation_date"])),
+            research_snapshot_id=str(manifest["research_snapshot_id"]),
+            market_snapshot_id=str(manifest["market_snapshot_id"]),
+            history_years=int(str(manifest["history_years"])),
+            shares=_read_legacy_frame(root / "shares.csv", root),
+            security_values=_read_legacy_frame(root / "security_values.csv", root),
+            financial_history=_read_legacy_frame(root / "financial_history.csv", root),
+            valuation_metrics=_read_legacy_frame(root / "valuation_metrics.csv", root),
+            raw_valuation=_object(
+                json.loads(_read_plain(root / "raw_valuation.json", root)),
+                "legacy raw valuation",
+            ),
+            warnings=tuple(str(item) for item in _list(manifest.get("warnings"), "warnings")),
+        )
+    except (KeyError, TypeError, ValueError, pd.errors.ParserError) as exc:
+        raise ValuationAuthorityError("legacy valuation cannot be reconstructed") from exc
+    if snapshot.snapshot_id != snapshot_id:
+        raise ValuationAuthorityError("legacy valuation canonical identity mismatch")
+    raw = cast(dict[str, object], snapshot.raw_valuation)
+    if (
+        raw.get("source_market_snapshot_id") != market_snapshot_id
+        or raw.get("source_research_snapshot_id") != research_snapshot_id
+    ):
+        raise ValuationAuthorityError("legacy valuation raw lineage mismatch")
+    share_rows = snapshot.shares.loc[snapshot.shares["ticker"].astype(str).eq(security_id)]
+    if share_rows.empty or not {
+        "security_class",
+        "issued_shares",
+        "treasury_shares",
+    }.issubset(snapshot.shares.columns):
+        raise ValuationAuthorityError("legacy valuation contains no replayable share evidence")
     bindings: list[dict[str, object]] = []
     for name in sorted(declared):
         if not isinstance(name, str) or Path(name).name != name:
@@ -672,7 +771,21 @@ def _legacy_binding(
     return snapshot_id, binding_id
 
 
-def _blocked_methods() -> tuple[MethodEligibility, ...]:
+def _read_legacy_frame(path: Path, root: Path) -> pd.DataFrame:
+    content = _read_plain(path, root)
+    header = pd.read_csv(path, nrows=0)
+    string_columns = {
+        column: "string"
+        for column in header.columns
+        if column in {"ticker", "stock_code", "corp_code", "report_code", "symbol"}
+        or column.endswith("_date")
+        or column.endswith("_end")
+    }
+    _ = content
+    return pd.read_csv(path, dtype=string_columns or None, float_precision="round_trip")
+
+
+def _blocked_methods(inputs: tuple[ValuationInput, ...]) -> tuple[MethodEligibility, ...]:
     rows = (
         (ValuationMethod.DCF, ("forecast_and_wacc_assumptions",), ("valuation_method_ineligible",)),
         (
@@ -706,10 +819,18 @@ def _blocked_methods() -> tuple[MethodEligibility, ...]:
             ("valuation_share_count_authority_missing",),
         ),
     )
-    return tuple(
-        MethodEligibility(method, EligibilityStatus.BLOCKED, required, blockers)
-        for method, required, blockers in rows
-    )
+    input_by_role = {item.role: item for item in inputs}
+    result = []
+    for method, required, fixed_blockers in rows:
+        blockers = list(fixed_blockers)
+        for role in required:
+            item = input_by_role.get(role)
+            if item is not None and item.blocker is not None and item.blocker not in blockers:
+                blockers.append(item.blocker)
+        result.append(
+            MethodEligibility(method, EligibilityStatus.BLOCKED, required, tuple(blockers))
+        )
+    return tuple(result)
 
 
 def _artifact_from_payload(payload: dict[str, object]) -> ValuationAuthorityArtifact:
