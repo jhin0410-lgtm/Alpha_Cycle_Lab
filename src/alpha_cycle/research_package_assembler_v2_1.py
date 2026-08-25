@@ -460,6 +460,38 @@ def _resolve_preflight_thesis_for_package(
     return thesis
 
 
+def _resolve_latest_thesis_for_package(
+    thesis_index: InvestmentThesisRepositoryIndex,
+    *,
+    security_id: str,
+    horizon_trading_days: int,
+    blockers: list[ResearchRoundBlocker],
+) -> InvestmentThesisSnapshot | None:
+    """Compatibility resolver retained for integrity tests and non-bound callers."""
+
+    try:
+        thesis = thesis_index.find_latest(
+            security_id=security_id,
+            horizon_trading_days=horizon_trading_days,
+        )
+    except InvestmentThesisRepositoryError:
+        _block(
+            blockers,
+            "thesis",
+            "investment_thesis_lineage_invalid",
+            security_id,
+        )
+        return None
+    if thesis is None:
+        _block(
+            blockers,
+            "thesis",
+            "investment_thesis_snapshot_missing",
+            security_id,
+        )
+    return thesis
+
+
 def _assemble_security_package(
     security_id: str,
     *,
