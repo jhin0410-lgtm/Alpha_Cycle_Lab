@@ -117,9 +117,17 @@ def run_live_typed_research_round(
         processed_at=preflight_at,
         artifact_root=root,
         research_cutoff_at=manifest.research_cutoff_at,
+        expected_thesis_snapshot_ids=tuple(
+            (item.security_id, item.snapshot_id) for item in thesis_receipt.theses
+        ),
+    )
+    produced_thesis_ids = tuple(item.snapshot_id for item in thesis_receipt.theses)
+    preflight_thesis_ids = tuple(item.snapshot_id for item in preflight.thesis_snapshots)
+    exact_thesis_binding = (
+        not thesis_receipt.blockers and preflight_thesis_ids == produced_thesis_ids
     )
     assembly = None
-    if preflight.ready_for_package_assembly:
+    if preflight.ready_for_package_assembly and exact_thesis_binding:
         assembly = assemble_and_run_research_package(
             request_id=request_id,
             round_id=round_id,
@@ -147,6 +155,7 @@ def run_live_typed_research_round(
         "source_manifest_path": str(persisted_manifest),
         "thesis": thesis_receipt.payload(),
         "preflight": preflight.payload(),
+        "exact_source_thesis_binding": exact_thesis_binding,
         "assembly": assembly.payload() if assembly is not None else None,
         "research_round_status": round_status.value if round_status is not None else None,
         "observatory_ledger_snapshot_id": observatory.snapshot_id if observatory else None,
@@ -165,8 +174,15 @@ def run_live_typed_research_round(
 def _persist_result(root: Path, payload: dict[str, object]) -> Path:
     encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     result_id = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-    directory = root / _RESULT_DIRECTORY
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("artifact_root must be a real directory")
+    trusted_root = root.resolve()
+    directory = trusted_root / _RESULT_DIRECTORY
+    if directory.is_symlink():
+        raise ValueError("live typed result repository cannot be a symlink")
     directory.mkdir(parents=True, exist_ok=True)
+    if not directory.is_dir() or directory.resolve().parent != trusted_root:
+        raise ValueError("live typed result repository escapes artifact_root")
     path = directory / f"{result_id}.json"
     if path.exists():
         if path.read_text(encoding="utf-8") != encoded + "\n":

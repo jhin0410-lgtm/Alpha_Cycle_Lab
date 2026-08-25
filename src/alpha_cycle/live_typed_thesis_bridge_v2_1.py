@@ -112,7 +112,10 @@ def produce_source_backed_theses(
     for security_id in canonical_security_ids:
         market_row = _market_row(market_rows, security_id)
         security_financials = tuple(
-            row for row in financial_rows if str(row["ticker"]) == security_id
+            row
+            for row in financial_rows
+            if str(row["ticker"]) == security_id
+            and str(row["source"]).strip().casefold() == "opendart"
         )
         if market_row is None:
             blockers.append(

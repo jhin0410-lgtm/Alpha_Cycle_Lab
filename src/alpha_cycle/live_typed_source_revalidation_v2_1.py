@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -43,6 +44,7 @@ _RESEARCH_FILES = (
     "raw_opendart.json",
     "raw_ecos.json",
 )
+_KOREA_TZ = ZoneInfo("Asia/Seoul")
 
 
 class LiveTypedSourceRevalidationError(ValueError):
@@ -79,38 +81,28 @@ def revalidate_market_snapshot(directory: str | Path) -> MarketIntelligenceSnaps
         )
 
     prices = tuple(
-        sorted(
-            (
-                MarketPrice(
-                    symbol=_cell(row, "symbol"),
-                    timestamp=_aware_datetime(_cell(row, "timestamp"), "price timestamp"),
-                    last_price=Decimal(_cell(row, "last_price")),
-                    currency=_cell(row, "currency"),
-                )
-                for row in _read_csv_rows(root / "prices.csv")
-            ),
-            key=lambda item: item.symbol,
+        MarketPrice(
+            symbol=_cell(row, "symbol"),
+            timestamp=_aware_datetime(_cell(row, "timestamp"), "price timestamp"),
+            last_price=Decimal(_cell(row, "last_price")),
+            currency=_cell(row, "currency"),
         )
+        for row in _read_csv_rows(root / "prices.csv")
     )
     candles = tuple(
-        sorted(
-            (
-                Candle(
-                    symbol=_cell(row, "symbol"),
-                    timestamp=_aware_datetime(_cell(row, "timestamp"), "candle timestamp"),
-                    open_price=Decimal(_cell(row, "open")),
-                    high_price=Decimal(_cell(row, "high")),
-                    low_price=Decimal(_cell(row, "low")),
-                    close_price=Decimal(_cell(row, "close")),
-                    volume=Decimal(_cell(row, "volume")),
-                    currency=_cell(row, "currency"),
-                    interval=_cell(row, "interval"),
-                    adjusted=_bool(_cell(row, "adjusted"), "candle adjusted"),
-                )
-                for row in _read_csv_rows(root / "candles.csv")
-            ),
-            key=lambda item: (item.symbol, item.timestamp),
+        Candle(
+            symbol=_cell(row, "symbol"),
+            timestamp=_aware_datetime(_cell(row, "timestamp"), "candle timestamp"),
+            open_price=Decimal(_cell(row, "open")),
+            high_price=Decimal(_cell(row, "high")),
+            low_price=Decimal(_cell(row, "low")),
+            close_price=Decimal(_cell(row, "close")),
+            volume=Decimal(_cell(row, "volume")),
+            currency=_cell(row, "currency"),
+            interval=_cell(row, "interval"),
+            adjusted=_bool(_cell(row, "adjusted"), "candle adjusted"),
         )
+        for row in _read_csv_rows(root / "candles.csv")
     )
     features = tuple(
         _technical_feature(row)
@@ -238,6 +230,7 @@ def revalidate_research_snapshot(directory: str | Path) -> FundamentalMacroSnaps
 
 def _validate_research_point_in_time(snapshot: FundamentalMacroSnapshot) -> None:
     captured = snapshot.captured_at
+    captured_source_date = captured.astimezone(_KOREA_TZ).date()
     for frame, label in (
         (snapshot.financials, "financial"),
         (snapshot.macro, "macro"),
@@ -250,14 +243,14 @@ def _validate_research_point_in_time(snapshot: FundamentalMacroSnapshot) -> None
                     f"{label} availability fields are not canonical"
                 )
             retrieved_at = retrieved.to_pydatetime()
-            if available > captured.date() or retrieved_at > captured:
+            if available > captured_source_date or retrieved_at > captured:
                 raise LiveTypedSourceRevalidationError(
                     f"{label} observation cannot follow research snapshot captured_at"
                 )
     if "receipt_date" in snapshot.disclosures.columns:
         for value in snapshot.disclosures["receipt_date"]:
             receipt_date = _date(str(value), "receipt_date")
-            if receipt_date > snapshot.evaluation_date or receipt_date > captured.date():
+            if receipt_date > snapshot.evaluation_date or receipt_date > captured_source_date:
                 raise LiveTypedSourceRevalidationError(
                     "disclosure observation cannot follow research snapshot captured_at"
                 )

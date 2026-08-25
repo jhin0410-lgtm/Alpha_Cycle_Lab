@@ -89,6 +89,7 @@ def preflight_pending_request_theses(
     processed_at: datetime,
     artifact_root: str | Path,
     research_cutoff_at: datetime | None = None,
+    expected_thesis_snapshot_ids: tuple[tuple[str, str], ...] | None = None,
 ) -> ResearchThesisPreflightReceipt:
     """Resolve typed theses, dedupe blocker metrics, and publish current preflight state."""
 
@@ -129,6 +130,7 @@ def preflight_pending_request_theses(
 
         # One validated PIT repository scan per preflight, regardless of security count.
         thesis_index = build_investment_thesis_repository_index(root, as_of=cutoff)
+        expected_by_security = _expected_thesis_bindings(expected_thesis_snapshot_ids)
         theses: list[InvestmentThesisSnapshot] = []
         blockers: list[ResearchRoundBlocker] = []
         for security_id in _unique_security_ids(request.security_ids):
@@ -136,6 +138,38 @@ def preflight_pending_request_theses(
                 security_id=security_id,
                 horizon_trading_days=request.horizon_trading_days,
             )
+            expected_id = (
+                expected_by_security.get(security_id)
+                if expected_by_security is not None
+                else None
+            )
+            if expected_by_security is not None and expected_id is None:
+                blockers.append(
+                    ResearchRoundBlocker(
+                        component="thesis",
+                        code="source_backed_thesis_snapshot_missing",
+                        detail=(
+                            "the current source bridge did not produce a thesis for the "
+                            "requested security"
+                        ),
+                        security_id=security_id,
+                    )
+                )
+                continue
+            if thesis is not None and expected_id is not None and thesis.snapshot_id != expected_id:
+                blockers.append(
+                    ResearchRoundBlocker(
+                        component="thesis",
+                        code="source_backed_thesis_binding_mismatch",
+                        detail=(
+                            "the latest persisted thesis does not match the exact thesis "
+                            "produced from the current frozen source manifest"
+                        ),
+                        security_id=security_id,
+                        snapshot_id=expected_id,
+                    )
+                )
+                continue
             if thesis is None:
                 blockers.append(
                     ResearchRoundBlocker(
@@ -307,6 +341,22 @@ def _unique_security_ids(security_ids: tuple[str, ...]) -> tuple[str, ...]:
         seen.add(key)
         unique.append(key)
     return tuple(unique)
+
+
+def _expected_thesis_bindings(
+    bindings: tuple[tuple[str, str], ...] | None,
+) -> dict[str, str] | None:
+    if bindings is None:
+        return None
+    result: dict[str, str] = {}
+    for security_id, snapshot_id in bindings:
+        key = security_id.strip()
+        if not key or not snapshot_id.strip():
+            raise ValueError("expected thesis bindings require non-empty identifiers")
+        if key in result:
+            raise ValueError("expected thesis bindings cannot duplicate a security")
+        result[key] = snapshot_id
+    return result
 
 
 def _require_aware(value: datetime, field: str) -> None:

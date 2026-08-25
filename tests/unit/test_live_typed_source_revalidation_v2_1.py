@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -152,6 +153,20 @@ def test_market_writer_round_trips_through_canonical_revalidation(tmp_path: Path
     assert replayed == snapshot
 
 
+def test_market_revalidation_preserves_writer_tuple_order(tmp_path: Path) -> None:
+    original = _market_snapshot()
+    snapshot = replace(
+        original,
+        candles=tuple(reversed(original.candles)),
+    )
+    files = write_market_intelligence_snapshot(tmp_path / "market", snapshot)
+
+    replayed = revalidate_market_snapshot(files[0].parent)
+
+    assert replayed.snapshot_id == snapshot.snapshot_id
+    assert replayed == snapshot
+
+
 def test_research_writer_round_trips_through_canonical_revalidation(tmp_path: Path) -> None:
     market = _market_snapshot()
     snapshot = _research_snapshot(market.snapshot_id)
@@ -161,6 +176,28 @@ def test_research_writer_round_trips_through_canonical_revalidation(tmp_path: Pa
 
     assert replayed.snapshot_id == snapshot.snapshot_id
     assert replayed.payload_without_id() == snapshot.payload_without_id()
+
+
+def test_research_pit_uses_korean_source_civil_date(tmp_path: Path) -> None:
+    market = _market_snapshot()
+    original = _research_snapshot(market.snapshot_id)
+    financials = original.financials.copy()
+    financials["available_date"] = date(2026, 8, 25)
+    financials["retrieved_at"] = pd.Timestamp("2026-08-24T20:59:00+00:00")
+    macro = original.macro.copy()
+    macro["available_date"] = date(2026, 8, 25)
+    macro["retrieved_at"] = pd.Timestamp("2026-08-24T20:59:00+00:00")
+    snapshot = replace(
+        original,
+        captured_at=datetime(2026, 8, 24, 21, 0, tzinfo=UTC),
+        financials=financials,
+        macro=macro,
+    )
+    files = write_fundamental_macro_snapshot(tmp_path / "research", snapshot)
+
+    replayed = revalidate_research_snapshot(files[0].parent)
+
+    assert replayed.snapshot_id == snapshot.snapshot_id
 
 
 def test_market_revalidation_rejects_self_declared_forged_snapshot_id(tmp_path: Path) -> None:
