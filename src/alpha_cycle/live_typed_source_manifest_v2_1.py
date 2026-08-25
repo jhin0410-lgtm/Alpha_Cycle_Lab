@@ -97,7 +97,10 @@ class LiveTypedSourceManifest:
         for source in self.sources:
             if source.captured_at > self.research_cutoff_at:
                 raise ValueError("source captured_at cannot follow research_cutoff_at")
-            if source.evaluation_date is not None and source.evaluation_date != self.evaluation_date:
+            if (
+                source.evaluation_date is not None
+                and source.evaluation_date != self.evaluation_date
+            ):
                 raise ValueError("source evaluation_date differs from manifest evaluation_date")
 
     def payload_without_id(self) -> dict[str, object]:
@@ -306,8 +309,9 @@ def verify_live_typed_source_manifest(
             )
         for binding in source.files:
             if _bind_file(directory, binding.relative_path) != binding:
+                changed_file = f"{source.role}/{binding.relative_path}"
                 raise LiveTypedSourceManifestError(
-                    f"source file bytes changed during replay: {source.role}/{binding.relative_path}"
+                    f"source file bytes changed during replay: {changed_file}"
                 )
 
 
@@ -397,7 +401,8 @@ def _bind_file(directory: Path, relative_path: str) -> SourceFileBinding:
 def _require_safe_relative_path(value: str, field: str) -> None:
     _require_text(value, field)
     path = PurePosixPath(value)
-    if path.is_absolute() or value != path.as_posix() or any(part in {"", ".", ".."} for part in path.parts):
+    unsafe_parts = any(part in {"", ".", ".."} for part in path.parts)
+    if path.is_absolute() or value != path.as_posix() or unsafe_parts:
         raise ValueError(f"{field} must be a normalized safe relative POSIX path")
 
 
