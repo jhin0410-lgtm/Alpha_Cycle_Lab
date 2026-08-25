@@ -567,7 +567,10 @@ def _load_persisted_valuation_authority(
         {"schema_version", "artifact_id", "captured_at", "evaluation_date", "security_id", "files"},
         "manifest",
     )
-    if manifest.get("schema_version") != SCHEMA_VERSION:
+    if (
+        type(manifest.get("schema_version")) is not int
+        or manifest.get("schema_version") != SCHEMA_VERSION
+    ):
         raise ValuationAuthorityError("unsupported valuation authority schema")
     files = _object(manifest.get("files"), "files")
     if files != {"authority.json": _digest(authority_bytes)}:
@@ -848,6 +851,8 @@ def _require_raw_actual_binding(raw: object, security_id: str, normalized: pd.Se
     company_stock_code = str(company.get("stock_code", "")).strip()
     if company_stock_code and normalize_listed_stock_code(company_stock_code) != security_id:
         raise ValuationAuthorityError("raw OpenDART company identity mismatch")
+    if str(company.get("acc_mt", "")).strip().zfill(2) != "12":
+        raise ValuationAuthorityError("raw OpenDART company settlement month is not December")
     request = security.get("request")
     if not isinstance(request, dict):
         raise ValuationAuthorityError("raw OpenDART request metadata is unavailable")
@@ -1005,6 +1010,7 @@ def _legacy_binding(
         json.loads(_read_plain(root / "manifest.json", root)), "legacy valuation manifest"
     )
     required = {
+        "schema_version",
         "snapshot_id",
         "captured_at",
         "evaluation_date",
@@ -1013,10 +1019,25 @@ def _legacy_binding(
         "files",
         "symbols",
         "history_years",
+        "market_cap_complete_count",
+        "valuation_scored_count",
         "warnings",
+        "valuation_method",
+        "consensus_available",
+        "order_api_enabled",
     }
-    if not required.issubset(manifest):
-        raise ValuationAuthorityError("legacy valuation manifest is incomplete")
+    _exact(manifest, required, "legacy valuation manifest")
+    if (
+        type(manifest["schema_version"]) is not int
+        or manifest["schema_version"] != 1
+        or type(manifest["history_years"]) is not int
+        or type(manifest["market_cap_complete_count"]) is not int
+        or type(manifest["valuation_scored_count"]) is not int
+        or manifest["valuation_method"] != "peer_relative_percentile_shrunk_to_neutral"
+        or manifest["consensus_available"] is not False
+        or manifest["order_api_enabled"] is not False
+    ):
+        raise ValuationAuthorityError("legacy valuation manifest contract mismatch")
     snapshot_id = str(manifest["snapshot_id"])
     _sha(snapshot_id, "legacy valuation snapshot_id")
     legacy_captured_at = datetime.fromisoformat(str(manifest["captured_at"]))
@@ -1064,6 +1085,16 @@ def _legacy_binding(
         raise ValuationAuthorityError("legacy valuation cannot be reconstructed") from exc
     if snapshot.snapshot_id != snapshot_id:
         raise ValuationAuthorityError("legacy valuation canonical identity mismatch")
+    expected_symbols = snapshot.valuation_metrics["ticker"].astype(str).tolist()
+    if (
+        manifest["symbols"] != expected_symbols
+        or manifest["warnings"] != list(snapshot.warnings)
+        or manifest["market_cap_complete_count"]
+        != int(snapshot.valuation_metrics["market_cap_complete"].astype(bool).sum())
+        or manifest["valuation_scored_count"]
+        != int(snapshot.valuation_metrics["valuation_score"].notna().sum())
+    ):
+        raise ValuationAuthorityError("legacy valuation manifest summary mismatch")
     raw = cast(dict[str, object], snapshot.raw_valuation)
     if (
         raw.get("source_market_snapshot_id") != market_snapshot_id
@@ -1192,6 +1223,23 @@ def _artifact_from_payload(payload: dict[str, object]) -> ValuationAuthorityArti
         "artifact_id",
     }
     _exact(payload, expected, "authority")
+    boolean_fields = {
+        "share_count_authority_established",
+        "capital_structure_authority_established",
+        "forward_estimate_authority_established",
+        "price_implied_requirement_authority_established",
+        "payoff_surface_authority_established",
+        "probabilities_available",
+        "probability_weighted_expected_return_available",
+        "market_consensus_authority_established",
+        "target_price_authority_established",
+        "decision_score_enabled",
+        "automatic_execution_enabled",
+    }
+    if type(payload.get("schema_version")) is not int or any(
+        type(payload.get(field)) is not bool for field in boolean_fields
+    ):
+        raise ValuationAuthorityError("authority JSON types differ from canonical schema")
     if (
         payload.get("schema_version") != SCHEMA_VERSION
         or payload.get("parser_id") != PARSER_ID
@@ -1244,7 +1292,7 @@ def _input_from_payload(raw: dict[str, object]) -> ValuationInput:
         str(raw["role"]),
         AuthorityClass(str(raw["authority_class"])),
         cast(str | None, raw["source_evidence_id"]),
-        cast(float | None, raw["value"]),
+        _optional_json_float(raw["value"], "input value"),
         cast(str | None, raw["unit"]),
         cast(str | None, raw["currency"]),
         date.fromisoformat(str(raw["period_end"])) if raw["period_end"] else None,
@@ -1273,9 +1321,9 @@ def _method_from_payload(raw: dict[str, object]) -> MethodEligibility:
         EligibilityStatus(str(raw["status"])),
         tuple(str(item) for item in _list(raw["required_roles"], "required_roles")),
         tuple(str(item) for item in _list(raw["blockers"], "blockers")),
-        cast(float | None, raw["numerator"]),
-        cast(float | None, raw["denominator"]),
-        cast(float | None, raw["derived_multiple"]),
+        _optional_json_float(raw["numerator"], "method numerator"),
+        _optional_json_float(raw["denominator"], "method denominator"),
+        _optional_json_float(raw["derived_multiple"], "method derived_multiple"),
     )
 
 
@@ -1299,18 +1347,28 @@ def _scenario_from_payload(raw: dict[str, object]) -> ScenarioAuthority:
     )
     if raw["probability"] is not None or raw["target_price_claimed"] is not False:
         raise ValuationAuthorityError("unsupported scenario authority claim")
+    if type(raw["horizon_trading_days"]) is not int:
+        raise ValuationAuthorityError("scenario horizon must be a canonical integer")
     method = ValuationMethod(str(raw["valuation_method"])) if raw["valuation_method"] else None
     return ScenarioAuthority(
         ScenarioLabel(str(raw["label"])),
-        int(cast(int, raw["horizon_trading_days"])),
+        raw["horizon_trading_days"],
         tuple(str(item) for item in _list(raw["conditions"], "conditions")),
         tuple(str(item) for item in _list(raw["source_evidence_ids"], "source_evidence_ids")),
         tuple(str(item) for item in _list(raw["model_assumption_ids"], "model_assumption_ids")),
         method,
-        cast(float | None, raw["implied_value_per_share"]),
-        cast(float | None, raw["upside_downside"]),
+        _optional_json_float(raw["implied_value_per_share"], "scenario implied value"),
+        _optional_json_float(raw["upside_downside"], "scenario upside/downside"),
         tuple(str(item) for item in _list(raw["blockers"], "blockers")),
     )
+
+
+def _optional_json_float(value: object, field: str) -> float | None:
+    if value is None:
+        return None
+    if type(value) is not float:
+        raise ValuationAuthorityError(f"{field} must be a canonical JSON float")
+    return value
 
 
 def _plain_repository(path: Path, *, create: bool) -> Path:

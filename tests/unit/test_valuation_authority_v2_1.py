@@ -138,7 +138,7 @@ def _raw_opendart(financials: pd.DataFrame, *, fs_div: str = "CFS") -> dict[str,
             },
             "corp": {"stock_code": str(ticker)},
             "financial": {
-                "company": {"stock_code": str(ticker)},
+                "company": {"stock_code": str(ticker), "acc_mt": "12"},
                 "financials": {"status": "000", "message": "정상", "list": rows},
             },
         }
@@ -483,6 +483,27 @@ def test_nested_opendart_company_identity_binds_actuals(tmp_path: Path) -> None:
         tmp_path / "research", replace(research, raw_opendart=raw)
     )[0].parent
     with pytest.raises(ValuationAuthorityError, match="company identity mismatch"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+@pytest.mark.parametrize("settlement_month", ["", "03"])
+def test_opendart_company_requires_december_settlement(
+    tmp_path: Path, settlement_month: str
+) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    raw = copy.deepcopy(research.raw_opendart)
+    raw["000660"]["financial"]["company"]["acc_mt"] = settlement_month
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, raw_opendart=raw)
+    )[0].parent
+    with pytest.raises(ValuationAuthorityError, match="settlement month"):
         build_valuation_authority(
             market_directory=market_dir,
             research_directory=research_dir,
@@ -880,6 +901,32 @@ def test_self_consistent_forged_persisted_authority_fails_upstream_replay(tmp_pa
         _replay(directory, market, research, legacy)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda payload: payload.__setitem__("schema_version", True),
+        lambda payload: payload["inputs"][3].__setitem__(
+            "value", int(payload["inputs"][3]["value"])
+        ),
+    ],
+)
+def test_boolean_or_integer_numeric_aliases_are_not_canonical_json(
+    tmp_path: Path, mutation
+) -> None:
+    artifact, market, research, legacy = _artifact(tmp_path)
+    directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
+    _rewrite(directory / "authority.json", mutation)
+    content = (directory / "authority.json").read_bytes()
+    _rewrite(
+        directory / "manifest.json",
+        lambda value: value["files"].__setitem__(
+            "authority.json", hashlib.sha256(content).hexdigest()
+        ),
+    )
+    with pytest.raises(ValuationAuthorityError, match="canonical"):
+        _replay(directory, market, research, legacy)
+
+
 def test_unknown_field_tamper_with_updated_file_hash_remains_noncanonical(tmp_path: Path) -> None:
     artifact, market, research, legacy = _artifact(tmp_path)
     directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
@@ -910,6 +957,26 @@ def test_empty_legacy_file_claim_cannot_receive_class_b(tmp_path: Path) -> None:
     market, research, legacy = _sources(tmp_path)
     _rewrite(legacy / "manifest.json", lambda value: value.__setitem__("files", []))
     with pytest.raises(ValuationAuthorityError, match="file set"):
+        build_valuation_authority(
+            market_directory=market,
+            research_directory=research,
+            legacy_valuation_directory=legacy,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda value: value.pop("schema_version"),
+        lambda value: value.__setitem__("unknown", True),
+    ],
+)
+def test_legacy_manifest_requires_exact_writer_schema(tmp_path: Path, mutation) -> None:
+    market, research, legacy = _sources(tmp_path)
+    _rewrite(legacy / "manifest.json", mutation)
+    with pytest.raises(ValuationAuthorityError, match="fields differ"):
         build_valuation_authority(
             market_directory=market,
             research_directory=research,
