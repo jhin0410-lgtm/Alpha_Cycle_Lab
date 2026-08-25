@@ -16,7 +16,11 @@ from typing import Any, cast
 
 import pandas as pd
 
-from alpha_cycle.data.research import RevisionPolicy
+from alpha_cycle.data.research import (
+    RevisionPolicy,
+    validate_financial_statements,
+    validate_macro_series,
+)
 from alpha_cycle.intelligence.fundamental_macro import (
     RESEARCH_INTELLIGENCE_SCHEMA_VERSION,
     FundamentalMacroSnapshot,
@@ -125,6 +129,12 @@ def revalidate_market_snapshot(directory: str | Path) -> MarketIntelligenceSnaps
             _load_json(root / "raw_candles.json"), "raw_candles"
         ),
     )
+    future_price = any(item.timestamp > snapshot.captured_at for item in snapshot.prices)
+    future_candle = any(item.timestamp > snapshot.captured_at for item in snapshot.candles)
+    if future_price or future_candle:
+        raise LiveTypedSourceRevalidationError(
+            "market observation cannot follow market snapshot captured_at"
+        )
     declared_id = _required_text(manifest, "snapshot_id")
     if snapshot.snapshot_id != declared_id:
         raise LiveTypedSourceRevalidationError("market snapshot canonical identity mismatch")
@@ -188,9 +198,9 @@ def revalidate_research_snapshot(directory: str | Path) -> FundamentalMacroSnaps
             "research manifest file set differs from writer contract"
         )
 
-    financials = _read_frame(root / "financials.csv")
-    disclosures = _read_frame(root / "disclosures.csv")
-    macro = _read_frame(root / "macro.csv")
+    financials = _read_financial_frame(root / "financials.csv")
+    disclosures = _read_disclosure_frame(root / "disclosures.csv")
+    macro = _read_macro_frame(root / "macro.csv")
     if len(financials) != _required_int(manifest, "financial_rows"):
         raise LiveTypedSourceRevalidationError("research financial row count mismatch")
     if len(disclosures) != _required_int(manifest, "disclosure_rows"):
@@ -215,6 +225,7 @@ def revalidate_research_snapshot(directory: str | Path) -> FundamentalMacroSnaps
         market_snapshot_id=market_snapshot_id,
         warnings=warnings,
     )
+    _validate_research_point_in_time(snapshot)
     declared_id = _required_text(manifest, "snapshot_id")
     if snapshot.snapshot_id != declared_id:
         raise LiveTypedSourceRevalidationError("research snapshot canonical identity mismatch")
@@ -223,6 +234,33 @@ def revalidate_research_snapshot(directory: str | Path) -> FundamentalMacroSnaps
     if root.name != expected_name:
         raise LiveTypedSourceRevalidationError("research snapshot directory identity mismatch")
     return snapshot
+
+
+def _validate_research_point_in_time(snapshot: FundamentalMacroSnapshot) -> None:
+    captured = snapshot.captured_at
+    for frame, label in (
+        (snapshot.financials, "financial"),
+        (snapshot.macro, "macro"),
+    ):
+        for row in frame.to_dict(orient="records"):
+            available = row.get("available_date")
+            retrieved = row.get("retrieved_at")
+            if not isinstance(available, date) or not isinstance(retrieved, pd.Timestamp):
+                raise LiveTypedSourceRevalidationError(
+                    f"{label} availability fields are not canonical"
+                )
+            retrieved_at = retrieved.to_pydatetime()
+            if available > captured.date() or retrieved_at > captured:
+                raise LiveTypedSourceRevalidationError(
+                    f"{label} observation cannot follow research snapshot captured_at"
+                )
+    if "receipt_date" in snapshot.disclosures.columns:
+        for value in snapshot.disclosures["receipt_date"]:
+            receipt_date = _date(str(value), "receipt_date")
+            if receipt_date > snapshot.evaluation_date or receipt_date > captured.date():
+                raise LiveTypedSourceRevalidationError(
+                    "disclosure observation cannot follow research snapshot captured_at"
+                )
 
 
 def _technical_feature(row: dict[str, str]) -> TechnicalFeatures:
@@ -273,12 +311,56 @@ def _read_csv_rows(path: Path) -> tuple[dict[str, str], ...]:
         )
 
 
-def _read_frame(path: Path) -> pd.DataFrame:
+def _read_frame(
+    path: Path,
+    *,
+    dtype: dict[str, str] | None = None,
+) -> pd.DataFrame:
     if path.is_symlink() or not path.is_file():
         raise LiveTypedSourceRevalidationError(
             f"snapshot CSV must be a regular file: {path}"
         )
-    return pd.read_csv(path)
+    try:
+        return pd.read_csv(path, dtype=dtype)
+    except (OSError, UnicodeDecodeError, pd.errors.ParserError, ValueError) as exc:
+        raise LiveTypedSourceRevalidationError(
+            f"cannot decode snapshot CSV: {path}"
+        ) from exc
+
+
+def _read_financial_frame(path: Path) -> pd.DataFrame:
+    frame = _read_frame(
+        path,
+        dtype={"ticker": "string", "revision_id": "string"},
+    )
+    try:
+        return validate_financial_statements(frame)
+    except (TypeError, ValueError) as exc:
+        raise LiveTypedSourceRevalidationError(
+            "research financial CSV violates the canonical data contract"
+        ) from exc
+
+
+def _read_macro_frame(path: Path) -> pd.DataFrame:
+    frame = _read_frame(path, dtype={"series_id": "string", "revision_id": "string"})
+    try:
+        return validate_macro_series(frame)
+    except (TypeError, ValueError) as exc:
+        raise LiveTypedSourceRevalidationError(
+            "research macro CSV violates the canonical data contract"
+        ) from exc
+
+
+def _read_disclosure_frame(path: Path) -> pd.DataFrame:
+    return _read_frame(
+        path,
+        dtype={
+            "ticker": "string",
+            "corp_code": "string",
+            "rcept_no": "string",
+            "corp_class": "string",
+        },
+    )
 
 
 def _load_object(path: Path) -> dict[str, Any]:

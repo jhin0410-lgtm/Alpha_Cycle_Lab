@@ -94,9 +94,11 @@ class LiveTypedSourceManifest:
         roles = tuple(item.role for item in self.sources)
         if roles != tuple(sorted(roles)) or len(set(roles)) != len(roles):
             raise ValueError("source roles must be unique and sorted")
+        if self.frozen_at > self.research_cutoff_at:
+            raise ValueError("frozen_at cannot follow research_cutoff_at")
         for source in self.sources:
-            if source.captured_at > self.research_cutoff_at:
-                raise ValueError("source captured_at cannot follow research_cutoff_at")
+            if source.captured_at > self.frozen_at:
+                raise ValueError("source captured_at cannot follow frozen_at")
             if (
                 source.evaluation_date is not None
                 and source.evaluation_date != self.evaluation_date
@@ -149,9 +151,9 @@ def freeze_live_typed_source_manifest(
             _required_text(source_manifest, "captured_at"),
             "source captured_at",
         )
-        if captured_at > research_cutoff_at:
+        if captured_at > frozen_at:
             raise LiveTypedSourceManifestError(
-                f"source {role} was captured after research_cutoff_at"
+                f"source {role} was captured after frozen_at"
             )
         source_evaluation_date = _optional_date(source_manifest.get("evaluation_date"))
         if source_evaluation_date is not None and source_evaluation_date != evaluation_date:

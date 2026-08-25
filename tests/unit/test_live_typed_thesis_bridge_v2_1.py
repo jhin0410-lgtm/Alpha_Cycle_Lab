@@ -7,7 +7,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from alpha_cycle.data.research import RevisionPolicy
+from alpha_cycle.data.research import (
+    RevisionPolicy,
+    validate_financial_statements,
+    validate_macro_series,
+)
 from alpha_cycle.intelligence.decision_thesis_v2 import EpistemicStatus, ThesisStatus
 from alpha_cycle.intelligence.fundamental_macro import (
     FundamentalMacroSnapshot,
@@ -17,7 +21,10 @@ from alpha_cycle.intelligence.market import (
     MarketIntelligenceSnapshot,
     write_market_intelligence_snapshot,
 )
+from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
 from alpha_cycle.intelligence.technical import calculate_technical_features
+from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
+from alpha_cycle.live_typed_research_runner_v2_1 import run_live_typed_research_round
 from alpha_cycle.live_typed_source_manifest_v2_1 import freeze_live_typed_source_manifest
 from alpha_cycle.live_typed_thesis_bridge_v2_1 import produce_source_backed_theses
 from alpha_cycle.providers.tossinvest import Candle, MarketPrice
@@ -27,6 +34,7 @@ def _persist_sources(
     root: Path,
     *,
     research_market_snapshot_id: str | None = None,
+    future_financial_retrieval: bool = False,
 ) -> tuple[Path, Path, datetime]:
     captured_at = datetime(2026, 8, 25, 6, 0, tzinfo=UTC)
     prices = (
@@ -72,7 +80,16 @@ def _persist_sources(
                 "ticker": ticker,
                 "metric": metric,
                 "period_end": "2025-12-31",
+                "fiscal_period": "FY",
                 "available_date": "2026-03-20",
+                "retrieved_at": (
+                    "2026-08-25T07:05:00+00:00"
+                    if future_financial_retrieval
+                    else "2026-08-25T06:05:00+00:00"
+                ),
+                "source": "opendart",
+                "revision_id": f"{ticker}-{metric}-2025",
+                "revision_sequence": 0,
                 "value": value,
                 "unit": "KRW",
             }
@@ -87,23 +104,29 @@ def _persist_sources(
         captured_at=captured_at + timedelta(minutes=5),
         evaluation_date=date(2026, 8, 25),
         revision_policy=RevisionPolicy.LATEST_KNOWN,
-        financials=financials,
+        financials=validate_financial_statements(financials),
         disclosures=pd.DataFrame(
             [
                 {"ticker": "000660", "receipt_date": "2026-03-20", "rcept_no": "A"},
                 {"ticker": "005930", "receipt_date": "2026-03-20", "rcept_no": "B"},
             ]
         ),
-        macro=pd.DataFrame(
+        macro=validate_macro_series(pd.DataFrame(
             [
                 {
                     "series_id": "kr_base_rate",
-                    "period_end": "2026-08-24",
+                    "observation_date": "2026-08-24",
+                    "frequency": "D",
                     "available_date": "2026-08-25",
+                    "retrieved_at": "2026-08-25T06:05:00+00:00",
+                    "source": "ecos",
+                    "revision_id": "kr-base-rate-20260824",
+                    "revision_sequence": 0,
                     "value": 2.5,
+                    "unit": "%",
                 }
             ]
-        ),
+        )),
         raw_opendart={"source": "opendart"},
         raw_ecos={"source": "ecos"},
         market_snapshot_id=(
@@ -131,7 +154,7 @@ def test_writer_backed_sources_produce_two_evidence_gated_theses(tmp_path: Path)
         manifest,
         artifact_root=tmp_path,
         security_ids=("000660", "005930"),
-        horizon_trading_days=126,
+        horizon_trading_days=120,
         captured_at=captured_at + timedelta(minutes=15),
     )
 
@@ -165,12 +188,12 @@ def test_missing_official_financial_fact_becomes_structured_blocker(tmp_path: Pa
         frozen_at=captured_at + timedelta(minutes=10),
     )
 
-    with pytest.raises(ValueError, match="canonical identity mismatch"):
+    with pytest.raises(ValueError, match="financial row count mismatch"):
         produce_source_backed_theses(
             manifest,
             artifact_root=tmp_path,
             security_ids=("000660", "005930"),
-            horizon_trading_days=126,
+            horizon_trading_days=120,
             captured_at=captured_at + timedelta(minutes=15),
         )
 
@@ -193,7 +216,7 @@ def test_mixed_market_research_generation_is_rejected(tmp_path: Path) -> None:
             manifest,
             artifact_root=tmp_path,
             security_ids=("000660", "005930"),
-            horizon_trading_days=126,
+            horizon_trading_days=120,
             captured_at=captured_at + timedelta(minutes=15),
         )
 
@@ -212,11 +235,113 @@ def test_future_market_observation_cannot_be_promoted(tmp_path: Path) -> None:
     prices.loc[0, "timestamp"] = (captured_at + timedelta(hours=1)).isoformat()
     prices.to_csv(prices_path, index=False)
 
-    with pytest.raises(ValueError, match="canonical identity mismatch"):
+    with pytest.raises(ValueError, match="source file bytes changed during replay"):
         produce_source_backed_theses(
             manifest,
             artifact_root=tmp_path,
             security_ids=("000660", "005930"),
-            horizon_trading_days=126,
+            horizon_trading_days=120,
+            captured_at=captured_at + timedelta(minutes=15),
+        )
+
+
+def test_one_command_runner_reaches_observatory_with_honest_package_blockers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    market_dir, research_dir, captured_at = _persist_sources(tmp_path)
+    cutoff = captured_at + timedelta(minutes=20)
+
+    receipt = run_live_typed_research_round(
+        artifact_root=tmp_path,
+        mode=ResearchRoundMode.PROSPECTIVE,
+        request_id="live-v2-1-acceptance",
+        run_id="live-v2-1-run",
+        round_id="live-v2-1-round",
+        processed_at=cutoff + timedelta(minutes=1),
+        security_ids=("000660", "005930"),
+        horizon_trading_days=120,
+        requested_lane=UnderwritingLane.DEEP,
+        request_text="Writer-backed acceptance for 000660 and 005930.",
+        market_source_directory=market_dir,
+        research_source_directory=research_dir,
+        evaluation_date=date(2026, 8, 25),
+        research_cutoff_at=cutoff,
+    )
+
+    payload = receipt.payload()
+    assert receipt.result_path.is_file()
+    assert payload["observatory_ledger_snapshot_id"]
+    assert payload["network_collection_enabled"] is False
+    assert payload["target_price_enabled"] is False
+    assert payload["optimal_position_size_enabled"] is False
+    assert payload["assembly"] is not None
+    assert payload["ready"] is False
+    assert not (tmp_path / "opportunity_set_v2_1").exists()
+    assert not (tmp_path / "research_round_v2_1").exists()
+
+    def reject_network(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("REPLAY attempted network access")
+
+    monkeypatch.setattr("socket.create_connection", reject_network)
+    replay = run_live_typed_research_round(
+        artifact_root=tmp_path,
+        mode=ResearchRoundMode.REPLAY,
+        request_id="live-v2-1-replay",
+        run_id="live-v2-1-replay-run",
+        round_id="live-v2-1-replay-round",
+        processed_at=cutoff + timedelta(minutes=2),
+        security_ids=("000660", "005930"),
+        horizon_trading_days=120,
+        requested_lane=UnderwritingLane.DEEP,
+        request_text="No-network frozen replay acceptance.",
+        manifest_path=Path(str(payload["source_manifest_path"])),
+    )
+    assert replay.payload()["mode"] == "replay"
+    assert replay.payload()["network_collection_enabled"] is False
+
+
+def test_missing_requested_ticker_is_a_structured_source_blocker(tmp_path: Path) -> None:
+    market_dir, research_dir, captured_at = _persist_sources(tmp_path)
+    cutoff = captured_at + timedelta(minutes=20)
+    manifest = freeze_live_typed_source_manifest(
+        artifact_root=tmp_path,
+        source_directories={"market": market_dir, "research": research_dir},
+        evaluation_date=date(2026, 8, 25),
+        research_cutoff_at=cutoff,
+        frozen_at=captured_at + timedelta(minutes=10),
+    )
+
+    receipt = produce_source_backed_theses(
+        manifest,
+        artifact_root=tmp_path,
+        security_ids=("999999",),
+        horizon_trading_days=120,
+        captured_at=captured_at + timedelta(minutes=15),
+    )
+
+    assert not receipt.theses
+    assert [item.code for item in receipt.blockers] == ["live_market_observation_missing"]
+
+
+def test_future_financial_retrieval_cannot_be_promoted(tmp_path: Path) -> None:
+    market_dir, research_dir, captured_at = _persist_sources(
+        tmp_path,
+        future_financial_retrieval=True,
+    )
+    manifest = freeze_live_typed_source_manifest(
+        artifact_root=tmp_path,
+        source_directories={"market": market_dir, "research": research_dir},
+        evaluation_date=date(2026, 8, 25),
+        research_cutoff_at=captured_at + timedelta(hours=2),
+        frozen_at=captured_at + timedelta(minutes=10),
+    )
+
+    with pytest.raises(ValueError, match="financial observation cannot follow"):
+        produce_source_backed_theses(
+            manifest,
+            artifact_root=tmp_path,
+            security_ids=("000660",),
+            horizon_trading_days=120,
             captured_at=captured_at + timedelta(minutes=15),
         )

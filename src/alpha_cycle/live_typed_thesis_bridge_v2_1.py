@@ -7,7 +7,6 @@ consensus, valuation authority, investability, target price, or position size.
 
 from __future__ import annotations
 
-import csv
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -23,7 +22,10 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
     UncertaintyLevel,
 )
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundBlocker
-from alpha_cycle.investment_thesis_repository_v2_1 import persist_investment_thesis
+from alpha_cycle.investment_thesis_repository_v2_1 import (
+    load_investment_thesis,
+    persist_investment_thesis,
+)
 from alpha_cycle.live_typed_source_manifest_v2_1 import (
     FrozenSourceSnapshot,
     LiveTypedSourceManifest,
@@ -33,6 +35,7 @@ from alpha_cycle.live_typed_source_revalidation_v2_1 import (
     revalidate_market_snapshot,
     revalidate_research_snapshot,
 )
+from alpha_cycle.providers.tossinvest import MarketPrice
 
 _PREFERRED_FINANCIAL_METRICS = (
     "revenue",
@@ -97,8 +100,11 @@ def produce_source_backed_theses(
     if canonical_research.market_snapshot_id != canonical_market.snapshot_id:
         raise ValueError("mixed source generations: research market binding mismatch")
 
-    market_rows = _read_csv(_bound_source_file(root, market_source, "prices.csv"))
-    financial_rows = _read_csv(_bound_source_file(root, research_source, "financials.csv"))
+    market_rows = canonical_market.prices
+    financial_rows = tuple(
+        {str(key): value for key, value in row.items()}
+        for row in canonical_research.financials.to_dict(orient="records")
+    )
 
     theses: list[InvestmentThesisSnapshot] = []
     paths: list[Path] = []
@@ -106,7 +112,7 @@ def produce_source_backed_theses(
     for security_id in canonical_security_ids:
         market_row = _market_row(market_rows, security_id)
         security_financials = tuple(
-            row for row in financial_rows if _row_text(row, "ticker") == security_id
+            row for row in financial_rows if str(row["ticker"]) == security_id
         )
         if market_row is None:
             blockers.append(
@@ -127,7 +133,7 @@ def produce_source_backed_theses(
             )
             continue
 
-        _validate_market_row_pit(market_row, manifest.research_cutoff_at)
+        _validate_market_row_pit(market_row, canonical_market.captured_at)
         latest_period, selected_financials = _latest_financial_facts(
             security_financials,
             evaluation_date=manifest.evaluation_date,
@@ -153,7 +159,12 @@ def produce_source_backed_theses(
             horizon_trading_days=horizon_trading_days,
             captured_at=captured_at,
         )
-        path = persist_investment_thesis(thesis, artifact_root=root)
+        path = root / "investment_thesis_v2_1" / f"{thesis.snapshot_id}.json"
+        if path.exists():
+            if load_investment_thesis(path) != thesis:
+                raise ValueError("existing investment thesis conflicts with canonical replay")
+        else:
+            path = persist_investment_thesis(thesis, artifact_root=root)
         theses.append(thesis)
         paths.append(path)
 
@@ -170,16 +181,16 @@ def _build_thesis(
     *,
     market_source: FrozenSourceSnapshot,
     research_source: FrozenSourceSnapshot,
-    market_row: dict[str, str],
-    financial_rows: tuple[dict[str, str], ...],
+    market_row: MarketPrice,
+    financial_rows: tuple[dict[str, object], ...],
     security_id: str,
     latest_period: date,
     horizon_trading_days: int,
     captured_at: datetime,
 ) -> InvestmentThesisSnapshot:
-    last_price = _row_text(market_row, "last_price")
-    currency = _row_text(market_row, "currency")
-    price_timestamp = _row_text(market_row, "timestamp")
+    last_price = str(market_row.last_price)
+    currency = market_row.currency
+    price_timestamp = market_row.timestamp.isoformat()
     claims: list[ThesisClaim] = [
         ThesisClaim(
             claim_id="frozen_market_price",
@@ -194,10 +205,10 @@ def _build_thesis(
         )
     ]
     for row in financial_rows:
-        metric = _row_text(row, "metric")
-        value = _row_text(row, "value")
-        unit = _row_text(row, "unit")
-        available_date = _row_text(row, "available_date")
+        metric = str(row["metric"])
+        value = str(row["value"])
+        unit = str(row["unit"])
+        available_date = _as_date(row["available_date"], "available_date").isoformat()
         claims.append(
             ThesisClaim(
                 claim_id=f"official_financial_{metric}",
@@ -275,21 +286,21 @@ def _build_thesis(
 
 
 def _latest_financial_facts(
-    rows: tuple[dict[str, str], ...],
+    rows: tuple[dict[str, object], ...],
     *,
     evaluation_date: date,
-) -> tuple[date, tuple[dict[str, str], ...]]:
-    visible: list[tuple[date, dict[str, str]]] = []
+) -> tuple[date, tuple[dict[str, object], ...]]:
+    visible: list[tuple[date, dict[str, object]]] = []
     for row in rows:
-        period_end = _parse_date(_row_text(row, "period_end"), "period_end")
-        available_date = _parse_date(_row_text(row, "available_date"), "available_date")
+        period_end = _as_date(row["period_end"], "period_end")
+        available_date = _as_date(row["available_date"], "available_date")
         if period_end <= evaluation_date and available_date <= evaluation_date:
             visible.append((period_end, row))
     if not visible:
         return evaluation_date, ()
     latest_period = max(item[0] for item in visible)
     latest_rows = tuple(row for period, row in visible if period == latest_period)
-    by_metric = {_row_text(row, "metric"): row for row in latest_rows}
+    by_metric = {str(row["metric"]): row for row in latest_rows}
     preferred = tuple(
         by_metric[metric] for metric in _PREFERRED_FINANCIAL_METRICS if metric in by_metric
     )
@@ -299,22 +310,17 @@ def _latest_financial_facts(
     return latest_period, tuple(by_metric[metric] for metric in fallback_metrics)
 
 
-def _market_row(rows: tuple[dict[str, str], ...], security_id: str) -> dict[str, str] | None:
-    matches = tuple(row for row in rows if _row_text(row, "symbol") == security_id)
+def _market_row(rows: tuple[MarketPrice, ...], security_id: str) -> MarketPrice | None:
+    matches = tuple(row for row in rows if row.symbol == security_id)
     if len(matches) > 1:
         raise ValueError(f"multiple frozen market price rows found for {security_id}")
     return matches[0] if matches else None
 
 
-def _validate_market_row_pit(row: dict[str, str], cutoff: datetime) -> None:
-    timestamp_text = _row_text(row, "timestamp")
-    try:
-        timestamp = datetime.fromisoformat(timestamp_text)
-    except ValueError as exc:
-        raise ValueError("market timestamp must be an ISO datetime") from exc
-    _require_aware(timestamp, "market timestamp")
-    if timestamp > cutoff:
-        raise ValueError("frozen market observation cannot follow research_cutoff_at")
+def _validate_market_row_pit(row: MarketPrice, captured_at: datetime) -> None:
+    _require_aware(row.timestamp, "market timestamp")
+    if row.timestamp > captured_at:
+        raise ValueError("market observation cannot follow market source captured_at")
 
 
 def _required_source(
@@ -325,37 +331,6 @@ def _required_source(
     if len(matches) != 1:
         raise ValueError(f"source manifest requires exactly one {role!r} source")
     return matches[0]
-
-
-def _bound_source_file(
-    root: Path,
-    source: FrozenSourceSnapshot,
-    relative_path: str,
-) -> Path:
-    if relative_path not in {item.relative_path for item in source.files}:
-        raise ValueError(f"required source file is not bound by manifest: {relative_path}")
-    path = root.resolve() / source.snapshot_path / relative_path
-    if path.is_symlink() or not path.is_file():
-        raise ValueError(f"required bound source file is unavailable: {path}")
-    return path
-
-
-def _read_csv(path: Path) -> tuple[dict[str, str], ...]:
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames is None:
-            raise ValueError(f"CSV header is missing: {path}")
-        rows: list[dict[str, str]] = []
-        for raw in reader:
-            rows.append({str(key): "" if value is None else value for key, value in raw.items()})
-    return tuple(rows)
-
-
-def _row_text(row: dict[str, str], field: str) -> str:
-    value = row.get(field, "").strip()
-    if not value:
-        raise ValueError(f"required source column is missing or empty: {field}")
-    return value
 
 
 def _canonical_security_ids(security_ids: tuple[str, ...]) -> tuple[str, ...]:
@@ -376,11 +351,17 @@ def _blocker(component: str, code: str, security_id: str) -> ResearchRoundBlocke
     )
 
 
-def _parse_date(value: str, field: str) -> date:
-    try:
-        return date.fromisoformat(value)
-    except ValueError as exc:
-        raise ValueError(f"{field} must be an ISO date") from exc
+def _as_date(value: object, field: str) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"{field} must be an ISO date") from exc
+    raise ValueError(f"{field} must be a canonical date")
 
 
 def _require_aware(value: datetime, field: str) -> None:

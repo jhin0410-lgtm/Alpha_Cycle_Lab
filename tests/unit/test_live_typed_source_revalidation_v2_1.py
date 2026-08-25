@@ -8,7 +8,11 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from alpha_cycle.data.research import RevisionPolicy
+from alpha_cycle.data.research import (
+    RevisionPolicy,
+    validate_financial_statements,
+    validate_macro_series,
+)
 from alpha_cycle.intelligence.fundamental_macro import (
     FundamentalMacroSnapshot,
     write_fundamental_macro_snapshot,
@@ -86,7 +90,12 @@ def _research_snapshot(market_snapshot_id: str) -> FundamentalMacroSnapshot:
                 "ticker": ticker,
                 "metric": metric,
                 "period_end": "2025-12-31",
+                "fiscal_period": "FY",
                 "available_date": "2026-03-20",
+                "retrieved_at": "2026-08-25T06:35:00+00:00",
+                "source": "opendart",
+                "revision_id": f"{ticker}-{metric}-2025",
+                "revision_sequence": 0,
                 "value": value,
                 "unit": "KRW",
             }
@@ -103,21 +112,27 @@ def _research_snapshot(market_snapshot_id: str) -> FundamentalMacroSnapshot:
             {"ticker": "005930", "receipt_date": "2026-03-20", "rcept_no": "B"},
         ]
     )
-    macro = pd.DataFrame(
+    macro = validate_macro_series(pd.DataFrame(
         [
             {
                 "series_id": "kr_base_rate",
-                "period_end": "2026-08-24",
+                "observation_date": "2026-08-24",
+                "frequency": "D",
                 "available_date": "2026-08-25",
+                "retrieved_at": "2026-08-25T06:35:00+00:00",
+                "source": "ecos",
+                "revision_id": "kr-base-rate-20260824",
+                "revision_sequence": 0,
                 "value": 2.5,
+                "unit": "%",
             }
         ]
-    )
+    ))
     return FundamentalMacroSnapshot(
         captured_at=captured_at,
         evaluation_date=date(2026, 8, 25),
         revision_policy=RevisionPolicy.LATEST_KNOWN,
-        financials=financials,
+        financials=validate_financial_statements(financials),
         disclosures=disclosures,
         macro=macro,
         raw_opendart={"source": "opendart"},
@@ -173,4 +188,15 @@ def test_research_revalidation_rejects_modified_persisted_fact(tmp_path: Path) -
     financials.to_csv(directory / "financials.csv", index=False)
 
     with pytest.raises(LiveTypedSourceRevalidationError, match="canonical identity mismatch"):
+        revalidate_research_snapshot(directory)
+
+
+def test_research_revalidation_rejects_malformed_csv(tmp_path: Path) -> None:
+    market = _market_snapshot()
+    snapshot = _research_snapshot(market.snapshot_id)
+    files = write_fundamental_macro_snapshot(tmp_path / "research", snapshot)
+    directory = files[0].parent
+    (directory / "financials.csv").write_text('ticker,metric\n"unterminated', encoding="utf-8")
+
+    with pytest.raises(LiveTypedSourceRevalidationError, match="cannot decode snapshot CSV"):
         revalidate_research_snapshot(directory)
