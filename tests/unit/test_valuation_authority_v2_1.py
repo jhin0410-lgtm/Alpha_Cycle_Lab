@@ -215,6 +215,16 @@ def _rewrite(path: Path, mutate) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _persist(artifact, output: Path, market: Path, research: Path, legacy: Path) -> Path:
+    return persist_valuation_authority(
+        artifact,
+        output_root=output,
+        market_directory=market,
+        research_directory=research,
+        legacy_valuation_directory=legacy,
+    )
+
+
 def test_writer_backed_actuals_and_price_replay_without_valuation_promotion(tmp_path: Path) -> None:
     artifact, _, _, _ = _artifact(tmp_path)
     inputs = {item.role: item for item in artifact.inputs}
@@ -272,7 +282,7 @@ def test_price_implied_payoff_and_target_authority_remain_blocked(tmp_path: Path
 
 def test_persist_replay_and_upstream_revalidation_round_trip(tmp_path: Path) -> None:
     artifact, market, research, legacy = _artifact(tmp_path)
-    directory = persist_valuation_authority(artifact, output_root=tmp_path / "authority")
+    directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
     assert replay_persisted_valuation_authority(directory) == artifact
     assert (
         revalidate_persisted_valuation_authority(
@@ -301,8 +311,8 @@ def test_modified_share_source_changes_exact_content_lineage(tmp_path: Path) -> 
 
 
 def test_forged_authority_json_fails_digest_before_it_can_self_authorize(tmp_path: Path) -> None:
-    artifact, _, _, _ = _artifact(tmp_path)
-    directory = persist_valuation_authority(artifact, output_root=tmp_path / "authority")
+    artifact, market, research, legacy = _artifact(tmp_path)
+    directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
     _rewrite(
         directory / "authority.json",
         lambda value: value.__setitem__("share_count_authority_established", True),
@@ -311,9 +321,21 @@ def test_forged_authority_json_fails_digest_before_it_can_self_authorize(tmp_pat
         replay_persisted_valuation_authority(directory)
 
 
+def test_caller_constructed_self_consistent_authority_cannot_be_persisted(tmp_path: Path) -> None:
+    artifact, market, research, legacy = _artifact(tmp_path)
+    inputs = tuple(
+        replace(item, value=1.0) if item.role == "current_price" else item
+        for item in artifact.inputs
+    )
+    forged = replace(artifact, inputs=inputs)
+    assert forged.artifact_id != artifact.artifact_id
+    with pytest.raises(ValuationAuthorityError, match="caller-created"):
+        _persist(forged, tmp_path / "authority", market, research, legacy)
+
+
 def test_unknown_field_tamper_with_updated_file_hash_remains_noncanonical(tmp_path: Path) -> None:
-    artifact, _, _, _ = _artifact(tmp_path)
-    directory = persist_valuation_authority(artifact, output_root=tmp_path / "authority")
+    artifact, market, research, legacy = _artifact(tmp_path)
+    directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
     _rewrite(directory / "authority.json", lambda value: value.__setitem__("trusted", True))
     content = (directory / "authority.json").read_bytes()
     _rewrite(
@@ -372,7 +394,7 @@ def test_future_authority_capture_and_unknown_security_fail_closed(tmp_path: Pat
 
 def test_price_mutation_is_detected_by_upstream_replay(tmp_path: Path) -> None:
     artifact, market, research, legacy = _artifact(tmp_path)
-    directory = persist_valuation_authority(artifact, output_root=tmp_path / "authority")
+    directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
     _rewrite(
         directory / "authority.json", lambda value: value["inputs"][3].__setitem__("value", 1.0)
     )
@@ -411,19 +433,19 @@ def test_wrong_market_research_generation_is_rejected(tmp_path: Path) -> None:
 
 
 def test_duplicate_identity_conflict_and_symlink_escape_fail_closed(tmp_path: Path) -> None:
-    artifact, _, _, _ = _artifact(tmp_path)
+    artifact, market, research, legacy = _artifact(tmp_path)
     repository = tmp_path / "authority"
-    directory = persist_valuation_authority(artifact, output_root=repository)
+    directory = _persist(artifact, repository, market, research, legacy)
     (directory / "authority.json").write_text("{}", encoding="utf-8")
     with pytest.raises(ValuationAuthorityError):
-        persist_valuation_authority(artifact, output_root=repository)
+        _persist(artifact, repository, market, research, legacy)
     link = tmp_path / "authority-link"
     try:
         link.symlink_to(repository, target_is_directory=True)
     except OSError:
         pytest.skip("symlink creation unavailable")
     with pytest.raises(ValuationAuthorityError, match="plain directory"):
-        persist_valuation_authority(artifact, output_root=link)
+        _persist(artifact, link, market, research, legacy)
 
 
 def test_no_legacy_share_source_stays_class_e(tmp_path: Path) -> None:

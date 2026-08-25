@@ -417,7 +417,22 @@ def persist_valuation_authority(
     artifact: ValuationAuthorityArtifact,
     *,
     output_root: str | Path,
+    market_directory: str | Path,
+    research_directory: str | Path,
+    legacy_valuation_directory: str | Path | None,
 ) -> Path:
+    rebuilt = build_valuation_authority(
+        market_directory=market_directory,
+        research_directory=research_directory,
+        legacy_valuation_directory=legacy_valuation_directory,
+        security_id=artifact.security_id,
+        captured_at=artifact.captured_at,
+        horizon_trading_days=artifact.scenarios[0].horizon_trading_days,
+    )
+    if rebuilt != artifact:
+        raise ValuationAuthorityError(
+            "caller-created valuation authority differs from upstream replay"
+        )
     root = _plain_repository(Path(output_root), create=True)
     timestamp = artifact.captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     directory = root / f"{timestamp}__{artifact.artifact_id[:12]}"
