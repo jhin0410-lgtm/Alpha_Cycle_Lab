@@ -86,7 +86,17 @@ def _market() -> MarketIntelligenceSnapshot:
         prices=prices,
         candles=ordered,
         features=features,
-        raw_prices={"writer_backed": True},
+        raw_prices={
+            "result": [
+                {
+                    "symbol": item.symbol,
+                    "timestamp": item.timestamp.isoformat(),
+                    "lastPrice": str(item.last_price),
+                    "currency": item.currency,
+                }
+                for item in prices
+            ]
+        },
         raw_candles={"000660": {}, "005930": {}},
     )
 
@@ -357,6 +367,26 @@ def test_stale_market_price_is_rejected(tmp_path: Path) -> None:
         )
 
 
+def test_normalized_price_must_match_raw_tossinvest_capture(tmp_path: Path) -> None:
+    original = _market()
+    market = replace(
+        original,
+        prices=tuple(
+            replace(item, last_price=item.last_price + Decimal(1)) for item in original.prices
+        ),
+    )
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research)[0].parent
+    with pytest.raises(ValuationAuthorityError, match="differs from raw TossInvest"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
 def test_ofs_statement_basis_cannot_be_published_as_cfs(tmp_path: Path) -> None:
     market = _market()
     market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
@@ -533,6 +563,42 @@ def test_operating_profit_cannot_fallback_to_net_income(tmp_path: Path) -> None:
     income = next(item for item in artifact.inputs if item.role == "trailing_net_income")
     assert income.authority_class is AuthorityClass.UNSUPPORTED
     assert income.blocker == "trailing_net_income_authority_missing"
+
+
+@pytest.mark.parametrize(
+    "existing_fragment,compound_metric,role",
+    [
+        ("ProfitLoss#", "CIS:ifrs-full_ProfitLossBeforeTax", "trailing_net_income"),
+        ("Equity#", "BS:ifrs-full_LiabilitiesAndEquity", "book_equity"),
+    ],
+)
+def test_unregistered_compound_concepts_are_not_actual_aliases(
+    tmp_path: Path,
+    existing_fragment: str,
+    compound_metric: str,
+    role: str,
+) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    financials = research.financials.copy()
+    mask = financials["ticker"].astype(str).eq("000660") & financials["metric"].astype(
+        str
+    ).str.contains(existing_fragment)
+    financials.loc[mask, "metric"] = compound_metric
+    financials = validate_financial_statements(financials)
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, financials=financials)
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    actual = next(item for item in artifact.inputs if item.role == role)
+    assert actual.authority_class is AuthorityClass.UNSUPPORTED
+    assert actual.blocker == f"{role}_authority_missing"
 
 
 @pytest.mark.parametrize("ticker,price", [("000660", 1_647_000), ("005930", 273_500)])
@@ -1047,4 +1113,29 @@ def test_cli_fails_closed_for_unknown_security(tmp_path: Path, capsys) -> None:
         ]
     )
     assert result == 2
+
+
+def test_cli_validates_full_batch_before_publication(tmp_path: Path, capsys) -> None:
+    market, research, legacy = _sources(tmp_path)
+    output = tmp_path / "acceptance"
+    result = authority_cli_main(
+        [
+            "--market-snapshot",
+            str(market),
+            "--research-snapshot",
+            str(research),
+            "--legacy-valuation-snapshot",
+            str(legacy),
+            "--security",
+            "000660",
+            "--security",
+            "999999",
+            "--captured-at",
+            CAPTURED.isoformat(),
+            "--output",
+            str(output),
+        ]
+    )
+    assert result == 2
+    assert not output.exists()
     assert "exactly one trusted market price" in capsys.readouterr().err

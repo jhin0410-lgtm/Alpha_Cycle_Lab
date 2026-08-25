@@ -11,8 +11,8 @@ The repository audit found these distinct paths:
 
 | Input/path | Previous behavior | Authority class after #308 |
 | --- | --- | --- |
-| Canonically replayed market `prices.csv` plus raw capture | Exact writer identity, approved read-only provider, positive KRW price, and a four-calendar-day freshness ceiling | A: authoritative persisted source |
-| Canonically replayed OpenDART company actuals | Exact writer identity, OpenDART source, filing availability, CFS proof, semantic aliases, and KRW compatibility | A: authoritative persisted actual |
+| Canonically replayed market `prices.csv` plus raw capture | Exact writer identity, exact normalized/raw TossInvest binding, approved read-only provider, positive KRW price, and a four-calendar-day freshness ceiling | A: authoritative persisted source |
+| Canonically replayed OpenDART company actuals | Exact writer identity, OpenDART source, filing availability, CFS proof, explicit accounting-concept aliases, and KRW compatibility | A: authoritative persisted actual |
 | `ValuationEvidenceSnapshot` share rows and market-cap arithmetic | Self-consistent normalized OpenDART payload and CSVs | B only after exact canonical replay; the current real snapshot fails that stricter replay and is treated as E |
 | Market cap, trailing P/E, and P/B | Derived from the class-B share basis | blocked; never promoted to C |
 | Cash actual | Official actual only when canonical bytes prove CFS | A when proven; otherwise blocked |
@@ -95,5 +95,7 @@ research, and optional legacy directories, so a self-consistent payload cannot a
 Symlinks/junction aliases, unknown fields, duplicate identities, mutated
 raw inputs, wrong generations/dates/securities, partial publications, and self-consistent forged
 authority JSON fail closed.
+The CLI constructs and validates every requested security artifact before publishing any member of
+the batch, preventing a later invalid security from leaving an earlier partial result.
 
 The frozen SK hynix 2026Q3 prospective artifacts are neither read nor changed by this path.

@@ -16,6 +16,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
@@ -29,6 +30,7 @@ from alpha_cycle.live_typed_source_revalidation_v2_1 import (
     revalidate_market_snapshot,
     revalidate_research_snapshot,
 )
+from alpha_cycle.providers.tossinvest import MarketPrice
 
 SCHEMA_VERSION = 1
 REPOSITORY_NAME = "valuation_authority_v2_1"
@@ -36,6 +38,26 @@ PARSER_ID = "alpha_cycle.valuation_authority_v2_1"
 PARSER_VERSION = "1.0.0"
 KOREA_TZ = ZoneInfo("Asia/Seoul")
 MAX_PRICE_AGE_CALENDAR_DAYS = 4
+EXPLICIT_ACTUAL_ALIASES = {
+    "net_income": {
+        "ifrsfullprofitloss": 100,
+        "dartprofitloss": 100,
+        "당기순이익손실": 100,
+        "당기순이익": 100,
+        "profitloss": 100,
+        "ifrsfullprofitlossattributabletoownersofparent": 80,
+    },
+    "equity": {
+        "ifrsfullequity": 100,
+        "자본총계": 100,
+        "equity": 100,
+    },
+    "cash": {
+        "ifrsfullcashandcashequivalents": 100,
+        "현금및현금성자산": 100,
+        "cashandcashequivalents": 100,
+    },
+}
 
 
 class ValuationAuthorityError(ValueError):
@@ -318,6 +340,7 @@ def build_valuation_authority(
         raise ValuationAuthorityError("market price is after the evaluation date")
     if (research.evaluation_date - price_date).days > MAX_PRICE_AGE_CALENDAR_DAYS:
         raise ValuationAuthorityError("market price is stale for the evaluation date")
+    _require_raw_price_binding(market.raw_prices, price)
 
     legacy_id, legacy_content_id = _legacy_binding(
         legacy_valuation_directory,
@@ -627,24 +650,40 @@ def _metric_score(metric: str, semantic_name: str) -> int:
     account = account.split("#", 1)[0].split(":", 1)[0]
     normalized = "".join(character for character in account.lower() if character.isalnum())
 
-    def score(spec_name: str) -> int:
-        spec = next(item for item in METRIC_SPECS if item.name == spec_name)
-        if statement.strip().upper() not in spec.statements:
-            return 0
-        aliases = {
-            "".join(character for character in alias.lower() if character.isalnum())
-            for alias in spec.aliases
-        }
-        if normalized in aliases:
-            return 100
-        return 60 if any(alias and alias in normalized for alias in aliases) else 0
+    spec = next(item for item in METRIC_SPECS if item.name == semantic_name)
+    if statement.strip().upper() not in spec.statements:
+        return 0
+    return EXPLICIT_ACTUAL_ALIASES[semantic_name].get(normalized, 0)
 
-    target = score(semantic_name)
-    competing = max(
-        (score(item.name) for item in METRIC_SPECS if item.name != semantic_name),
-        default=0,
-    )
-    return 0 if competing > target else target
+
+def _require_raw_price_binding(raw: object, price: MarketPrice) -> None:
+    """Reconstruct the approved provider row and bind it to the normalized price."""
+
+    if not isinstance(raw, dict) or not isinstance(raw.get("result"), list):
+        raise ValuationAuthorityError("raw TossInvest price capture is unavailable")
+    symbol = price.symbol
+    matches = [
+        row
+        for row in raw["result"]
+        if isinstance(row, dict) and str(row.get("symbol", "")).strip().upper() == symbol
+    ]
+    if len(matches) != 1:
+        raise ValuationAuthorityError("raw TossInvest price row is missing or duplicated")
+    row = matches[0]
+    try:
+        raw_price = Decimal(str(row.get("lastPrice", "")))
+        raw_timestamp = datetime.fromisoformat(str(row.get("timestamp", "")))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValuationAuthorityError("raw TossInvest price row is malformed") from exc
+    raw_currency = str(row.get("currency", "")).strip().upper()
+    if raw_timestamp.tzinfo is None or raw_timestamp.utcoffset() is None:
+        raise ValuationAuthorityError("raw TossInvest price timestamp is not timezone-aware")
+    if (
+        raw_price != price.last_price
+        or raw_timestamp != price.timestamp
+        or raw_currency != price.currency.strip().upper()
+    ):
+        raise ValuationAuthorityError("normalized market price differs from raw TossInvest capture")
 
 
 def _trusted_actual_inputs(

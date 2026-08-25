@@ -31,16 +31,23 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = build_parser().parse_args(argv)
         captured_at = args.captured_at or datetime.now(UTC)
-        artifacts = []
-        for security_id in sorted(set(args.security)):
-            artifact = build_valuation_authority(
-                market_directory=args.market_snapshot,
-                research_directory=args.research_snapshot,
-                legacy_valuation_directory=args.legacy_valuation_snapshot,
-                security_id=security_id,
-                captured_at=captured_at,
-                horizon_trading_days=args.horizon_trading_days,
+        security_ids = sorted(set(args.security))
+        built = [
+            (
+                security_id,
+                build_valuation_authority(
+                    market_directory=args.market_snapshot,
+                    research_directory=args.research_snapshot,
+                    legacy_valuation_directory=args.legacy_valuation_snapshot,
+                    security_id=security_id,
+                    captured_at=captured_at,
+                    horizon_trading_days=args.horizon_trading_days,
+                ),
             )
+            for security_id in security_ids
+        ]
+        artifacts = []
+        for security_id, artifact in built:
             directory = persist_valuation_authority(
                 artifact,
                 output_root=args.output,
