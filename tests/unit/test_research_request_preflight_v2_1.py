@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
+import pytest
+
 from alpha_cycle.intelligence.decision_thesis_v2 import (
     ClaimDirection,
     EpistemicStatus,
@@ -16,7 +18,10 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
 from alpha_cycle.intelligence.research_run_ledger_v2_1 import ResearchRunKind
 from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
-from alpha_cycle.investment_thesis_repository_v2_1 import persist_investment_thesis
+from alpha_cycle.investment_thesis_repository_v2_1 import (
+    InvestmentThesisRepositoryError,
+    persist_investment_thesis,
+)
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
 from alpha_cycle.research_package_assembler_v2_1 import assemble_and_run_research_package
 from alpha_cycle.research_request_intake_v2_1 import record_analysis_request
@@ -262,3 +267,27 @@ def test_expected_binding_selects_exact_snapshot_instead_of_hash_tie_winner(
     assert "preflight_thesis_identity_mismatch" not in {
         item.code for item in assembly.blockers
     }
+
+
+def test_expected_binding_validates_exact_thesis_lineage(tmp_path) -> None:
+    _request(tmp_path)
+    child = replace(
+        _thesis("000660", NOW + timedelta(seconds=10)),
+        snapshot_version=2,
+        parent_snapshot_id="f" * 64,
+    )
+    samsung = _thesis("005930", NOW + timedelta(seconds=10))
+    for thesis in (child, samsung):
+        persist_investment_thesis(thesis, artifact_root=tmp_path)
+
+    with pytest.raises(InvestmentThesisRepositoryError, match="parent artifact is missing"):
+        preflight_pending_request_theses(
+            request_id="live-semiconductor-round",
+            run_id="preflight-invalid-exact-lineage",
+            processed_at=NOW + timedelta(minutes=1),
+            artifact_root=tmp_path,
+            expected_thesis_snapshot_ids=(
+                ("000660", child.snapshot_id),
+                ("005930", samsung.snapshot_id),
+            ),
+        )

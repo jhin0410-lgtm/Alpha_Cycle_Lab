@@ -191,7 +191,11 @@ def _persist_result(root: Path, payload: dict[str, object]) -> Path:
     if not directory.is_dir() or directory.resolve().parent != trusted_root:
         raise ValueError("live typed result repository escapes artifact_root")
     path = directory / f"{result_id}.json"
+    if path.is_symlink():
+        raise ValueError("live typed result artifact cannot be a symlink")
     if path.exists():
+        if not path.is_file() or path.resolve().parent != directory:
+            raise ValueError("live typed result artifact escapes its repository")
         if path.read_text(encoding="utf-8") != encoded + "\n":
             raise ValueError("existing live typed result conflicts with content identity")
         return path

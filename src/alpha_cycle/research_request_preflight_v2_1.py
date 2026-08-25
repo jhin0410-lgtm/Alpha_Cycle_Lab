@@ -173,6 +173,7 @@ def preflight_pending_request_theses(
                         )
                     )
                     continue
+                thesis_index.validate_exact(thesis)
             else:
                 thesis = thesis_index.find_latest(
                     security_id=security_id,

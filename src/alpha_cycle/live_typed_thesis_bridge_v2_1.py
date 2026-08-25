@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from alpha_cycle.intelligence.decision_thesis_v2 import (
     ClaimDirection,
@@ -44,6 +45,7 @@ _PREFERRED_FINANCIAL_METRICS = (
     "equity",
     "assets",
 )
+_KOREA_TZ = ZoneInfo("Asia/Seoul")
 
 
 @dataclass(frozen=True)
@@ -137,7 +139,11 @@ def produce_source_backed_theses(
             )
             continue
 
-        _validate_market_row_pit(market_row, canonical_market.captured_at)
+        _validate_market_row_pit(
+            market_row,
+            captured_at=canonical_market.captured_at,
+            evaluation_date=manifest.evaluation_date,
+        )
         latest_period, selected_financials = _latest_financial_facts(
             security_financials,
             evaluation_date=manifest.evaluation_date,
@@ -321,10 +327,17 @@ def _market_row(rows: tuple[MarketPrice, ...], security_id: str) -> MarketPrice 
     return matches[0] if matches else None
 
 
-def _validate_market_row_pit(row: MarketPrice, captured_at: datetime) -> None:
+def _validate_market_row_pit(
+    row: MarketPrice,
+    *,
+    captured_at: datetime,
+    evaluation_date: date,
+) -> None:
     _require_aware(row.timestamp, "market timestamp")
     if row.timestamp > captured_at:
         raise ValueError("market observation cannot follow market source captured_at")
+    if row.timestamp.astimezone(_KOREA_TZ).date() > evaluation_date:
+        raise ValueError("market observation cannot follow manifest evaluation_date")
 
 
 def _required_source(

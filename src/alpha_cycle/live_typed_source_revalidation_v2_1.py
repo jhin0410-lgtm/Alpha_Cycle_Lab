@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +19,9 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from alpha_cycle.data.research import (
+    FINANCIAL_OPTIONAL,
+    FINANCIAL_REQUIRED,
+    MACRO_REQUIRED,
     RevisionPolicy,
     validate_financial_statements,
     validate_macro_series,
@@ -307,7 +311,7 @@ def _read_csv_rows(path: Path) -> tuple[dict[str, str], ...]:
 def _read_frame(
     path: Path,
     *,
-    dtype: dict[str, str] | None = None,
+    dtype: str | dict[str, str] | None = None,
     empty_as_na: bool = True,
 ) -> pd.DataFrame:
     if path.is_symlink() or not path.is_file():
@@ -331,10 +335,22 @@ def _read_frame(
 def _read_financial_frame(path: Path) -> pd.DataFrame:
     frame = _read_frame(
         path,
-        dtype={"ticker": "string", "revision_id": "string"},
+        dtype={
+            column: "string"
+            for column in (
+                "ticker",
+                "metric",
+                "fiscal_period",
+                "unit",
+                "source",
+                "revision_id",
+                "currency",
+            )
+        },
     )
     try:
-        return validate_financial_statements(frame)
+        validated = validate_financial_statements(frame)
+        return _restore_financial_row_order(validated, frame)
     except (TypeError, ValueError) as exc:
         raise LiveTypedSourceRevalidationError(
             "research financial CSV violates the canonical data contract"
@@ -342,9 +358,16 @@ def _read_financial_frame(path: Path) -> pd.DataFrame:
 
 
 def _read_macro_frame(path: Path) -> pd.DataFrame:
-    frame = _read_frame(path, dtype={"series_id": "string", "revision_id": "string"})
+    frame = _read_frame(
+        path,
+        dtype={
+            column: "string"
+            for column in ("series_id", "frequency", "unit", "source", "revision_id")
+        },
+    )
     try:
-        return validate_macro_series(frame)
+        validated = validate_macro_series(frame)
+        return _restore_macro_row_order(validated, frame)
     except (TypeError, ValueError) as exc:
         raise LiveTypedSourceRevalidationError(
             "research macro CSV violates the canonical data contract"
@@ -354,14 +377,55 @@ def _read_macro_frame(path: Path) -> pd.DataFrame:
 def _read_disclosure_frame(path: Path) -> pd.DataFrame:
     return _read_frame(
         path,
-        dtype={
-            "ticker": "string",
-            "corp_code": "string",
-            "rcept_no": "string",
-            "corp_class": "string",
-        },
+        dtype="string",
         empty_as_na=False,
     )
+
+
+def _restore_financial_row_order(
+    validated: pd.DataFrame,
+    source: pd.DataFrame,
+) -> pd.DataFrame:
+    if validated.empty:
+        return validated.loc[:, [*FINANCIAL_REQUIRED, *FINANCIAL_OPTIONAL]]
+
+    def key(row: pd.Series[Any]) -> tuple[object, ...]:
+        return (
+            str(row["ticker"]).strip(),
+            str(row["metric"]).strip(),
+            pd.Timestamp(row["period_end"]).date(),
+            str(row["fiscal_period"]).strip(),
+            int(row["revision_sequence"]),
+        )
+
+    return _restore_validated_row_order(validated, source, key)
+
+
+def _restore_macro_row_order(
+    validated: pd.DataFrame,
+    source: pd.DataFrame,
+) -> pd.DataFrame:
+    if validated.empty:
+        return validated.loc[:, list(MACRO_REQUIRED)]
+
+    def key(row: pd.Series[Any]) -> tuple[object, ...]:
+        return (
+            str(row["series_id"]).strip(),
+            pd.Timestamp(row["observation_date"]).date(),
+            int(row["revision_sequence"]),
+        )
+
+    return _restore_validated_row_order(validated, source, key)
+
+
+def _restore_validated_row_order(
+    validated: pd.DataFrame,
+    source: pd.DataFrame,
+    key: Callable[[pd.Series[Any]], tuple[object, ...]],
+) -> pd.DataFrame:
+    positions = {key(row): index for index, (_, row) in enumerate(validated.iterrows())}
+    desired = [positions[key(row)] for _, row in source.iterrows()]
+    return validated.iloc[desired].reset_index(drop=True)
 
 
 def _load_object(path: Path) -> dict[str, Any]:

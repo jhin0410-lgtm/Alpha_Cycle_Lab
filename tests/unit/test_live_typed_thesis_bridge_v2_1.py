@@ -42,6 +42,7 @@ def _persist_sources(
     future_financial_retrieval: bool = False,
     tickers: tuple[str, ...] = ("000660", "005930"),
     financial_source: str = "opendart",
+    evaluation_date: date = date(2026, 8, 25),
 ) -> tuple[Path, Path, datetime]:
     captured_at = datetime(2026, 8, 25, 6, 0, tzinfo=UTC)
     price_values = {"000660": Decimal("250000"), "005930": Decimal("80000")}
@@ -114,7 +115,7 @@ def _persist_sources(
     )
     research = FundamentalMacroSnapshot(
         captured_at=captured_at + timedelta(minutes=5),
-        evaluation_date=date(2026, 8, 25),
+        evaluation_date=evaluation_date,
         revision_policy=RevisionPolicy.LATEST_KNOWN,
         financials=validate_financial_statements(financials),
         disclosures=pd.DataFrame(
@@ -252,6 +253,32 @@ def test_future_market_observation_cannot_be_promoted(tmp_path: Path) -> None:
             manifest,
             artifact_root=tmp_path,
             security_ids=("000660", "005930"),
+            horizon_trading_days=120,
+            captured_at=captured_at + timedelta(minutes=15),
+        )
+
+
+def test_market_observation_after_evaluation_date_cannot_be_promoted(
+    tmp_path: Path,
+) -> None:
+    evaluation_date = date(2026, 8, 24)
+    market_dir, research_dir, captured_at = _persist_sources(
+        tmp_path,
+        evaluation_date=evaluation_date,
+    )
+    manifest = freeze_live_typed_source_manifest(
+        artifact_root=tmp_path,
+        source_directories={"market": market_dir, "research": research_dir},
+        evaluation_date=evaluation_date,
+        research_cutoff_at=captured_at + timedelta(minutes=20),
+        frozen_at=captured_at + timedelta(minutes=10),
+    )
+
+    with pytest.raises(ValueError, match="manifest evaluation_date"):
+        produce_source_backed_theses(
+            manifest,
+            artifact_root=tmp_path,
+            security_ids=("000660",),
             horizon_trading_days=120,
             captured_at=captured_at + timedelta(minutes=15),
         )
@@ -474,6 +501,21 @@ def test_result_repository_symlink_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="repository cannot be a symlink"):
         _persist_result(tmp_path, {"safe": True})
+
+
+def test_existing_result_artifact_symlink_is_rejected(tmp_path: Path) -> None:
+    payload = {"safe": True}
+    path = _persist_result(tmp_path, payload)
+    outside = tmp_path / "outside-result.json"
+    outside.write_bytes(path.read_bytes())
+    path.unlink()
+    try:
+        os.symlink(outside, path)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    with pytest.raises(ValueError, match="result artifact cannot be a symlink"):
+        _persist_result(tmp_path, payload)
 
 
 def test_thesis_repository_symlink_is_rejected_before_persistence(tmp_path: Path) -> None:

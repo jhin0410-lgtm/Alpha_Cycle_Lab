@@ -248,6 +248,39 @@ def test_research_revalidation_preserves_empty_disclosure_strings(tmp_path: Path
     assert replayed.disclosures.loc[0, "corp_class"] == ""
 
 
+def test_research_revalidation_preserves_numeric_looking_text(tmp_path: Path) -> None:
+    market = _market_snapshot()
+    original = _research_snapshot(market.snapshot_id)
+    financials = original.financials.copy()
+    financials.loc[0, "unit"] = "001"
+    macro = original.macro.copy()
+    macro.loc[0, "unit"] = "001"
+    snapshot = replace(original, financials=financials, macro=macro)
+    files = write_fundamental_macro_snapshot(tmp_path / "research", snapshot)
+
+    replayed = revalidate_research_snapshot(files[0].parent)
+
+    assert replayed.snapshot_id == snapshot.snapshot_id
+    assert replayed.financials.loc[0, "unit"] == "001"
+    assert replayed.macro.loc[0, "unit"] == "001"
+
+
+def test_research_revalidation_preserves_persisted_row_order(tmp_path: Path) -> None:
+    market = _market_snapshot()
+    original = _research_snapshot(market.snapshot_id)
+    snapshot = replace(
+        original,
+        financials=original.financials.iloc[::-1].reset_index(drop=True),
+        macro=original.macro.iloc[::-1].reset_index(drop=True),
+    )
+    files = write_fundamental_macro_snapshot(tmp_path / "research", snapshot)
+
+    replayed = revalidate_research_snapshot(files[0].parent)
+
+    assert replayed.snapshot_id == snapshot.snapshot_id
+    assert replayed.payload_without_id() == snapshot.payload_without_id()
+
+
 def test_market_revalidation_rejects_self_declared_forged_snapshot_id(tmp_path: Path) -> None:
     snapshot = _market_snapshot()
     files = write_market_intelligence_snapshot(tmp_path / "market", snapshot)
