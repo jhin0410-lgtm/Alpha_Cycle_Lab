@@ -865,12 +865,16 @@ def _scenario_from_payload(raw: dict[str, object]) -> ScenarioAuthority:
 
 
 def _plain_repository(path: Path, *, create: bool) -> Path:
+    lexical = path.absolute()
     if path.exists() or path.is_symlink():
         if path.is_symlink() or not path.is_dir():
             raise ValuationAuthorityError("authority repository must be a plain directory")
     elif create:
         path.mkdir(parents=True)
-    return path.resolve()
+    resolved = path.resolve()
+    if resolved != lexical:
+        raise ValuationAuthorityError("authority repository path contains a junction or alias")
+    return resolved
 
 
 def _plain_directory(path: Path) -> Path:

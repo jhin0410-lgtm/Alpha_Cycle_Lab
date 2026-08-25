@@ -499,6 +499,19 @@ def test_duplicate_identity_conflict_and_symlink_escape_fail_closed(tmp_path: Pa
         _persist(artifact, link, market, research, legacy)
 
 
+def test_output_repository_symlink_ancestor_escape_is_rejected(tmp_path: Path) -> None:
+    artifact, market, research, legacy = _artifact(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    alias = tmp_path / "alias"
+    try:
+        alias.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation unavailable")
+    with pytest.raises(ValuationAuthorityError, match="junction or alias"):
+        _persist(artifact, alias / "authority", market, research, legacy)
+
+
 def test_no_legacy_share_source_stays_class_e(tmp_path: Path) -> None:
     _, market, research, _ = _artifact(tmp_path)
     artifact = build_valuation_authority(
