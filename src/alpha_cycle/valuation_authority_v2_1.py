@@ -109,8 +109,11 @@ class ValuationInput:
         _text(self.role, "role")
         if self.source_evidence_id is not None:
             _sha(self.source_evidence_id, "source_evidence_id")
-        if self.value is not None and not math.isfinite(self.value):
-            raise ValueError("valuation input value must be finite")
+        if self.value is not None:
+            if type(self.value) is not float:
+                raise ValueError("valuation input value must be a canonical float")
+            if not math.isfinite(self.value):
+                raise ValueError("valuation input value must be finite")
         if self.available_date is not None and self.period_end is None:
             raise ValueError("available_date requires period_end")
         if self.blocker is not None:
@@ -145,6 +148,8 @@ class MethodEligibility:
         _unique_texts(self.required_roles, "required_roles")
         _unique_texts(self.blockers, "blockers")
         values = (self.numerator, self.denominator, self.derived_multiple)
+        if any(value is not None and type(value) is not float for value in values):
+            raise ValueError("method arithmetic must use canonical floats")
         if any(value is not None and not math.isfinite(value) for value in values):
             raise ValueError("method arithmetic must be finite")
         if self.status is EligibilityStatus.ELIGIBLE:
@@ -192,6 +197,10 @@ class ScenarioAuthority:
         else:
             if self.valuation_method is None or self.blockers:
                 raise ValueError("scenario value requires an eligible method")
+            if type(self.implied_value_per_share) is not float or (
+                self.upside_downside is not None and type(self.upside_downside) is not float
+            ):
+                raise ValueError("scenario arithmetic must use canonical floats")
             if not math.isfinite(self.implied_value_per_share) or self.implied_value_per_share <= 0:
                 raise ValueError("scenario value must be positive and finite")
             if self.upside_downside is None or not math.isfinite(self.upside_downside):
@@ -525,6 +534,100 @@ def persist_valuation_authority(
                 child.unlink()
             temporary.rmdir()
     return directory
+
+
+def persist_valuation_authority_batch(
+    artifacts: tuple[ValuationAuthorityArtifact, ...],
+    *,
+    output_root: str | Path,
+    market_directory: str | Path,
+    research_directory: str | Path,
+    legacy_valuation_directory: str | Path | None,
+) -> tuple[Path, ...]:
+    """Publish a fully preflighted batch and roll back this invocation on failure."""
+
+    root = _plain_repository(Path(output_root), create=True)
+    targets: list[Path] = []
+    existed: list[bool] = []
+    for artifact in artifacts:
+        rebuilt = build_valuation_authority(
+            market_directory=market_directory,
+            research_directory=research_directory,
+            legacy_valuation_directory=legacy_valuation_directory,
+            security_id=artifact.security_id,
+            captured_at=artifact.captured_at,
+            horizon_trading_days=artifact.scenarios[0].horizon_trading_days,
+        )
+        if _canonical(rebuilt.payload()) != _canonical(artifact.payload()):
+            raise ValuationAuthorityError(
+                "caller-created valuation authority differs from upstream replay"
+            )
+        timestamp = artifact.captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        target = root / f"{timestamp}__{artifact.artifact_id[:12]}"
+        target_existed = target.exists() or target.is_symlink()
+        if target_existed:
+            replayed = replay_persisted_valuation_authority(
+                target,
+                market_directory=market_directory,
+                research_directory=research_directory,
+                legacy_valuation_directory=legacy_valuation_directory,
+                expected_artifact_id=artifact.artifact_id,
+            )
+            if _canonical(replayed.payload()) != _canonical(artifact.payload()):
+                raise ValuationAuthorityError(
+                    "duplicate immutable identity conflicts with content"
+                )
+        targets.append(target)
+        existed.append(target_existed)
+
+    staged: list[tuple[Path, Path]] = []
+    created: list[Path] = []
+    try:
+        for artifact, target, target_existed in zip(
+            artifacts, targets, existed, strict=True
+        ):
+            if target_existed:
+                continue
+            temporary = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=root))
+            staged.append((temporary, target))
+            payload_bytes = (
+                json.dumps(artifact.payload(), ensure_ascii=False, indent=2, sort_keys=True)
+                + "\n"
+            ).encode()
+            manifest = {
+                "schema_version": SCHEMA_VERSION,
+                "artifact_id": artifact.artifact_id,
+                "captured_at": artifact.captured_at.isoformat(),
+                "evaluation_date": artifact.evaluation_date.isoformat(),
+                "security_id": artifact.security_id,
+                "files": {"authority.json": _digest(payload_bytes)},
+            }
+            _write_new(temporary / "authority.json", payload_bytes)
+            _write_new(
+                temporary / "manifest.json",
+                (
+                    json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+                    + "\n"
+                ).encode(),
+            )
+            _fsync_directory(temporary)
+        for temporary, target in staged:
+            os.rename(temporary, target)
+            created.append(target)
+        _fsync_directory(root)
+    except Exception:
+        for directory in reversed(created):
+            for child in directory.iterdir():
+                child.unlink()
+            directory.rmdir()
+        for temporary, _ in staged:
+            if temporary.exists():
+                for child in temporary.iterdir():
+                    child.unlink()
+                temporary.rmdir()
+        _fsync_directory(root)
+        raise
+    return tuple(targets)
 
 
 def replay_persisted_valuation_authority(
@@ -1083,6 +1186,9 @@ def _legacy_binding(
         )
     except (KeyError, TypeError, ValueError, pd.errors.ParserError) as exc:
         raise ValuationAuthorityError("legacy valuation cannot be reconstructed") from exc
+    required_summary_columns = {"ticker", "market_cap_complete", "valuation_score"}
+    if not required_summary_columns.issubset(snapshot.valuation_metrics.columns):
+        raise ValuationAuthorityError("legacy valuation summary schema is incomplete")
     if snapshot.snapshot_id != snapshot_id:
         raise ValuationAuthorityError("legacy valuation canonical identity mismatch")
     expected_symbols = snapshot.valuation_metrics["ticker"].astype(str).tolist()
@@ -1492,6 +1598,7 @@ __all__ = [
     "ValuationMethod",
     "build_valuation_authority",
     "persist_valuation_authority",
+    "persist_valuation_authority_batch",
     "revalidate_persisted_valuation_authority",
     "replay_persisted_valuation_authority",
 ]

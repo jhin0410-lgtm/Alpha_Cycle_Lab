@@ -11,7 +11,7 @@ from pathlib import Path
 from alpha_cycle.valuation_authority_v2_1 import (
     ValuationAuthorityError,
     build_valuation_authority,
-    persist_valuation_authority,
+    persist_valuation_authority_batch,
 )
 
 
@@ -46,15 +46,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             for security_id in security_ids
         ]
+        directories = persist_valuation_authority_batch(
+            tuple(artifact for _, artifact in built),
+            output_root=args.output,
+            market_directory=args.market_snapshot,
+            research_directory=args.research_snapshot,
+            legacy_valuation_directory=args.legacy_valuation_snapshot,
+        )
         artifacts = []
-        for security_id, artifact in built:
-            directory = persist_valuation_authority(
-                artifact,
-                output_root=args.output,
-                market_directory=args.market_snapshot,
-                research_directory=args.research_snapshot,
-                legacy_valuation_directory=args.legacy_valuation_snapshot,
-            )
+        for (security_id, artifact), directory in zip(built, directories, strict=True):
             payload = artifact.payload_without_id()
             price = next(item for item in artifact.inputs if item.role == "current_price")
             artifacts.append(

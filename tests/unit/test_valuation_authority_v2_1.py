@@ -863,6 +863,13 @@ def test_caller_constructed_self_consistent_authority_cannot_be_persisted(tmp_pa
         _persist(forged, tmp_path / "authority", market, research, legacy)
 
 
+def test_integer_valued_artifact_cannot_be_constructed_or_persisted(tmp_path: Path) -> None:
+    artifact, _, _, _ = _artifact(tmp_path)
+    price = next(item for item in artifact.inputs if item.role == "current_price")
+    with pytest.raises(ValueError, match="canonical float"):
+        replace(price, value=int(price.value))
+
+
 def test_self_consistent_forged_persisted_authority_fails_upstream_replay(tmp_path: Path) -> None:
     artifact, market, research, legacy = _artifact(tmp_path)
     forged = replace(
@@ -1019,6 +1026,38 @@ def test_legacy_share_schema_is_validated_before_ticker_indexing(tmp_path: Path)
         build_valuation_authority(
             market_directory=market_dir,
             research_directory=research_dir,
+            legacy_valuation_directory=legacy,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+def test_legacy_summary_schema_is_validated_before_column_indexing(tmp_path: Path) -> None:
+    market, research, legacy = _sources(tmp_path)
+    metrics = pd.read_csv(legacy / "valuation_metrics.csv").drop(columns=["ticker"])
+    metrics.to_csv(legacy / "valuation_metrics.csv", index=False)
+    manifest = json.loads((legacy / "manifest.json").read_text(encoding="utf-8"))
+    snapshot = ValuationEvidenceSnapshot(
+        captured_at=datetime.fromisoformat(manifest["captured_at"]),
+        evaluation_date=date.fromisoformat(manifest["evaluation_date"]),
+        research_snapshot_id=manifest["research_snapshot_id"],
+        market_snapshot_id=manifest["market_snapshot_id"],
+        history_years=manifest["history_years"],
+        shares=pd.read_csv(legacy / "shares.csv"),
+        security_values=pd.read_csv(legacy / "security_values.csv"),
+        financial_history=pd.read_csv(legacy / "financial_history.csv"),
+        valuation_metrics=metrics,
+        raw_valuation=json.loads((legacy / "raw_valuation.json").read_text(encoding="utf-8")),
+        warnings=tuple(manifest["warnings"]),
+    )
+    _rewrite(
+        legacy / "manifest.json",
+        lambda value: value.__setitem__("snapshot_id", snapshot.snapshot_id),
+    )
+    with pytest.raises(ValuationAuthorityError, match="summary schema is incomplete"):
+        build_valuation_authority(
+            market_directory=market,
+            research_directory=research,
             legacy_valuation_directory=legacy,
             security_id="000660",
             captured_at=CAPTURED,
@@ -1390,3 +1429,81 @@ def test_cli_validates_full_batch_before_publication(tmp_path: Path, capsys) -> 
     assert result == 2
     assert not output.exists()
     assert "exactly one trusted market price" in capsys.readouterr().err
+
+
+def test_cli_preflights_later_immutable_conflict_before_publication(
+    tmp_path: Path, capsys
+) -> None:
+    market, research, legacy = _sources(tmp_path)
+    second = build_valuation_authority(
+        market_directory=market,
+        research_directory=research,
+        legacy_valuation_directory=legacy,
+        security_id="005930",
+        captured_at=CAPTURED,
+    )
+    output = tmp_path / "acceptance"
+    conflict = output / (
+        f"{CAPTURED.astimezone(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
+        f"__{second.artifact_id[:12]}"
+    )
+    conflict.mkdir(parents=True)
+    (conflict / "authority.json").write_text("{}", encoding="utf-8")
+    (conflict / "manifest.json").write_text("{}", encoding="utf-8")
+    result = authority_cli_main(
+        [
+            "--market-snapshot", str(market),
+            "--research-snapshot", str(research),
+            "--legacy-valuation-snapshot", str(legacy),
+            "--security", "000660",
+            "--security", "005930",
+            "--captured-at", CAPTURED.isoformat(),
+            "--output", str(output),
+        ]
+    )
+    first = build_valuation_authority(
+        market_directory=market,
+        research_directory=research,
+        legacy_valuation_directory=legacy,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    first_path = output / (
+        f"{CAPTURED.astimezone(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
+        f"__{first.artifact_id[:12]}"
+    )
+    assert result == 2
+    assert not first_path.exists()
+    assert capsys.readouterr().err.startswith("Error:")
+
+
+def test_cli_rolls_back_batch_when_later_publication_rename_fails(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    market, research, legacy = _sources(tmp_path)
+    output = tmp_path / "acceptance"
+    real_rename = valuation_authority_module.os.rename
+    calls = 0
+
+    def fail_second_rename(source: Path, target: Path) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected publication failure")
+        real_rename(source, target)
+
+    monkeypatch.setattr(valuation_authority_module.os, "rename", fail_second_rename)
+    result = authority_cli_main(
+        [
+            "--market-snapshot", str(market),
+            "--research-snapshot", str(research),
+            "--legacy-valuation-snapshot", str(legacy),
+            "--security", "000660",
+            "--security", "005930",
+            "--captured-at", CAPTURED.isoformat(),
+            "--output", str(output),
+        ]
+    )
+    assert result == 2
+    assert list(output.iterdir()) == []
+    assert "injected publication failure" in capsys.readouterr().err
