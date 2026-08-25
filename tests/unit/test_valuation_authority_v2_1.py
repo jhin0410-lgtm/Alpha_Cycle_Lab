@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from dataclasses import replace
@@ -104,12 +105,16 @@ def _market() -> MarketIntelligenceSnapshot:
 def _raw_opendart(financials: pd.DataFrame, *, fs_div: str = "CFS") -> dict[str, object]:
     raw: dict[str, object] = {}
     for ticker, group in financials.groupby("ticker", sort=True):
+        request_year = max(pd.Timestamp(value).year for value in group["period_end"])
+        report_code = "11011"
         rows: list[dict[str, object]] = []
         for normalized in group.to_dict(orient="records"):
             statement, account = str(normalized["metric"]).split(":", 1)
             account, _, order = account.partition("#")
             account, _, detail = account.partition(":")
             period_end = pd.Timestamp(normalized["period_end"]).date()
+            if period_end.year != request_year:
+                continue
             rows.append(
                 {
                     "stock_code": str(ticker),
@@ -121,14 +126,21 @@ def _raw_opendart(financials: pd.DataFrame, *, fs_div: str = "CFS") -> dict[str,
                     "thstrm_amount": str(normalized["value"]),
                     "rcept_no": str(normalized["revision_id"]),
                     "bsns_year": str(period_end.year),
-                    "reprt_code": ("11011" if str(normalized["fiscal_period"]) == "FY" else ""),
+                    "reprt_code": report_code,
                     "currency": "KRW",
                 }
             )
         raw[str(ticker)] = {
-            "request": {"fs_div": fs_div},
+            "request": {
+                "business_year": request_year,
+                "report_code": report_code,
+                "fs_div": fs_div,
+            },
             "corp": {"stock_code": str(ticker)},
-            "financial": {"financials": {"list": rows}},
+            "financial": {
+                "company": {"stock_code": str(ticker)},
+                "financials": {"status": "000", "message": "정상", "list": rows},
+            },
         }
     return raw
 
@@ -450,7 +462,68 @@ def test_opendart_request_metadata_alone_cannot_authorize_actuals(tmp_path: Path
     research_dir = write_fundamental_macro_snapshot(
         tmp_path / "research", replace(research, raw_opendart=request_only)
     )[0].parent
-    with pytest.raises(ValuationAuthorityError, match="financial response is unavailable"):
+    with pytest.raises(ValuationAuthorityError, match="raw OpenDART"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+def test_nested_opendart_company_identity_binds_actuals(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    raw = copy.deepcopy(research.raw_opendart)
+    raw["000660"]["financial"]["company"]["stock_code"] = "005930"
+    for row in raw["000660"]["financial"]["financials"]["list"]:
+        row.pop("stock_code", None)
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, raw_opendart=raw)
+    )[0].parent
+    with pytest.raises(ValuationAuthorityError, match="company identity mismatch"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+@pytest.mark.parametrize("raw_code", ["A000660", "660"])
+def test_raw_opendart_stock_codes_use_provider_normalization(tmp_path: Path, raw_code: str) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    raw = copy.deepcopy(research.raw_opendart)
+    raw["000660"]["corp"]["stock_code"] = raw_code
+    raw["000660"]["financial"]["company"]["stock_code"] = raw_code
+    for row in raw["000660"]["financial"]["financials"]["list"]:
+        row["stock_code"] = raw_code
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, raw_opendart=raw)
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    income = next(item for item in artifact.inputs if item.role == "trailing_net_income")
+    assert income.authority_class is AuthorityClass.AUTHORITATIVE_SOURCE
+
+
+def test_opendart_period_is_derived_from_request_metadata(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    raw = copy.deepcopy(research.raw_opendart)
+    raw["000660"]["request"]["business_year"] = 2024
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, raw_opendart=raw)
+    )[0].parent
+    with pytest.raises(ValuationAuthorityError, match="business year conflicts"):
         build_valuation_authority(
             market_directory=market_dir,
             research_directory=research_dir,
@@ -529,7 +602,7 @@ def test_canonical_opendart_metric_aliases_are_authoritative(tmp_path: Path) -> 
     )
     operating["metric"] = "CIS:ifrs-full_ProfitLossFromOperatingActivities"
     operating["value"] = 1
-    operating["revision_id"] = "000660-operating-profit"
+    operating["revision_id"] = "20260317054321"
     financials = pd.concat([financials, pd.DataFrame([operating])], ignore_index=True)
     financials["metric"] = financials["metric"].replace(aliases)
     financials = validate_financial_statements(financials)
@@ -846,6 +919,45 @@ def test_empty_legacy_file_claim_cannot_receive_class_b(tmp_path: Path) -> None:
         )
 
 
+def test_legacy_share_schema_is_validated_before_ticker_indexing(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research)[0].parent
+    legacy_snapshot = ValuationEvidenceSnapshot(
+        captured_at=CAPTURED - timedelta(minutes=10),
+        evaluation_date=research.evaluation_date,
+        research_snapshot_id=research.snapshot_id,
+        market_snapshot_id=market.snapshot_id,
+        history_years=3,
+        shares=pd.DataFrame(
+            {"security_class": ["common"], "issued_shares": [100], "treasury_shares": [0]}
+        ),
+        security_values=pd.DataFrame({"ticker": ["000660"]}),
+        financial_history=pd.DataFrame({"ticker": ["000660"]}),
+        valuation_metrics=pd.DataFrame(
+            {
+                "ticker": ["000660"],
+                "market_cap_complete": [False],
+                "valuation_score": [None],
+            }
+        ),
+        raw_valuation={
+            "source_research_snapshot_id": research.snapshot_id,
+            "source_market_snapshot_id": market.snapshot_id,
+        },
+    )
+    legacy = write_valuation_evidence_snapshot(tmp_path / "legacy", legacy_snapshot)[0].parent
+    with pytest.raises(ValuationAuthorityError, match="share schema is incomplete"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            legacy_valuation_directory=legacy,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
 @pytest.mark.parametrize(
     "mutation,message",
     [
@@ -991,16 +1103,7 @@ def test_future_financial_actual_cannot_enter_trailing_valuation(tmp_path: Path)
     assert "trailing_net_income_authority_missing" in artifact.payload_without_id()["blockers"]
 
 
-@pytest.mark.parametrize(
-    "policy,expected",
-    [
-        (RevisionPolicy.FIRST_RELEASE, 42_947_902_000_000),
-        (RevisionPolicy.LATEST_KNOWN, 43_000_000_000_000),
-    ],
-)
-def test_financial_revision_policy_selects_one_known_revision(
-    tmp_path: Path, policy: RevisionPolicy, expected: int
-) -> None:
+def test_duplicate_raw_facts_cannot_invent_revision_history(tmp_path: Path) -> None:
     market = _market()
     market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
     original = _research(market.snapshot_id)
@@ -1021,22 +1124,21 @@ def test_financial_revision_policy_selects_one_known_revision(
     )
     research_snapshot = replace(
         original,
-        revision_policy=policy,
+        revision_policy=RevisionPolicy.LATEST_KNOWN,
         financials=revised,
         raw_opendart=_raw_opendart(revised),
     )
     research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research_snapshot)[
         0
     ].parent
-    artifact = build_valuation_authority(
-        market_directory=market_dir,
-        research_directory=research_dir,
-        legacy_valuation_directory=None,
-        security_id="000660",
-        captured_at=CAPTURED,
-    )
-    income = next(item for item in artifact.inputs if item.role == "trailing_net_income")
-    assert income.value == expected
+    with pytest.raises(ValuationAuthorityError, match="duplicate canonical facts"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            legacy_valuation_directory=None,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
 
 
 def test_price_mutation_is_detected_by_upstream_replay(tmp_path: Path) -> None:

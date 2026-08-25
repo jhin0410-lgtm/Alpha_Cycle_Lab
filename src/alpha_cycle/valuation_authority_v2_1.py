@@ -30,7 +30,7 @@ from alpha_cycle.live_typed_source_revalidation_v2_1 import (
     revalidate_market_snapshot,
     revalidate_research_snapshot,
 )
-from alpha_cycle.providers.opendart import REPORT_PERIODS
+from alpha_cycle.providers.opendart import REPORT_PERIODS, normalize_listed_stock_code
 from alpha_cycle.providers.tossinvest import MarketPrice
 
 SCHEMA_VERSION = 1
@@ -834,44 +834,60 @@ def _require_raw_actual_binding(raw: object, security_id: str, normalized: pd.Se
         raise ValuationAuthorityError("raw OpenDART security capture is unavailable")
     security = cast(dict[str, object], raw[security_id])
     corp = security.get("corp")
-    if isinstance(corp, dict):
-        raw_stock_code = str(corp.get("stock_code", "")).strip()
-        if raw_stock_code and raw_stock_code != security_id:
-            raise ValuationAuthorityError("raw OpenDART security binding mismatch")
+    if not isinstance(corp, dict):
+        raise ValuationAuthorityError("raw OpenDART corporation identity is unavailable")
+    raw_stock_code = str(corp.get("stock_code", "")).strip()
+    if not raw_stock_code or normalize_listed_stock_code(raw_stock_code) != security_id:
+        raise ValuationAuthorityError("raw OpenDART security binding mismatch")
     financial = security.get("financial")
+    if not isinstance(financial, dict):
+        raise ValuationAuthorityError("raw OpenDART financial response is unavailable")
+    company = financial.get("company")
+    if not isinstance(company, dict):
+        raise ValuationAuthorityError("raw OpenDART company identity is unavailable")
+    company_stock_code = str(company.get("stock_code", "")).strip()
+    if company_stock_code and normalize_listed_stock_code(company_stock_code) != security_id:
+        raise ValuationAuthorityError("raw OpenDART company identity mismatch")
+    request = security.get("request")
+    if not isinstance(request, dict):
+        raise ValuationAuthorityError("raw OpenDART request metadata is unavailable")
+    report_code = str(request.get("report_code", "")).strip()
+    if report_code not in REPORT_PERIODS:
+        raise ValuationAuthorityError("raw OpenDART request report code is unsupported")
+    try:
+        business_year = int(str(request.get("business_year", "")))
+    except ValueError as exc:
+        raise ValuationAuthorityError("raw OpenDART request business year is invalid") from exc
     payload = financial.get("financials") if isinstance(financial, dict) else None
+    if not isinstance(payload, dict) or payload.get("status") != "000":
+        raise ValuationAuthorityError("raw OpenDART financial response status is not successful")
     raw_rows = payload.get("list") if isinstance(payload, dict) else None
     if not isinstance(raw_rows, list):
         raise ValuationAuthorityError("raw OpenDART financial response is unavailable")
-    reconstructed_without_sequence = [
-        item
-        for raw_row in raw_rows
-        if isinstance(raw_row, dict)
-        and (item := _reconstruct_raw_actual(raw_row, security_id)) is not None
-    ]
     reconstructed: list[dict[str, object]] = []
-    ordered = sorted(
-        reconstructed_without_sequence,
-        key=lambda item: (
-            str(item["ticker"]),
-            str(item["metric"]),
-            str(item["period_end"]),
-            str(item["fiscal_period"]),
-            str(item["available_date"]),
-            str(item["revision_id"]),
-        ),
-    )
-    sequence_by_key: dict[tuple[str, str, str, str], int] = {}
-    for item in ordered:
-        key = (
-            str(item["ticker"]),
-            str(item["metric"]),
-            str(item["period_end"]),
-            str(item["fiscal_period"]),
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            raise ValuationAuthorityError("raw OpenDART financial row is not an object")
+        item = _reconstruct_raw_actual(
+            raw_row,
+            security_id,
+            business_year=business_year,
+            report_code=report_code,
         )
-        sequence = sequence_by_key.get(key, 0)
-        reconstructed.append({**item, "revision_sequence": sequence})
-        sequence_by_key[key] = sequence + 1
+        if item is not None:
+            reconstructed.append(item)
+    keys = [
+        (
+            str(item["ticker"]),
+            str(item["metric"]),
+            str(item["period_end"]),
+            str(item["fiscal_period"]),
+            cast(int, item["revision_sequence"]),
+        )
+        for item in reconstructed
+    ]
+    if len(keys) != len(set(keys)):
+        raise ValuationAuthorityError("raw OpenDART response contains duplicate canonical facts")
     raw_currency = normalized.get("currency")
     normalized_unit = str(normalized["unit"]).strip().upper()
     normalized_currency = (
@@ -899,35 +915,41 @@ def _require_raw_actual_binding(raw: object, security_id: str, normalized: pd.Se
 
 
 def _reconstruct_raw_actual(
-    raw: dict[object, object], security_id: str
+    raw: dict[object, object],
+    security_id: str,
+    *,
+    business_year: int,
+    report_code: str,
 ) -> dict[str, object] | None:
     row_stock_code = str(raw.get("stock_code", "")).strip()
-    if row_stock_code and row_stock_code != security_id:
-        return None
-    report_code = str(raw.get("reprt_code", "")).strip()
-    if report_code not in REPORT_PERIODS:
-        return None
+    if row_stock_code and normalize_listed_stock_code(row_stock_code) != security_id:
+        raise ValuationAuthorityError("raw OpenDART financial row security mismatch")
+    echoed_report_code = str(raw.get("reprt_code", "")).strip()
+    if echoed_report_code and echoed_report_code != report_code:
+        raise ValuationAuthorityError("raw OpenDART row report code conflicts with request")
+    echoed_business_year = str(raw.get("bsns_year", "")).strip()
+    if echoed_business_year and echoed_business_year != str(business_year):
+        raise ValuationAuthorityError("raw OpenDART row business year conflicts with request")
     fiscal_period, month, day = REPORT_PERIODS[report_code]
     try:
-        business_year = int(str(raw.get("bsns_year", "")))
         period_end = date(business_year, month, day)
         amount = _opendart_amount(raw.get("thstrm_amount"))
     except (TypeError, ValueError):
-        return None
+        raise ValuationAuthorityError("raw OpenDART financial amount is invalid") from None
     if amount is None:
         return None
     receipt = str(raw.get("rcept_no", "")).strip()
     if len(receipt) != 14 or not receipt.isdigit():
-        return None
+        raise ValuationAuthorityError("raw OpenDART receipt number is invalid")
     try:
         available_date = datetime.strptime(receipt[:8], "%Y%m%d").date()
     except ValueError:
-        return None
+        raise ValuationAuthorityError("raw OpenDART receipt date is invalid") from None
     statement = str(raw.get("sj_div", "")).strip()
     account_id = str(raw.get("account_id", "")).strip()
     account_name = str(raw.get("account_nm", "")).strip()
     if not statement or not account_name:
-        return None
+        raise ValuationAuthorityError("raw OpenDART statement and account are required")
     account_key = account_id if account_id not in {"", "-"} else account_name
     detail = str(raw.get("account_detail", "")).strip()
     order = str(raw.get("ord", "")).strip()
@@ -936,7 +958,7 @@ def _reconstruct_raw_actual(
         suffix = f"{suffix}#{order}"
     raw_currency = str(raw.get("currency", "")).strip().upper()
     if raw_currency != "KRW":
-        return None
+        raise ValuationAuthorityError("raw OpenDART currency is not KRW")
     return {
         "ticker": security_id,
         "metric": f"{statement}:{account_key}{suffix}",
@@ -947,6 +969,7 @@ def _reconstruct_raw_actual(
         "currency": "KRW",
         "available_date": available_date.isoformat(),
         "revision_id": receipt,
+        "revision_sequence": 0,
     }
 
 
@@ -1047,12 +1070,16 @@ def _legacy_binding(
         or raw.get("source_research_snapshot_id") != research_snapshot_id
     ):
         raise ValuationAuthorityError("legacy valuation raw lineage mismatch")
-    share_rows = snapshot.shares.loc[snapshot.shares["ticker"].astype(str).eq(security_id)]
-    if share_rows.empty or not {
+    required_share_columns = {
+        "ticker",
         "security_class",
         "issued_shares",
         "treasury_shares",
-    }.issubset(snapshot.shares.columns):
+    }
+    if not required_share_columns.issubset(snapshot.shares.columns):
+        raise ValuationAuthorityError("legacy valuation share schema is incomplete")
+    share_rows = snapshot.shares.loc[snapshot.shares["ticker"].astype(str).eq(security_id)]
+    if share_rows.empty:
         raise ValuationAuthorityError("legacy valuation contains no replayable share evidence")
     bindings: list[dict[str, object]] = []
     for name in sorted(declared):

@@ -12,7 +12,7 @@ The repository audit found these distinct paths:
 | Input/path | Previous behavior | Authority class after #308 |
 | --- | --- | --- |
 | Canonically replayed market `prices.csv` plus raw capture | Exact writer identity, exact normalized/raw TossInvest binding, approved read-only provider, positive KRW price, and a four-calendar-day freshness ceiling | A: authoritative persisted source |
-| Canonically replayed OpenDART company actuals | Exact writer identity; normalized/raw OpenDART metric, amount, period, receipt/revision, security, CFS, unit, and currency binding; explicit accounting-concept aliases | A: authoritative persisted actual |
+| Canonically replayed OpenDART company actuals | Exact writer identity; request-derived period; normalized outer, nested-company, and row security; exact raw metric, amount, receipt, provider-fixed revision sequence, CFS, unit, and currency binding; explicit accounting aliases | A: authoritative persisted actual |
 | `ValuationEvidenceSnapshot` share rows and market-cap arithmetic | Self-consistent normalized OpenDART payload and CSVs | B only after exact canonical replay; the current real snapshot fails that stricter replay and is treated as E |
 | Market cap, trailing P/E, and P/B | Derived from the class-B share basis | blocked; never promoted to C |
 | Cash actual | Official actual only when canonical bytes prove CFS | A when proven; otherwise blocked |
