@@ -216,6 +216,24 @@ def test_research_revalidation_preserves_round_trip_float_identity(tmp_path: Pat
     assert replayed.snapshot_id == snapshot.snapshot_id
 
 
+def test_research_revalidation_preserves_literal_na_strings(tmp_path: Path) -> None:
+    market = _market_snapshot()
+    original = _research_snapshot(market.snapshot_id)
+    financials = original.financials.copy()
+    financials.loc[0, "fiscal_period"] = "NA"
+    financials.loc[0, "unit"] = "NA"
+    macro = original.macro.copy()
+    macro.loc[0, "unit"] = "NA"
+    snapshot = replace(original, financials=financials, macro=macro)
+    files = write_fundamental_macro_snapshot(tmp_path / "research", snapshot)
+
+    replayed = revalidate_research_snapshot(files[0].parent)
+
+    assert replayed.snapshot_id == snapshot.snapshot_id
+    assert replayed.financials.loc[0, "fiscal_period"] == "NA"
+    assert replayed.financials.loc[0, "unit"] == "NA"
+
+
 def test_market_revalidation_rejects_self_declared_forged_snapshot_id(tmp_path: Path) -> None:
     snapshot = _market_snapshot()
     files = write_market_intelligence_snapshot(tmp_path / "market", snapshot)

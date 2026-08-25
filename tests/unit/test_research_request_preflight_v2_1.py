@@ -18,6 +18,7 @@ from alpha_cycle.intelligence.research_run_ledger_v2_1 import ResearchRunKind
 from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
 from alpha_cycle.investment_thesis_repository_v2_1 import persist_investment_thesis
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
+from alpha_cycle.research_package_assembler_v2_1 import assemble_and_run_research_package
 from alpha_cycle.research_request_intake_v2_1 import record_analysis_request
 from alpha_cycle.research_request_preflight_v2_1 import preflight_pending_request_theses
 
@@ -251,3 +252,13 @@ def test_expected_binding_selects_exact_snapshot_instead_of_hash_tie_winner(
         expected.snapshot_id,
         samsung.snapshot_id,
     )
+    assembly = assemble_and_run_research_package(
+        request_id="live-semiconductor-round",
+        round_id="exact-binding-round",
+        run_id="exact-binding-run",
+        processed_at=NOW + timedelta(minutes=2),
+        artifact_root=tmp_path,
+    )
+    assert "preflight_thesis_identity_mismatch" not in {
+        item.code for item in assembly.blockers
+    }
