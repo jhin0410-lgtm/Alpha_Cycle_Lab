@@ -1333,7 +1333,7 @@ def _write_owned_pointer_temp_at(
     fd = os.open(".", flags, 0o644, dir_fd=directory_fd)
     try:
         if os.name != "nt":
-            os.fchmod(fd, 0o644)  # type: ignore[attr-defined]
+            os.chmod(fd, 0o644)
         remaining = memoryview(content)
         while remaining:
             written = os.write(fd, remaining)
@@ -1569,7 +1569,7 @@ def _write_owned_pointer_temp(root: Path, pointer_name: str, content: bytes) -> 
     temporary = Path(temporary_name)
     try:
         if os.name != "nt":
-            os.fchmod(fd, 0o644)  # type: ignore[attr-defined]
+            os.chmod(fd, 0o644)
         with os.fdopen(fd, "wb") as handle:
             handle.write(content)
             handle.flush()
