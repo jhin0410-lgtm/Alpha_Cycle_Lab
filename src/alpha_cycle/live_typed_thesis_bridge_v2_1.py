@@ -29,6 +29,10 @@ from alpha_cycle.live_typed_source_manifest_v2_1 import (
     LiveTypedSourceManifest,
     verify_live_typed_source_manifest,
 )
+from alpha_cycle.live_typed_source_revalidation_v2_1 import (
+    revalidate_market_snapshot,
+    revalidate_research_snapshot,
+)
 
 _PREFERRED_FINANCIAL_METRICS = (
     "revenue",
@@ -80,6 +84,19 @@ def produce_source_backed_theses(
 
     market_source = _required_source(manifest, "market")
     research_source = _required_source(manifest, "research")
+    market_directory = root.resolve() / market_source.snapshot_path
+    research_directory = root.resolve() / research_source.snapshot_path
+    canonical_market = revalidate_market_snapshot(market_directory)
+    canonical_research = revalidate_research_snapshot(research_directory)
+    if canonical_market.snapshot_id != market_source.snapshot_id:
+        raise ValueError("frozen market source differs from canonical reconstructed identity")
+    if canonical_research.snapshot_id != research_source.snapshot_id:
+        raise ValueError("frozen research source differs from canonical reconstructed identity")
+    if canonical_research.evaluation_date != manifest.evaluation_date:
+        raise ValueError("canonical research evaluation_date differs from source manifest")
+    if canonical_research.market_snapshot_id != canonical_market.snapshot_id:
+        raise ValueError("mixed source generations: research snapshot is not bound to market snapshot")
+
     market_rows = _read_csv(_bound_source_file(root, market_source, "prices.csv"))
     financial_rows = _read_csv(_bound_source_file(root, research_source, "financials.csv"))
 
