@@ -35,6 +35,7 @@ REPOSITORY_NAME = "valuation_authority_v2_1"
 PARSER_ID = "alpha_cycle.valuation_authority_v2_1"
 PARSER_VERSION = "1.0.0"
 KOREA_TZ = ZoneInfo("Asia/Seoul")
+MAX_PRICE_AGE_CALENDAR_DAYS = 4
 
 
 class ValuationAuthorityError(ValueError):
@@ -295,6 +296,8 @@ def build_valuation_authority(
     research = revalidate_research_snapshot(research_directory)
     if research.market_snapshot_id != market.snapshot_id:
         raise ValuationAuthorityError("research/market source generation mismatch")
+    if market.provider != "tossinvest-readonly":
+        raise ValuationAuthorityError("market provider is not approved for valuation authority")
     if captured_at < max(market.captured_at, research.captured_at):
         raise ValuationAuthorityError("authority capture cannot precede source captures")
     if captured_at.astimezone(KOREA_TZ).date() < research.evaluation_date:
@@ -306,11 +309,15 @@ def build_valuation_authority(
     price = prices[0]
     if price.currency.strip().upper() != "KRW":
         raise ValuationAuthorityError("trusted market price must be denominated in KRW")
+    if not math.isfinite(float(price.last_price)) or price.last_price <= 0:
+        raise ValuationAuthorityError("trusted market price must be strictly positive")
     if price.timestamp > captured_at:
         raise ValuationAuthorityError("market price cannot follow authority capture")
     price_date = price.timestamp.astimezone(KOREA_TZ).date()
     if price_date > research.evaluation_date:
         raise ValuationAuthorityError("market price is after the evaluation date")
+    if (research.evaluation_date - price_date).days > MAX_PRICE_AGE_CALENDAR_DAYS:
+        raise ValuationAuthorityError("market price is stale for the evaluation date")
 
     legacy_id, legacy_content_id = _legacy_binding(
         legacy_valuation_directory,
@@ -619,16 +626,25 @@ def _metric_score(metric: str, semantic_name: str) -> int:
         return 0
     account = account.split("#", 1)[0].split(":", 1)[0]
     normalized = "".join(character for character in account.lower() if character.isalnum())
-    spec = next(item for item in METRIC_SPECS if item.name == semantic_name)
-    if statement.strip().upper() not in spec.statements:
-        return 0
-    aliases = {
-        "".join(character for character in alias.lower() if character.isalnum())
-        for alias in spec.aliases
-    }
-    if normalized in aliases:
-        return 100
-    return 60 if any(alias and alias in normalized for alias in aliases) else 0
+
+    def score(spec_name: str) -> int:
+        spec = next(item for item in METRIC_SPECS if item.name == spec_name)
+        if statement.strip().upper() not in spec.statements:
+            return 0
+        aliases = {
+            "".join(character for character in alias.lower() if character.isalnum())
+            for alias in spec.aliases
+        }
+        if normalized in aliases:
+            return 100
+        return 60 if any(alias and alias in normalized for alias in aliases) else 0
+
+    target = score(semantic_name)
+    competing = max(
+        (score(item.name) for item in METRIC_SPECS if item.name != semantic_name),
+        default=0,
+    )
+    return 0 if competing > target else target
 
 
 def _trusted_actual_inputs(
@@ -663,6 +679,8 @@ def _trusted_actual_inputs(
             & candidates["available_date"].astype(str).le(evaluation_date.isoformat())
         ]
         if not candidates.empty:
+            latest_end = candidates["period_end"].astype(str).max()
+            candidates = candidates.loc[candidates["period_end"].astype(str).eq(latest_end)]
             eligible_scores = semantic_scores.loc[candidates.index]
             candidates = candidates.loc[eligible_scores.eq(eligible_scores.max())]
         if not candidates.empty:
@@ -711,9 +729,7 @@ def _trusted_actual_inputs(
                 )
             )
             continue
-        latest_end = candidates["period_end"].astype(str).max()
-        latest = candidates.loc[candidates["period_end"].astype(str).eq(latest_end)]
-        values = pd.to_numeric(latest["value"], errors="raise").unique()
+        values = pd.to_numeric(candidates["value"], errors="raise").unique()
         if len(values) != 1:
             result.append(
                 ValuationInput(
@@ -730,7 +746,7 @@ def _trusted_actual_inputs(
                 )
             )
             continue
-        row = latest.sort_values("metric", kind="stable").iloc[0]
+        row = candidates.sort_values("metric", kind="stable").iloc[0]
         unit = str(row["unit"]).strip().upper()
         raw_currency = row.get("currency")
         currency = None if pd.isna(raw_currency) else str(raw_currency).strip().upper()

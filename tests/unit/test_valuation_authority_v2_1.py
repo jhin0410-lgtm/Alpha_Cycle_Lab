@@ -305,6 +305,58 @@ def test_non_krw_market_price_is_rejected(tmp_path: Path) -> None:
         )
 
 
+def test_unapproved_market_provider_is_rejected(tmp_path: Path) -> None:
+    market = replace(_market(), provider="caller-supplied")
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research)[0].parent
+    with pytest.raises(ValuationAuthorityError, match="provider is not approved"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+def test_zero_market_price_is_rejected(tmp_path: Path) -> None:
+    original = _market()
+    market = replace(
+        original,
+        prices=tuple(replace(item, last_price=Decimal(0)) for item in original.prices),
+    )
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research)[0].parent
+    with pytest.raises(ValuationAuthorityError, match="strictly positive"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+def test_stale_market_price_is_rejected(tmp_path: Path) -> None:
+    original = _market()
+    market = replace(
+        original,
+        prices=tuple(
+            replace(item, timestamp=item.timestamp - timedelta(days=5)) for item in original.prices
+        ),
+    )
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research)[0].parent
+    with pytest.raises(ValuationAuthorityError, match="stale"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
 def test_ofs_statement_basis_cannot_be_published_as_cfs(tmp_path: Path) -> None:
     market = _market()
     market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
@@ -424,6 +476,63 @@ def test_alias_precedence_runs_after_source_and_pit_filters(tmp_path: Path) -> N
     income = next(item for item in artifact.inputs if item.role == "trailing_net_income")
     assert income.authority_class is AuthorityClass.AUTHORITATIVE_SOURCE
     assert income.value == 40_000_000_000_000
+
+
+def test_latest_fy_is_selected_before_alias_precedence(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    financials = research.financials.copy()
+    latest_mask = financials["ticker"].astype(str).eq("000660") & financials["metric"].astype(
+        str
+    ).str.contains("ProfitLoss#")
+    older_exact = financials.loc[latest_mask].iloc[0].copy()
+    financials.loc[latest_mask, "metric"] = "CIS:ifrs-full_ProfitLossAttributableToOwnersOfParent"
+    financials.loc[latest_mask, "value"] = 40_000_000_000_000
+    older_exact["period_end"] = date(2024, 12, 31)
+    older_exact["available_date"] = date(2025, 3, 17)
+    older_exact["metric"] = "CIS:ifrs-full_ProfitLoss"
+    older_exact["value"] = 30_000_000_000_000
+    older_exact["revision_id"] = "000660-older-exact-profit"
+    financials = validate_financial_statements(
+        pd.concat([financials, pd.DataFrame([older_exact])], ignore_index=True)
+    )
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, financials=financials)
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    income = next(item for item in artifact.inputs if item.role == "trailing_net_income")
+    assert income.value == 40_000_000_000_000
+    assert income.period_end == date(2025, 12, 31)
+
+
+def test_operating_profit_cannot_fallback_to_net_income(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    financials = research.financials.copy()
+    net_mask = financials["ticker"].astype(str).eq("000660") & financials["metric"].astype(
+        str
+    ).str.contains("ProfitLoss#")
+    financials.loc[net_mask, "metric"] = "CIS:ifrs-full_ProfitLossFromOperatingActivities"
+    financials = validate_financial_statements(financials)
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, financials=financials)
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    income = next(item for item in artifact.inputs if item.role == "trailing_net_income")
+    assert income.authority_class is AuthorityClass.UNSUPPORTED
+    assert income.blocker == "trailing_net_income_authority_missing"
 
 
 @pytest.mark.parametrize("ticker,price", [("000660", 1_647_000), ("005930", 273_500)])
