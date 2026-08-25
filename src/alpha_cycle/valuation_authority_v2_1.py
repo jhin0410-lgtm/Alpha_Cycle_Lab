@@ -30,6 +30,7 @@ from alpha_cycle.live_typed_source_revalidation_v2_1 import (
     revalidate_market_snapshot,
     revalidate_research_snapshot,
 )
+from alpha_cycle.providers.opendart import REPORT_PERIODS
 from alpha_cycle.providers.tossinvest import MarketPrice
 
 SCHEMA_VERSION = 1
@@ -353,6 +354,7 @@ def build_valuation_authority(
     statement_basis = _opendart_statement_basis(research.raw_opendart, security_id)
     actuals = _trusted_actual_inputs(
         research.financials,
+        research.raw_opendart,
         security_id,
         research.snapshot_id,
         evaluation_date=research.evaluation_date,
@@ -688,6 +690,7 @@ def _require_raw_price_binding(raw: object, price: MarketPrice) -> None:
 
 def _trusted_actual_inputs(
     frame: pd.DataFrame,
+    raw_opendart: object,
     security_id: str,
     source_id: str,
     *,
@@ -807,6 +810,7 @@ def _trusted_actual_inputs(
                 )
             )
             continue
+        _require_raw_actual_binding(raw_opendart, security_id, row)
         result.append(
             ValuationInput(
                 role=role,
@@ -821,6 +825,145 @@ def _trusted_actual_inputs(
             )
         )
     return tuple(result)
+
+
+def _require_raw_actual_binding(raw: object, security_id: str, normalized: pd.Series) -> None:
+    """Reconstruct OpenDART response rows and bind the selected normalized actual."""
+
+    if not isinstance(raw, dict) or not isinstance(raw.get(security_id), dict):
+        raise ValuationAuthorityError("raw OpenDART security capture is unavailable")
+    security = cast(dict[str, object], raw[security_id])
+    corp = security.get("corp")
+    if isinstance(corp, dict):
+        raw_stock_code = str(corp.get("stock_code", "")).strip()
+        if raw_stock_code and raw_stock_code != security_id:
+            raise ValuationAuthorityError("raw OpenDART security binding mismatch")
+    financial = security.get("financial")
+    payload = financial.get("financials") if isinstance(financial, dict) else None
+    raw_rows = payload.get("list") if isinstance(payload, dict) else None
+    if not isinstance(raw_rows, list):
+        raise ValuationAuthorityError("raw OpenDART financial response is unavailable")
+    reconstructed_without_sequence = [
+        item
+        for raw_row in raw_rows
+        if isinstance(raw_row, dict)
+        and (item := _reconstruct_raw_actual(raw_row, security_id)) is not None
+    ]
+    reconstructed: list[dict[str, object]] = []
+    ordered = sorted(
+        reconstructed_without_sequence,
+        key=lambda item: (
+            str(item["ticker"]),
+            str(item["metric"]),
+            str(item["period_end"]),
+            str(item["fiscal_period"]),
+            str(item["available_date"]),
+            str(item["revision_id"]),
+        ),
+    )
+    sequence_by_key: dict[tuple[str, str, str, str], int] = {}
+    for item in ordered:
+        key = (
+            str(item["ticker"]),
+            str(item["metric"]),
+            str(item["period_end"]),
+            str(item["fiscal_period"]),
+        )
+        sequence = sequence_by_key.get(key, 0)
+        reconstructed.append({**item, "revision_sequence": sequence})
+        sequence_by_key[key] = sequence + 1
+    raw_currency = normalized.get("currency")
+    normalized_unit = str(normalized["unit"]).strip().upper()
+    normalized_currency = (
+        normalized_unit
+        if pd.isna(raw_currency) and normalized_unit == "KRW"
+        else ("" if pd.isna(raw_currency) else str(raw_currency).strip().upper())
+    )
+    expected = {
+        "ticker": security_id,
+        "metric": str(normalized["metric"]),
+        "period_end": str(normalized["period_end"]),
+        "fiscal_period": str(normalized["fiscal_period"]),
+        "value": Decimal(str(normalized["value"])),
+        "unit": normalized_unit,
+        "currency": normalized_currency,
+        "available_date": str(normalized["available_date"]),
+        "revision_id": str(normalized["revision_id"]),
+        "revision_sequence": int(normalized["revision_sequence"]),
+    }
+    matches = [item for item in reconstructed if item == expected]
+    if len(matches) != 1:
+        raise ValuationAuthorityError(
+            "normalized financial actual differs from raw OpenDART capture"
+        )
+
+
+def _reconstruct_raw_actual(
+    raw: dict[object, object], security_id: str
+) -> dict[str, object] | None:
+    row_stock_code = str(raw.get("stock_code", "")).strip()
+    if row_stock_code and row_stock_code != security_id:
+        return None
+    report_code = str(raw.get("reprt_code", "")).strip()
+    if report_code not in REPORT_PERIODS:
+        return None
+    fiscal_period, month, day = REPORT_PERIODS[report_code]
+    try:
+        business_year = int(str(raw.get("bsns_year", "")))
+        period_end = date(business_year, month, day)
+        amount = _opendart_amount(raw.get("thstrm_amount"))
+    except (TypeError, ValueError):
+        return None
+    if amount is None:
+        return None
+    receipt = str(raw.get("rcept_no", "")).strip()
+    if len(receipt) != 14 or not receipt.isdigit():
+        return None
+    try:
+        available_date = datetime.strptime(receipt[:8], "%Y%m%d").date()
+    except ValueError:
+        return None
+    statement = str(raw.get("sj_div", "")).strip()
+    account_id = str(raw.get("account_id", "")).strip()
+    account_name = str(raw.get("account_nm", "")).strip()
+    if not statement or not account_name:
+        return None
+    account_key = account_id if account_id not in {"", "-"} else account_name
+    detail = str(raw.get("account_detail", "")).strip()
+    order = str(raw.get("ord", "")).strip()
+    suffix = f":{detail}" if detail and detail != "-" else ""
+    if order:
+        suffix = f"{suffix}#{order}"
+    raw_currency = str(raw.get("currency", "")).strip().upper()
+    if raw_currency != "KRW":
+        return None
+    return {
+        "ticker": security_id,
+        "metric": f"{statement}:{account_key}{suffix}",
+        "period_end": period_end.isoformat(),
+        "fiscal_period": fiscal_period,
+        "value": amount,
+        "unit": "KRW",
+        "currency": "KRW",
+        "available_date": available_date.isoformat(),
+        "revision_id": receipt,
+    }
+
+
+def _opendart_amount(value: object) -> Decimal | None:
+    text = str(value).strip().replace(",", "")
+    if text in {"", "-", "None", "nan"}:
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    if negative:
+        text = text[1:-1]
+    try:
+        amount = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError("raw OpenDART amount is invalid") from exc
+    if not amount.is_finite():
+        raise ValueError("raw OpenDART amount must be finite")
+    return -amount if negative else amount
 
 
 def _legacy_binding(

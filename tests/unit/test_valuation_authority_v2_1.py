@@ -101,6 +101,38 @@ def _market() -> MarketIntelligenceSnapshot:
     )
 
 
+def _raw_opendart(financials: pd.DataFrame, *, fs_div: str = "CFS") -> dict[str, object]:
+    raw: dict[str, object] = {}
+    for ticker, group in financials.groupby("ticker", sort=True):
+        rows: list[dict[str, object]] = []
+        for normalized in group.to_dict(orient="records"):
+            statement, account = str(normalized["metric"]).split(":", 1)
+            account, _, order = account.partition("#")
+            account, _, detail = account.partition(":")
+            period_end = pd.Timestamp(normalized["period_end"]).date()
+            rows.append(
+                {
+                    "stock_code": str(ticker),
+                    "sj_div": statement,
+                    "account_id": account,
+                    "account_nm": account,
+                    "account_detail": detail or "-",
+                    "ord": order,
+                    "thstrm_amount": str(normalized["value"]),
+                    "rcept_no": str(normalized["revision_id"]),
+                    "bsns_year": str(period_end.year),
+                    "reprt_code": ("11011" if str(normalized["fiscal_period"]) == "FY" else ""),
+                    "currency": "KRW",
+                }
+            )
+        raw[str(ticker)] = {
+            "request": {"fs_div": fs_div},
+            "corp": {"stock_code": str(ticker)},
+            "financial": {"financials": {"list": rows}},
+        }
+    return raw
+
+
 def _research(market_id: str) -> FundamentalMacroSnapshot:
     rows = []
     values = {
@@ -125,7 +157,7 @@ def _research(market_id: str) -> FundamentalMacroSnapshot:
                     "available_date": "2026-03-17",
                     "retrieved_at": (CAPTURED - timedelta(minutes=30)).isoformat(),
                     "source": "opendart",
-                    "revision_id": f"{ticker}-{metric}",
+                    "revision_id": ("20260317000635" if ticker == "000660" else "20260317000999"),
                     "revision_sequence": 0,
                 }
             )
@@ -170,7 +202,7 @@ def _research(market_id: str) -> FundamentalMacroSnapshot:
             ]
         ),
         macro=macro,
-        raw_opendart={ticker: {"request": {"fs_div": "CFS"}} for ticker in ("000660", "005930")},
+        raw_opendart=_raw_opendart(financials),
         raw_ecos={"writer_backed": True},
         market_snapshot_id=market_id,
     )
@@ -281,7 +313,8 @@ def test_non_opendart_financial_rows_cannot_become_class_a(tmp_path: Path) -> No
     financials = research.financials.copy()
     financials["source"] = "untrusted_vendor"
     research_dir = write_fundamental_macro_snapshot(
-        tmp_path / "research", replace(research, financials=financials)
+        tmp_path / "research",
+        replace(research, financials=financials, raw_opendart=_raw_opendart(financials)),
     )[0].parent
     artifact = build_valuation_authority(
         market_directory=market_dir,
@@ -387,6 +420,45 @@ def test_normalized_price_must_match_raw_tossinvest_capture(tmp_path: Path) -> N
         )
 
 
+def test_normalized_actual_must_match_raw_opendart_capture(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    financials = research.financials.copy()
+    mask = financials["ticker"].astype(str).eq("000660") & financials["metric"].astype(
+        str
+    ).str.contains("ProfitLoss#")
+    financials.loc[mask, "value"] = financials.loc[mask, "value"] + 1
+    financials = validate_financial_statements(financials)
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, financials=financials)
+    )[0].parent
+    with pytest.raises(ValuationAuthorityError, match="differs from raw OpenDART"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+def test_opendart_request_metadata_alone_cannot_authorize_actuals(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    request_only = {ticker: {"request": {"fs_div": "CFS"}} for ticker in ("000660", "005930")}
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, raw_opendart=request_only)
+    )[0].parent
+    with pytest.raises(ValuationAuthorityError, match="financial response is unavailable"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
 def test_ofs_statement_basis_cannot_be_published_as_cfs(tmp_path: Path) -> None:
     market = _market()
     market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
@@ -462,7 +534,8 @@ def test_canonical_opendart_metric_aliases_are_authoritative(tmp_path: Path) -> 
     financials["metric"] = financials["metric"].replace(aliases)
     financials = validate_financial_statements(financials)
     research_dir = write_fundamental_macro_snapshot(
-        tmp_path / "research", replace(research, financials=financials)
+        tmp_path / "research",
+        replace(research, financials=financials, raw_opendart=_raw_opendart(financials)),
     )[0].parent
     artifact = build_valuation_authority(
         market_directory=market_dir,
@@ -490,12 +563,13 @@ def test_alias_precedence_runs_after_source_and_pit_filters(tmp_path: Path) -> N
     financials.loc[exact_mask, "source"] = "untrusted_vendor"
     owner_profit["metric"] = "CIS:ifrs-full_ProfitLossAttributableToOwnersOfParent"
     owner_profit["value"] = 40_000_000_000_000
-    owner_profit["revision_id"] = "000660-owner-profit"
+    owner_profit["revision_id"] = "20260317012345"
     financials = validate_financial_statements(
         pd.concat([financials, pd.DataFrame([owner_profit])], ignore_index=True)
     )
     research_dir = write_fundamental_macro_snapshot(
-        tmp_path / "research", replace(research, financials=financials)
+        tmp_path / "research",
+        replace(research, financials=financials, raw_opendart=_raw_opendart(financials)),
     )[0].parent
     artifact = build_valuation_authority(
         market_directory=market_dir,
@@ -523,12 +597,13 @@ def test_latest_fy_is_selected_before_alias_precedence(tmp_path: Path) -> None:
     older_exact["available_date"] = date(2025, 3, 17)
     older_exact["metric"] = "CIS:ifrs-full_ProfitLoss"
     older_exact["value"] = 30_000_000_000_000
-    older_exact["revision_id"] = "000660-older-exact-profit"
+    older_exact["revision_id"] = "20250317000001"
     financials = validate_financial_statements(
         pd.concat([financials, pd.DataFrame([older_exact])], ignore_index=True)
     )
     research_dir = write_fundamental_macro_snapshot(
-        tmp_path / "research", replace(research, financials=financials)
+        tmp_path / "research",
+        replace(research, financials=financials, raw_opendart=_raw_opendart(financials)),
     )[0].parent
     artifact = build_valuation_authority(
         market_directory=market_dir,
@@ -552,7 +627,8 @@ def test_operating_profit_cannot_fallback_to_net_income(tmp_path: Path) -> None:
     financials.loc[net_mask, "metric"] = "CIS:ifrs-full_ProfitLossFromOperatingActivities"
     financials = validate_financial_statements(financials)
     research_dir = write_fundamental_macro_snapshot(
-        tmp_path / "research", replace(research, financials=financials)
+        tmp_path / "research",
+        replace(research, financials=financials, raw_opendart=_raw_opendart(financials)),
     )[0].parent
     artifact = build_valuation_authority(
         market_directory=market_dir,
@@ -588,7 +664,8 @@ def test_unregistered_compound_concepts_are_not_actual_aliases(
     financials.loc[mask, "metric"] = compound_metric
     financials = validate_financial_statements(financials)
     research_dir = write_fundamental_macro_snapshot(
-        tmp_path / "research", replace(research, financials=financials)
+        tmp_path / "research",
+        replace(research, financials=financials, raw_opendart=_raw_opendart(financials)),
     )[0].parent
     artifact = build_valuation_authority(
         market_directory=market_dir,
@@ -936,13 +1013,18 @@ def test_financial_revision_policy_selects_one_known_revision(
         .copy()
     )
     base["value"] = 43_000_000_000_000
-    base["revision_id"] = "000660-profit-correction"
+    base["revision_id"] = "20260401000001"
     base["revision_sequence"] = 1
     base["available_date"] = date(2026, 4, 1)
     revised = validate_financial_statements(
         pd.concat([original.financials, pd.DataFrame([base])], ignore_index=True)
     )
-    research_snapshot = replace(original, revision_policy=policy, financials=revised)
+    research_snapshot = replace(
+        original,
+        revision_policy=policy,
+        financials=revised,
+        raw_opendart=_raw_opendart(revised),
+    )
     research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research_snapshot)[
         0
     ].parent
