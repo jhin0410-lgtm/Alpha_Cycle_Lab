@@ -866,6 +866,14 @@ def _scenario_from_payload(raw: dict[str, object]) -> ScenarioAuthority:
 
 def _plain_repository(path: Path, *, create: bool) -> Path:
     lexical = path.absolute()
+    existing = lexical
+    while not existing.exists() and not existing.is_symlink():
+        parent = existing.parent
+        if parent == existing:
+            raise ValuationAuthorityError("authority repository has no trusted ancestor")
+        existing = parent
+    if existing.is_symlink() or not existing.is_dir() or existing.resolve() != existing.absolute():
+        raise ValuationAuthorityError("authority repository ancestor contains a junction or alias")
     if path.exists() or path.is_symlink():
         if path.is_symlink() or not path.is_dir():
             raise ValuationAuthorityError("authority repository must be a plain directory")

@@ -510,6 +510,7 @@ def test_output_repository_symlink_ancestor_escape_is_rejected(tmp_path: Path) -
         pytest.skip("symlink creation unavailable")
     with pytest.raises(ValuationAuthorityError, match="junction or alias"):
         _persist(artifact, alias / "authority", market, research, legacy)
+    assert not (outside / "authority").exists()
 
 
 def test_no_legacy_share_source_stays_class_e(tmp_path: Path) -> None:
