@@ -577,7 +577,7 @@ def test_duplicate_identity_conflict_and_symlink_escape_fail_closed(tmp_path: Pa
         link.symlink_to(repository, target_is_directory=True)
     except OSError:
         pytest.skip("symlink creation unavailable")
-    with pytest.raises(ValuationAuthorityError, match="plain directory"):
+    with pytest.raises(ValuationAuthorityError, match="junction or alias"):
         _persist(artifact, link, market, research, legacy)
 
 
