@@ -185,6 +185,11 @@ class FundamentalMacroCollector:
             financial_frames.append(financial.frame)
             disclosure_frames.append(disclosures.frame)
             raw_dart[symbol] = {
+                "request": {
+                    "business_year": business_year,
+                    "report_code": report_code,
+                    "fs_div": fs_div,
+                },
                 "corp": {
                     "corp_code": corp.corp_code,
                     "corp_name": corp.corp_name,

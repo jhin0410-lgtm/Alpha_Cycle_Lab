@@ -10,6 +10,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import alpha_cycle.valuation_authority_v2_1 as valuation_authority_module
 from alpha_cycle.data.research import (
     RevisionPolicy,
     validate_financial_statements,
@@ -159,7 +160,7 @@ def _research(market_id: str) -> FundamentalMacroSnapshot:
             ]
         ),
         macro=macro,
-        raw_opendart={"writer_backed": True},
+        raw_opendart={ticker: {"request": {"fs_div": "CFS"}} for ticker in ("000660", "005930")},
         raw_ecos={"writer_backed": True},
         market_snapshot_id=market_id,
     )
@@ -238,6 +239,15 @@ def _persist(artifact, output: Path, market: Path, research: Path, legacy: Path)
     )
 
 
+def _replay(directory: Path, market: Path, research: Path, legacy: Path):
+    return replay_persisted_valuation_authority(
+        directory,
+        market_directory=market,
+        research_directory=research,
+        legacy_valuation_directory=legacy,
+    )
+
+
 def test_writer_backed_actuals_and_price_replay_without_valuation_promotion(tmp_path: Path) -> None:
     artifact, _, _, _ = _artifact(tmp_path)
     inputs = {item.role: item for item in artifact.inputs}
@@ -252,6 +262,99 @@ def test_writer_backed_actuals_and_price_replay_without_valuation_promotion(tmp_
         inputs["share_count"].authority_class is AuthorityClass.REPLAYABLE_SEMANTICALLY_INSUFFICIENT
     )
     assert inputs["share_count"].value is None
+
+
+def test_non_opendart_financial_rows_cannot_become_class_a(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    financials = research.financials.copy()
+    financials["source"] = "untrusted_vendor"
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, financials=financials)
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    actuals = [
+        item
+        for item in artifact.inputs
+        if item.role in {"trailing_net_income", "book_equity", "cash_and_cash_equivalents"}
+    ]
+    assert all(item.authority_class is AuthorityClass.UNSUPPORTED for item in actuals)
+
+
+def test_non_krw_market_price_is_rejected(tmp_path: Path) -> None:
+    market = _market()
+    usd_market = replace(
+        market,
+        prices=tuple(replace(item, currency="USD") for item in market.prices),
+    )
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", usd_market)[0].parent
+    research = _research(usd_market.snapshot_id)
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research)[0].parent
+    with pytest.raises(ValuationAuthorityError, match="denominated in KRW"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+def test_ofs_statement_basis_cannot_be_published_as_cfs(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    raw = {ticker: {"request": {"fs_div": "OFS"}} for ticker in ("000660", "005930")}
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, raw_opendart=raw)
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    actuals = [
+        item
+        for item in artifact.inputs
+        if item.role in {"trailing_net_income", "book_equity", "cash_and_cash_equivalents"}
+    ]
+    assert all(item.statement_basis == "OFS" for item in actuals)
+    assert all(item.blocker and item.blocker.endswith("basis_unsupported") for item in actuals)
+
+
+def test_canonical_opendart_metric_aliases_are_authoritative(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    aliases = {
+        "CIS:ifrs-full_ProfitLoss#29": "CIS:dart_ProfitLoss",
+        "BS:ifrs-full_Equity#32": "BS:자본총계",
+        "BS:ifrs-full_CashAndCashEquivalents#9": "BS:현금및현금성자산",
+    }
+    financials = research.financials.copy()
+    financials["metric"] = financials["metric"].replace(aliases)
+    financials = validate_financial_statements(financials)
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, financials=financials)
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    actuals = [
+        item
+        for item in artifact.inputs
+        if item.role in {"trailing_net_income", "book_equity", "cash_and_cash_equivalents"}
+    ]
+    assert all(item.authority_class is AuthorityClass.AUTHORITATIVE_SOURCE for item in actuals)
 
 
 @pytest.mark.parametrize("ticker,price", [("000660", 1_647_000), ("005930", 273_500)])
@@ -297,7 +400,7 @@ def test_price_implied_payoff_and_target_authority_remain_blocked(tmp_path: Path
 def test_persist_replay_and_upstream_revalidation_round_trip(tmp_path: Path) -> None:
     artifact, market, research, legacy = _artifact(tmp_path)
     directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
-    assert replay_persisted_valuation_authority(directory) == artifact
+    assert _replay(directory, market, research, legacy) == artifact
     assert (
         revalidate_persisted_valuation_authority(
             directory,
@@ -330,7 +433,7 @@ def test_forged_authority_json_fails_digest_before_it_can_self_authorize(tmp_pat
         lambda value: value.__setitem__("share_count_authority_established", True),
     )
     with pytest.raises(ValuationAuthorityError, match="digest"):
-        replay_persisted_valuation_authority(directory)
+        _replay(directory, market, research, legacy)
 
 
 def test_caller_constructed_self_consistent_authority_cannot_be_persisted(tmp_path: Path) -> None:
@@ -345,6 +448,44 @@ def test_caller_constructed_self_consistent_authority_cannot_be_persisted(tmp_pa
         _persist(forged, tmp_path / "authority", market, research, legacy)
 
 
+def test_self_consistent_forged_persisted_authority_fails_upstream_replay(tmp_path: Path) -> None:
+    artifact, market, research, legacy = _artifact(tmp_path)
+    forged = replace(
+        artifact,
+        inputs=tuple(
+            replace(item, value=1.0) if item.role == "current_price" else item
+            for item in artifact.inputs
+        ),
+    )
+    payload_bytes = (
+        json.dumps(forged.payload(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode()
+    directory = tmp_path / (
+        f"{forged.captured_at.astimezone(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
+        f"__{forged.artifact_id[:12]}"
+    )
+    directory.mkdir()
+    (directory / "authority.json").write_bytes(payload_bytes)
+    (directory / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_id": forged.artifact_id,
+                "captured_at": forged.captured_at.isoformat(),
+                "evaluation_date": forged.evaluation_date.isoformat(),
+                "security_id": forged.security_id,
+                "files": {"authority.json": hashlib.sha256(payload_bytes).hexdigest()},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValuationAuthorityError, match="differs from upstream replay"):
+        _replay(directory, market, research, legacy)
+
+
 def test_unknown_field_tamper_with_updated_file_hash_remains_noncanonical(tmp_path: Path) -> None:
     artifact, market, research, legacy = _artifact(tmp_path)
     directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
@@ -357,7 +498,7 @@ def test_unknown_field_tamper_with_updated_file_hash_remains_noncanonical(tmp_pa
         ),
     )
     with pytest.raises(ValuationAuthorityError, match="fields"):
-        replay_persisted_valuation_authority(directory)
+        _replay(directory, market, research, legacy)
 
 
 def test_manifest_duplicate_identity_tamper_is_rejected(tmp_path: Path) -> None:
@@ -368,7 +509,7 @@ def test_manifest_duplicate_identity_tamper_is_rejected(tmp_path: Path) -> None:
         lambda value: value.__setitem__("security_id", "005930"),
     )
     with pytest.raises(ValuationAuthorityError, match="manifest identity"):
-        replay_persisted_valuation_authority(directory)
+        _replay(directory, market, research, legacy)
 
 
 def test_empty_legacy_file_claim_cannot_receive_class_b(tmp_path: Path) -> None:
@@ -402,6 +543,53 @@ def test_legacy_wrong_generation_date_or_security_is_rejected(
         build_valuation_authority(
             market_directory=market,
             research_directory=research,
+            legacy_valuation_directory=legacy,
+            security_id="000660",
+            captured_at=CAPTURED,
+        )
+
+
+def test_legacy_capture_after_authority_is_rejected(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research)[0].parent
+    shares = pd.DataFrame(
+        [
+            {
+                "ticker": "000660",
+                "security_class": "common",
+                "issued_shares": 100,
+                "treasury_shares": 0,
+            }
+        ]
+    )
+    legacy_snapshot = ValuationEvidenceSnapshot(
+        captured_at=CAPTURED + timedelta(seconds=1),
+        evaluation_date=research.evaluation_date,
+        research_snapshot_id=research.snapshot_id,
+        market_snapshot_id=market.snapshot_id,
+        history_years=3,
+        shares=shares,
+        security_values=pd.DataFrame({"ticker": ["000660"]}),
+        financial_history=pd.DataFrame({"ticker": ["000660"]}),
+        valuation_metrics=pd.DataFrame(
+            {
+                "ticker": ["000660"],
+                "market_cap_complete": [False],
+                "valuation_score": [None],
+            }
+        ),
+        raw_valuation={
+            "source_research_snapshot_id": research.snapshot_id,
+            "source_market_snapshot_id": market.snapshot_id,
+        },
+    )
+    legacy = write_valuation_evidence_snapshot(tmp_path / "legacy", legacy_snapshot)[0].parent
+    with pytest.raises(ValuationAuthorityError, match="capture follows"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
             legacy_valuation_directory=legacy,
             security_id="000660",
             captured_at=CAPTURED,
@@ -532,7 +720,7 @@ def test_price_mutation_is_detected_by_upstream_replay(tmp_path: Path) -> None:
         directory / "authority.json", lambda value: value["inputs"][3].__setitem__("value", 1.0)
     )
     with pytest.raises(ValuationAuthorityError):
-        replay_persisted_valuation_authority(directory)
+        _replay(directory, market, research, legacy)
     assert market.is_dir() and research.is_dir() and legacy.is_dir()
 
 
@@ -593,6 +781,23 @@ def test_output_repository_symlink_ancestor_escape_is_rejected(tmp_path: Path) -
     with pytest.raises(ValuationAuthorityError, match="junction or alias"):
         _persist(artifact, alias / "authority", market, research, legacy)
     assert not (outside / "authority").exists()
+
+
+def test_publication_fsyncs_staged_and_repository_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact, market, research, legacy = _artifact(tmp_path)
+    synced: list[Path] = []
+    monkeypatch.setattr(
+        valuation_authority_module,
+        "_fsync_directory",
+        lambda path: synced.append(Path(path)),
+    )
+    repository = tmp_path / "authority"
+    _persist(artifact, repository, market, research, legacy)
+    assert len(synced) == 2
+    assert synced[0].name.startswith(".")
+    assert synced[1] == repository.resolve()
 
 
 def test_no_legacy_share_source_stays_class_e(tmp_path: Path) -> None:

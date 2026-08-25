@@ -12,10 +12,10 @@ The repository audit found these distinct paths:
 | Input/path | Previous behavior | Authority class after #308 |
 | --- | --- | --- |
 | Canonically replayed market `prices.csv` plus raw capture | Exact writer identity, PIT checks, KRW price | A: authoritative persisted source |
-| Canonically replayed OpenDART company actuals | Exact writer identity and filing availability | A: authoritative persisted actual |
+| Canonically replayed OpenDART company actuals | Exact writer identity, OpenDART source, filing availability, CFS proof, semantic aliases, and KRW compatibility | A: authoritative persisted actual |
 | `ValuationEvidenceSnapshot` share rows and market-cap arithmetic | Self-consistent normalized OpenDART payload and CSVs | B only after exact canonical replay; the current real snapshot fails that stricter replay and is treated as E |
 | Market cap, trailing P/E, and P/B | Derived from the class-B share basis | blocked; never promoted to C |
-| Cash actual | Official CFS actual | A |
+| Cash actual | Official actual only when canonical bytes prove CFS | A when proven; otherwise blocked |
 | Complete debt and EV bridge | No certified complete debt taxonomy/basis | E: unsupported |
 | KIS forward cells and existing forward valuation | Opaque replayable cells with no numeric semantics | B/E; forward authority blocked |
 | Reference multiple | Historical/peer evidence or explicit scenario input | D when assumed; never source authority |
@@ -65,11 +65,11 @@ than promoted to class B.
 
 | Acceptance | 000660 SK hynix | 005930 Samsung Electronics |
 | --- | ---: | ---: |
-| Authority artifact | `627fff6ae931e3ec82cf3b79cef1dd73c8a4ebfcdfa9208dcf35ff773025158d` | `0c521431d7e12bc3c3d62905c5493ed8957c7a7bfefeadd890bbb6e1da4fdc0f` |
+| Authority artifact | `36778c956b9d5f99f6931df51f29b5421b3173e3c0952202811ed5954bca39ee` | `922c14b0bde179cc1e090835dae20b1d89fc76b883bade662d8ee3784a1922c8` |
 | Trusted current price | KRW 1,647,000/share | KRW 273,500/share |
-| Trusted FY2025 net income | KRW 42,947,902m | KRW 45,206,805m |
-| Trusted FY2025 book equity | KRW 120,666,751m | KRW 436,320,337m |
-| Trusted FY2025 cash | KRW 14,923,766m | KRW 57,856,378m |
+| FY2025 net income | unavailable: persisted snapshot does not prove CFS basis | unavailable: persisted snapshot does not prove CFS basis |
+| FY2025 book equity | unavailable: persisted snapshot does not prove CFS basis | unavailable: persisted snapshot does not prove CFS basis |
+| FY2025 cash | unavailable: persisted snapshot does not prove CFS basis | unavailable: persisted snapshot does not prove CFS basis |
 | Share-count authority | not established | not established |
 | Complete capital-structure authority | not established | not established |
 | Supported trailing methods | none | none |
@@ -77,7 +77,10 @@ than promoted to class B.
 | Price-implied requirement | blocked | blocked |
 | Bear/Base/Bull values and payoff | typed blockers; values unavailable | typed blockers; values unavailable |
 
-The exact blockers for both are `valuation_share_count_authority_missing`,
+The August 14 canonical research bytes predate persistence of the OpenDART `fs_div` request, so
+they cannot honestly distinguish CFS from OFS. The exact blockers for both are
+`trailing_net_income_statement_basis_missing`, `book_equity_statement_basis_missing`,
+`cash_and_cash_equivalents_statement_basis_missing`, `valuation_share_count_authority_missing`,
 `valuation_capital_structure_authority_missing`, `trailing_ebitda_authority_missing`,
 `forward_estimate_authority_missing`, `valuation_method_ineligible`, and
 `scenario_input_authority_missing`.
@@ -86,8 +89,10 @@ The exact blockers for both are `valuation_share_count_authority_missing`,
 
 The authority artifact binds every source identity and the exact byte digest of every legacy
 valuation file. Persistence uses an immutable timestamp/content directory, exclusive file creation,
-fsync, atomic directory rename, no mutable latest pointer, exact schemas, file digests, and
-upstream reconstruction. Symlinks/junction aliases, unknown fields, duplicate identities, mutated
+file and directory fsync, atomic directory rename, no mutable latest pointer, exact schemas, file
+digests, and mandatory upstream reconstruction. Persisted replay requires the canonical market,
+research, and optional legacy directories, so a self-consistent payload cannot authorize itself.
+Symlinks/junction aliases, unknown fields, duplicate identities, mutated
 raw inputs, wrong generations/dates/securities, partial publications, and self-consistent forged
 authority JSON fail closed.
 

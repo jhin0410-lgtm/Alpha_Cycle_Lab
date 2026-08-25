@@ -24,7 +24,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from alpha_cycle.data.research import RevisionPolicy
-from alpha_cycle.intelligence.valuation import ValuationEvidenceSnapshot
+from alpha_cycle.intelligence.valuation import METRIC_SPECS, ValuationEvidenceSnapshot
 from alpha_cycle.live_typed_source_revalidation_v2_1 import (
     revalidate_market_snapshot,
     revalidate_research_snapshot,
@@ -304,6 +304,8 @@ def build_valuation_authority(
     if len(prices) != 1:
         raise ValuationAuthorityError("security requires exactly one trusted market price")
     price = prices[0]
+    if price.currency.strip().upper() != "KRW":
+        raise ValuationAuthorityError("trusted market price must be denominated in KRW")
     if price.timestamp > captured_at:
         raise ValuationAuthorityError("market price cannot follow authority capture")
     price_date = price.timestamp.astimezone(KOREA_TZ).date()
@@ -316,13 +318,16 @@ def build_valuation_authority(
         research_snapshot_id=research.snapshot_id,
         evaluation_date=research.evaluation_date,
         security_id=security_id,
+        captured_at=captured_at,
     )
+    statement_basis = _opendart_statement_basis(research.raw_opendart, security_id)
     actuals = _trusted_actual_inputs(
         research.financials,
         security_id,
         research.snapshot_id,
         evaluation_date=research.evaluation_date,
         revision_policy=research.revision_policy,
+        statement_basis=statement_basis,
     )
     inputs = tuple(
         sorted(
@@ -452,7 +457,11 @@ def persist_valuation_authority(
     directory = root / f"{timestamp}__{artifact.artifact_id[:12]}"
     if directory.exists() or directory.is_symlink():
         replayed = replay_persisted_valuation_authority(
-            directory, expected_artifact_id=artifact.artifact_id
+            directory,
+            market_directory=market_directory,
+            research_directory=research_directory,
+            legacy_valuation_directory=legacy_valuation_directory,
+            expected_artifact_id=artifact.artifact_id,
         )
         if replayed != artifact:
             raise ValuationAuthorityError("duplicate immutable identity conflicts with content")
@@ -475,7 +484,9 @@ def persist_valuation_authority(
             temporary / "manifest.json",
             (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(),
         )
+        _fsync_directory(temporary)
         os.rename(temporary, directory)
+        _fsync_directory(root)
     finally:
         if temporary.exists():
             for child in temporary.iterdir():
@@ -485,6 +496,32 @@ def persist_valuation_authority(
 
 
 def replay_persisted_valuation_authority(
+    directory: str | Path,
+    *,
+    market_directory: str | Path,
+    research_directory: str | Path,
+    legacy_valuation_directory: str | Path | None,
+    expected_artifact_id: str | None = None,
+) -> ValuationAuthorityArtifact:
+    """Replay persisted claims against mandatory canonical upstream bytes."""
+
+    persisted = _load_persisted_valuation_authority(
+        directory, expected_artifact_id=expected_artifact_id
+    )
+    rebuilt = build_valuation_authority(
+        market_directory=market_directory,
+        research_directory=research_directory,
+        legacy_valuation_directory=legacy_valuation_directory,
+        security_id=persisted.security_id,
+        captured_at=persisted.captured_at,
+        horizon_trading_days=persisted.scenarios[0].horizon_trading_days,
+    )
+    if rebuilt != persisted:
+        raise ValuationAuthorityError("persisted authority differs from upstream replay")
+    return persisted
+
+
+def _load_persisted_valuation_authority(
     directory: str | Path,
     *,
     expected_artifact_id: str | None = None,
@@ -536,19 +573,52 @@ def revalidate_persisted_valuation_authority(
 
     persisted = replay_persisted_valuation_authority(
         directory,
-        expected_artifact_id=expected_artifact_id,
-    )
-    rebuilt = build_valuation_authority(
         market_directory=market_directory,
         research_directory=research_directory,
         legacy_valuation_directory=legacy_valuation_directory,
-        security_id=persisted.security_id,
-        captured_at=persisted.captured_at,
-        horizon_trading_days=persisted.scenarios[0].horizon_trading_days,
+        expected_artifact_id=expected_artifact_id,
     )
-    if rebuilt != persisted:
-        raise ValuationAuthorityError("persisted authority differs from upstream replay")
     return persisted
+
+
+def _opendart_statement_basis(raw: object, security_id: str) -> str | None:
+    """Return a statement basis only when canonical raw OpenDART bytes prove it."""
+
+    if not isinstance(raw, dict) or not isinstance(raw.get(security_id), dict):
+        return None
+    security = cast(dict[str, object], raw[security_id])
+    request = security.get("request")
+    if isinstance(request, dict):
+        requested = str(request.get("fs_div", "")).strip().upper()
+        if requested in {"CFS", "OFS"}:
+            return requested
+    financial = security.get("financial")
+    if not isinstance(financial, dict):
+        return None
+    payload = financial.get("financials")
+    if not isinstance(payload, dict) or not isinstance(payload.get("list"), list):
+        return None
+    rows = [row for row in payload["list"] if isinstance(row, dict)]
+    bases = {str(row.get("fs_div", "")).strip().upper() for row in rows}
+    return next(iter(bases)) if len(bases) == 1 and bases <= {"CFS", "OFS"} else None
+
+
+def _metric_matches(metric: str, semantic_name: str) -> bool:
+    """Match canonical normalized metrics with the repository's established aliases."""
+
+    statement, separator, account = metric.partition(":")
+    if not separator:
+        return False
+    account = account.split("#", 1)[0].split(":", 1)[0]
+    normalized = "".join(character for character in account.lower() if character.isalnum())
+    spec = next(item for item in METRIC_SPECS if item.name == semantic_name)
+    if statement.strip().upper() not in spec.statements:
+        return False
+    aliases = {
+        "".join(character for character in alias.lower() if character.isalnum())
+        for alias in spec.aliases
+    }
+    return any(alias and (normalized == alias or alias in normalized) for alias in aliases)
 
 
 def _trusted_actual_inputs(
@@ -558,16 +628,24 @@ def _trusted_actual_inputs(
     *,
     evaluation_date: date,
     revision_policy: RevisionPolicy,
+    statement_basis: str | None,
 ) -> tuple[ValuationInput, ...]:
     specs = {
-        "trailing_net_income": r"^(?:CIS|IS):ifrs-full_ProfitLoss#",
-        "book_equity": r"^BS:ifrs-full_Equity#",
-        "cash_and_cash_equivalents": r"^BS:ifrs-full_CashAndCashEquivalents#",
+        "trailing_net_income": "net_income",
+        "book_equity": "equity",
+        "cash_and_cash_equivalents": "cash",
     }
     company = frame.loc[frame["ticker"].astype(str).eq(security_id)].copy()
     result: list[ValuationInput] = []
-    for role, pattern in specs.items():
-        candidates = company.loc[company["metric"].astype(str).str.match(pattern)].copy()
+    for role, semantic_name in specs.items():
+        candidates = company.loc[
+            company["metric"]
+            .astype(str)
+            .map(lambda value, name=semantic_name: _metric_matches(value, name))
+        ].copy()
+        candidates = candidates.loc[
+            candidates["source"].astype(str).str.strip().str.lower().eq("opendart")
+        ]
         candidates = candidates.loc[candidates["fiscal_period"].astype(str).eq("FY")]
         candidates = candidates.loc[
             candidates["period_end"].astype(str).le(evaluation_date.isoformat())
@@ -597,7 +675,13 @@ def _trusted_actual_inputs(
                 if revision_policy is RevisionPolicy.FIRST_RELEASE
                 else grouped.tail(1)
             )
-        if candidates.empty:
+        basis_blocker = (
+            None
+            if statement_basis == "CFS"
+            else f"{role}_statement_basis_"
+            + ("missing" if statement_basis is None else "unsupported")
+        )
+        if candidates.empty or basis_blocker is not None:
             result.append(
                 ValuationInput(
                     role,
@@ -608,8 +692,8 @@ def _trusted_actual_inputs(
                     None,
                     None,
                     None,
-                    "CFS",
-                    f"{role}_authority_missing",
+                    statement_basis,
+                    basis_blocker or f"{role}_authority_missing",
                 )
             )
             continue
@@ -677,6 +761,7 @@ def _legacy_binding(
     research_snapshot_id: str,
     evaluation_date: date,
     security_id: str,
+    captured_at: datetime,
 ) -> tuple[str | None, str | None]:
     if directory is None:
         return None, None
@@ -699,6 +784,10 @@ def _legacy_binding(
         raise ValuationAuthorityError("legacy valuation manifest is incomplete")
     snapshot_id = str(manifest["snapshot_id"])
     _sha(snapshot_id, "legacy valuation snapshot_id")
+    legacy_captured_at = datetime.fromisoformat(str(manifest["captured_at"]))
+    _aware(legacy_captured_at, "legacy valuation captured_at")
+    if legacy_captured_at > captured_at:
+        raise ValuationAuthorityError("legacy valuation capture follows authority capture")
     if (
         manifest["market_snapshot_id"] != market_snapshot_id
         or manifest["research_snapshot_id"] != research_snapshot_id
@@ -721,7 +810,7 @@ def _legacy_binding(
         raise ValuationAuthorityError("legacy valuation file set is not canonical")
     try:
         snapshot = ValuationEvidenceSnapshot(
-            captured_at=datetime.fromisoformat(str(manifest["captured_at"])),
+            captured_at=legacy_captured_at,
             evaluation_date=date.fromisoformat(str(manifest["evaluation_date"])),
             research_snapshot_id=str(manifest["research_snapshot_id"]),
             market_snapshot_id=str(manifest["market_snapshot_id"]),
@@ -1026,6 +1115,16 @@ def _write_new(path: Path, data: bytes) -> None:
         handle.write(data)
         handle.flush()
         os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _canonical(value: object) -> bytes:
