@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -70,7 +70,9 @@ def revalidate_market_snapshot(directory: str | Path) -> MarketIntelligenceSnaps
     if manifest.get("order_api_enabled") is not False:
         raise LiveTypedSourceRevalidationError("market snapshot must remain read-only")
     if _required_string_list(manifest, "files") != list(_MARKET_FILES):
-        raise LiveTypedSourceRevalidationError("market manifest file set differs from writer contract")
+        raise LiveTypedSourceRevalidationError(
+            "market manifest file set differs from writer contract"
+        )
 
     prices = tuple(
         sorted(
@@ -119,22 +121,21 @@ def revalidate_market_snapshot(directory: str | Path) -> MarketIntelligenceSnaps
         candles=candles,
         features=features,
         raw_prices=_load_json(root / "raw_prices.json"),
-        raw_candles=_string_object(_load_json(root / "raw_candles.json"), "raw_candles"),
+        raw_candles=_string_object(
+            _load_json(root / "raw_candles.json"), "raw_candles"
+        ),
     )
     declared_id = _required_text(manifest, "snapshot_id")
     if snapshot.snapshot_id != declared_id:
         raise LiveTypedSourceRevalidationError("market snapshot canonical identity mismatch")
     if _required_string_list(manifest, "symbols") != list(snapshot.symbols):
-        raise LiveTypedSourceRevalidationError("market manifest symbols do not match canonical snapshot")
-    expected_name = (
-        f"{snapshot.captured_at.astimezone().astimezone(snapshot.captured_at.tzinfo).strftime('%Y%m%dT%H%M%S%fZ')}"
-    )
-    # The writer names directories using captured_at converted to UTC. Avoid trusting the name as
-    # content authority; require only the content-id suffix here because timezone conversion is
-    # already part of canonical captured_at reconstruction.
-    del expected_name
-    if not root.name.endswith(f"__{snapshot.snapshot_id[:12]}"):
-        raise LiveTypedSourceRevalidationError("market snapshot directory identity suffix mismatch")
+        raise LiveTypedSourceRevalidationError(
+            "market manifest symbols do not match canonical snapshot"
+        )
+    timestamp = snapshot.captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    expected_name = f"{timestamp}__{snapshot.snapshot_id[:12]}"
+    if root.name != expected_name:
+        raise LiveTypedSourceRevalidationError("market snapshot directory identity mismatch")
     return snapshot
 
 
@@ -171,19 +172,25 @@ def revalidate_research_snapshot(directory: str | Path) -> FundamentalMacroSnaps
     if manifest.get("research_mode") != "live_endpoint_filtered":
         raise LiveTypedSourceRevalidationError("unsupported research snapshot mode")
     if manifest.get("historical_revision_archive_complete") is not False:
-        raise LiveTypedSourceRevalidationError("live research snapshot archive semantics changed")
+        raise LiveTypedSourceRevalidationError(
+            "live research snapshot archive semantics changed"
+        )
     expected_availability = {
         "opendart": "filing_receipt_date",
         "ecos": "korea_retrieval_date_conservative",
     }
     if manifest.get("availability_policy") != expected_availability:
-        raise LiveTypedSourceRevalidationError("research availability policy differs from writer contract")
+        raise LiveTypedSourceRevalidationError(
+            "research availability policy differs from writer contract"
+        )
     if _required_string_list(manifest, "files") != list(_RESEARCH_FILES):
-        raise LiveTypedSourceRevalidationError("research manifest file set differs from writer contract")
+        raise LiveTypedSourceRevalidationError(
+            "research manifest file set differs from writer contract"
+        )
 
-    financials = pd.read_csv(root / "financials.csv")
-    disclosures = pd.read_csv(root / "disclosures.csv")
-    macro = pd.read_csv(root / "macro.csv")
+    financials = _read_frame(root / "financials.csv")
+    disclosures = _read_frame(root / "disclosures.csv")
+    macro = _read_frame(root / "macro.csv")
     if len(financials) != _required_int(manifest, "financial_rows"):
         raise LiveTypedSourceRevalidationError("research financial row count mismatch")
     if len(disclosures) != _required_int(manifest, "disclosure_rows"):
@@ -211,8 +218,10 @@ def revalidate_research_snapshot(directory: str | Path) -> FundamentalMacroSnaps
     declared_id = _required_text(manifest, "snapshot_id")
     if snapshot.snapshot_id != declared_id:
         raise LiveTypedSourceRevalidationError("research snapshot canonical identity mismatch")
-    if not root.name.endswith(f"__{snapshot.snapshot_id[:12]}"):
-        raise LiveTypedSourceRevalidationError("research snapshot directory identity suffix mismatch")
+    timestamp = snapshot.captured_at.strftime("%Y%m%dT%H%M%S%fZ")
+    expected_name = f"{timestamp}__{snapshot.snapshot_id[:12]}"
+    if root.name != expected_name:
+        raise LiveTypedSourceRevalidationError("research snapshot directory identity mismatch")
     return snapshot
 
 
@@ -251,7 +260,9 @@ def _trusted_snapshot_directory(path: Path) -> Path:
 
 def _read_csv_rows(path: Path) -> tuple[dict[str, str], ...]:
     if path.is_symlink() or not path.is_file():
-        raise LiveTypedSourceRevalidationError(f"snapshot CSV must be a regular file: {path}")
+        raise LiveTypedSourceRevalidationError(
+            f"snapshot CSV must be a regular file: {path}"
+        )
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
@@ -262,17 +273,29 @@ def _read_csv_rows(path: Path) -> tuple[dict[str, str], ...]:
         )
 
 
+def _read_frame(path: Path) -> pd.DataFrame:
+    if path.is_symlink() or not path.is_file():
+        raise LiveTypedSourceRevalidationError(
+            f"snapshot CSV must be a regular file: {path}"
+        )
+    return pd.read_csv(path)
+
+
 def _load_object(path: Path) -> dict[str, Any]:
     return _string_object(_load_json(path), str(path))
 
 
 def _load_json(path: Path) -> object:
     if path.is_symlink() or not path.is_file():
-        raise LiveTypedSourceRevalidationError(f"snapshot JSON must be a regular file: {path}")
+        raise LiveTypedSourceRevalidationError(
+            f"snapshot JSON must be a regular file: {path}"
+        )
     try:
         return cast(object, json.loads(path.read_text(encoding="utf-8")))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise LiveTypedSourceRevalidationError(f"cannot decode snapshot JSON: {path}") from exc
+        raise LiveTypedSourceRevalidationError(
+            f"cannot decode snapshot JSON: {path}"
+        ) from exc
 
 
 def _string_object(value: object, field: str) -> dict[str, object]:
@@ -326,7 +349,9 @@ def _required_string_list(payload: dict[str, Any], field: str) -> list[str]:
 def _cell(row: dict[str, str], field: str) -> str:
     value = row.get(field, "").strip()
     if not value:
-        raise LiveTypedSourceRevalidationError(f"CSV field is missing or empty: {field}")
+        raise LiveTypedSourceRevalidationError(
+            f"CSV field is missing or empty: {field}"
+        )
     return value
 
 
@@ -334,15 +359,15 @@ def _aware_datetime(value: str, field: str) -> datetime:
     try:
         result = datetime.fromisoformat(value)
     except ValueError as exc:
-        raise LiveTypedSourceRevalidationError(f"{field} must be an ISO datetime") from exc
+        raise LiveTypedSourceRevalidationError(
+            f"{field} must be an ISO datetime"
+        ) from exc
     if result.tzinfo is None or result.utcoffset() is None:
         raise LiveTypedSourceRevalidationError(f"{field} must be timezone-aware")
     return result
 
 
-def _date(value: str, field: str):
-    from datetime import date
-
+def _date(value: str, field: str) -> date:
     try:
         return date.fromisoformat(value)
     except ValueError as exc:
