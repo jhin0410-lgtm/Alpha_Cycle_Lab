@@ -73,7 +73,7 @@ def record_analysis_request(
         raise ValueError("recorded_at must be timezone-aware")
     if recorded_at < requested_at:
         raise ValueError("recorded_at cannot precede requested_at")
-    _validate_unique_security_ids(security_ids)
+    canonical_security_ids = _canonical_security_ids(security_ids)
 
     guardrail = load_decision_system_v21_guardrails()
     request = AnalysisRequestSnapshot(
@@ -81,7 +81,7 @@ def record_analysis_request(
         requested_at=requested_at,
         evaluation_date=evaluation_date,
         horizon_trading_days=horizon_trading_days,
-        security_ids=security_ids,
+        security_ids=canonical_security_ids,
         mode=mode,
         requested_lane=requested_lane,
         request_text=request_text,
@@ -124,7 +124,8 @@ def record_analysis_request(
     )
 
 
-def _validate_unique_security_ids(security_ids: tuple[str, ...]) -> None:
+def _canonical_security_ids(security_ids: tuple[str, ...]) -> tuple[str, ...]:
     normalized = tuple(item.strip() for item in security_ids)
     if len(set(normalized)) != len(normalized):
         raise ValueError("security_ids cannot contain duplicates")
+    return normalized

@@ -250,16 +250,40 @@ def load_current_research_thesis_preflight_states(
     artifact_root: str | Path,
 ) -> dict[str, CurrentResearchThesisPreflightState]:
     root = Path(artifact_root)
+    resolved_root = _validate_artifact_root(root)
     pointer_directory = root / _POINTER_DIRECTORY
     state_directory = root / _STATE_DIRECTORY
-    if not pointer_directory.exists():
+    resolved_pointer_directory = _validate_repository_directory(
+        pointer_directory,
+        resolved_root=resolved_root,
+        label="preflight-current",
+    )
+    resolved_state_directory = _validate_repository_directory(
+        state_directory,
+        resolved_root=resolved_root,
+        label="preflight-state",
+    )
+    if resolved_pointer_directory is None:
         return {}
     result: dict[str, CurrentResearchThesisPreflightState] = {}
     for pointer_path in sorted(pointer_directory.glob("*.json")):
-        pointer = _load_pointer(pointer_path)
-        state = load_research_thesis_preflight_state(
-            state_directory / f"{pointer.state_snapshot_id}.json"
+        _validate_repository_file(
+            pointer_path,
+            resolved_directory=resolved_pointer_directory,
+            label="preflight-current pointer",
         )
+        pointer = _load_pointer(pointer_path)
+        if resolved_state_directory is None:
+            raise ResearchPreflightStateError(
+                "preflight-current pointer exists without preflight-state repository"
+            )
+        state_path = state_directory / f"{pointer.state_snapshot_id}.json"
+        _validate_repository_file(
+            state_path,
+            resolved_directory=resolved_state_directory,
+            label="preflight-state artifact",
+        )
+        state = load_research_thesis_preflight_state(state_path)
         if state.request_snapshot_id != pointer.request_snapshot_id:
             raise ResearchPreflightStateError(
                 "preflight-current pointer references a different request"
@@ -299,6 +323,58 @@ def canonical_utc(value: datetime) -> datetime:
 
 def _canonical_security_ids(security_ids: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(item.strip() for item in security_ids))
+
+
+def _validate_artifact_root(root: Path) -> Path:
+    if root.is_symlink():
+        raise ResearchPreflightStateError("artifact_root cannot be a symlink")
+    if root.exists() and not root.is_dir():
+        raise ResearchPreflightStateError("artifact_root must be a directory")
+    lexical = Path(os.path.abspath(root))
+    resolved = root.resolve()
+    if lexical != resolved:
+        raise ResearchPreflightStateError(
+            "artifact_root cannot traverse a symlinked path component"
+        )
+    return resolved
+
+
+def _validate_repository_directory(
+    directory: Path,
+    *,
+    resolved_root: Path,
+    label: str,
+) -> Path | None:
+    if directory.is_symlink():
+        raise ResearchPreflightStateError(f"{label} repository cannot be a symlink")
+    if not directory.exists():
+        return None
+    if not directory.is_dir():
+        raise ResearchPreflightStateError(f"{label} repository must be a directory")
+    resolved = directory.resolve()
+    if resolved.parent != resolved_root:
+        raise ResearchPreflightStateError(f"{label} repository escapes artifact_root")
+    return resolved
+
+
+def _validate_repository_file(
+    path: Path,
+    *,
+    resolved_directory: Path,
+    label: str,
+) -> None:
+    if path.is_symlink():
+        raise ResearchPreflightStateError(f"{label} cannot be a symlink")
+    if not path.exists():
+        raise ResearchPreflightStateError(f"missing {label}: {path}")
+    if not path.is_file():
+        raise ResearchPreflightStateError(f"{label} must be a regular file")
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise ResearchPreflightStateError(f"cannot resolve {label}: {path}") from exc
+    if resolved.parent != resolved_directory:
+        raise ResearchPreflightStateError(f"{label} escapes repository")
 
 
 def _load_pointer(path: Path) -> _CurrentPointer:
@@ -368,7 +444,7 @@ def _parse_blocker(payload: dict[str, Any]) -> ResearchRoundBlocker:
 def _load_object(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ResearchPreflightStateError(f"cannot read preflight-state artifact: {path}") from exc
     return _object(raw, "root")
 
