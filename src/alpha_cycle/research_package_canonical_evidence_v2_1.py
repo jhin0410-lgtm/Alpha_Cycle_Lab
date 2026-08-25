@@ -239,14 +239,13 @@ def decision_gap_bound_sources_are_canonical(
     )
     if expectations is None:
         return False
-    # No current persisted provider contract independently proves certified consensus.
-    # Rebuilding gap arithmetic from the same self-declared ExpectationState would be
-    # circular, so every consensus-dependent gap remains fail closed.  This applies to
-    # Fast and Deep packages alike; it deliberately does not create a generic provider
-    # authority or relabel current KIS evidence as certified.
-    if gap.consensus_gaps:
-        return False
+    from alpha_cycle.research_package_source_revalidation_v2_1 import (
+        price_implied_sources_are_canonical,
+    )
+
     price_implied: PriceImpliedRequirementSnapshot | None = None
+    if gap.price_implied_gaps and gap.price_implied_requirement_snapshot_id is None:
+        return False
     if gap.price_implied_requirement_snapshot_id is not None:
         price_implied = load_canonical_price_implied(
             artifact_root,
@@ -254,6 +253,21 @@ def decision_gap_bound_sources_are_canonical(
         )
         if price_implied is None:
             return False
+        # A structurally canonical price-implied envelope is still derived valuation
+        # evidence.  It cannot establish authority until its market-cap/reference-frame
+        # inputs can be replayed from an independent persisted acquisition contract.
+        if not price_implied_sources_are_canonical(
+            artifact_root,
+            snapshot=price_implied,
+        ):
+            return False
+    # No current persisted provider contract independently proves certified consensus.
+    # Rebuilding gap arithmetic from the same self-declared ExpectationState would be
+    # circular, so every consensus-dependent gap remains fail closed.  This applies to
+    # Fast and Deep packages alike; it deliberately does not create a generic provider
+    # authority or relabel current KIS evidence as certified.
+    if gap.consensus_gaps:
+        return False
     try:
         rebuilt = build_decision_expectation_gap(
             view,

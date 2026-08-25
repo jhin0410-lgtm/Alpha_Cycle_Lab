@@ -909,7 +909,7 @@ def _require_exact_keys(
 def _load_object(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ResearchComponentRepositoryError(
             f"cannot read JSON artifact: {path}"
         ) from exc

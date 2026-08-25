@@ -994,6 +994,13 @@ def _publish_orchestrated_artifacts(
         ledger_repository = _pin_publication_repository(
             publication_root, "research_run_ledger_v2_1"
         )
+        # Prove the descriptor-to-inode link primitive before creating any immutable
+        # opportunity/round/run/ledger artifact.  Filesystems without O_TMPFILE use the
+        # safe named-descriptor fallback; backends without either descriptor link path
+        # fail deterministically at this pre-publication boundary.
+        _probe_descriptor_pointer_publication_at(candidate_repository.fd)
+        if set_repository is not None:
+            _probe_descriptor_pointer_publication_at(set_repository.fd)
         if not _publication_namespace_is_current(publication_root):
             raise RuntimeError("publication namespace changed before artifact creation")
 
@@ -1226,8 +1233,10 @@ def _persist_owned_opportunity_snapshot(
     ).encode("utf-8")
     pointer_published_by_this_call = False
     if repository_fd is not None:
-        pointer_temp_fd, pointer_temp_identity = _write_owned_pointer_temp_at(
-            repository_fd, pointer_name, pointer_after
+        pointer_temp_fd, pointer_temp_identity, pointer_temp_name = (
+            _write_owned_pointer_temp_at(
+                repository_fd, pointer_name, pointer_after
+            )
         )
         try:
             if pointer_before is None:
@@ -1249,6 +1258,13 @@ def _persist_owned_opportunity_snapshot(
                     expected_identity=pointer_before_identity,
                 )
         finally:
+            if pointer_temp_name is not None:
+                _unlink_pointer_if_version_matches_at(
+                    repository_fd,
+                    pointer_temp_name,
+                    expected_bytes=pointer_after,
+                    expected_identity=pointer_temp_identity,
+                )
             os.close(pointer_temp_fd)
     else:
         pointer_temp = _write_owned_pointer_temp(root, pointer.name, pointer_after)
@@ -1321,16 +1337,40 @@ def _write_owned_pointer_temp_at(
     directory_fd: int,
     pointer_name: str,
     content: bytes,
-) -> tuple[int, tuple[int, int, int]]:
+) -> tuple[int, tuple[int, int, int], str | None]:
     if not pointer_name or Path(pointer_name).name != pointer_name:
         raise ValueError("pointer name must be one path component")
     temporary_flag = getattr(os, "O_TMPFILE", 0)
-    if not temporary_flag:
-        raise RuntimeError("descriptor-stable pointer publication is unavailable")
-    flags = os.O_RDWR | temporary_flag
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    fd = os.open(".", flags, 0o644, dir_fd=directory_fd)
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    fd: int | None = None
+    cleanup_name: str | None = None
+    if temporary_flag:
+        try:
+            fd = os.open(
+                ".",
+                os.O_RDWR | temporary_flag | close_on_exec,
+                0o644,
+                dir_fd=directory_fd,
+            )
+        except OSError:
+            # O_TMPFILE is optional even on Linux and is absent on macOS.  Retain a
+            # randomized O_EXCL name only as an extra link to the held descriptor; the
+            # mutable name is never used as the publication source.
+            fd = None
+    if fd is None:
+        flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | close_on_exec
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        for _ in range(64):
+            candidate = f".{pointer_name}.{secrets.token_hex(16)}.owned.tmp"
+            try:
+                fd = os.open(candidate, flags, 0o600, dir_fd=directory_fd)
+            except FileExistsError:
+                continue
+            cleanup_name = candidate
+            break
+        if fd is None:
+            raise RuntimeError("could not allocate descriptor-bound pointer temporary")
     try:
         if os.name != "nt":
             os.chmod(fd, 0o644)
@@ -1344,7 +1384,7 @@ def _write_owned_pointer_temp_at(
         opened = os.fstat(fd)
         if not stat.S_ISREG(opened.st_mode) or opened.st_size != len(content):
             raise RuntimeError("pointer temporary failed descriptor validation")
-        return fd, (opened.st_ino, opened.st_mtime_ns, opened.st_size)
+        return fd, (opened.st_ino, opened.st_mtime_ns, opened.st_size), cleanup_name
     except BaseException:
         os.close(fd)
         raise
@@ -1356,6 +1396,7 @@ def _link_open_file_at(source_fd: int, directory_fd: int, destination: str) -> N
     opened = os.fstat(source_fd)
     if not stat.S_ISREG(opened.st_mode):
         raise RuntimeError("pointer publication source descriptor is not regular")
+    last_error: OSError | None = None
     for descriptor_root in (Path("/proc/self/fd"), Path("/dev/fd")):
         descriptor_path = descriptor_root / str(source_fd)
         try:
@@ -1366,9 +1407,52 @@ def _link_open_file_at(source_fd: int, directory_fd: int, destination: str) -> N
                 follow_symlinks=True,
             )
             return
-        except FileNotFoundError:
+        except FileExistsError:
+            raise
+        except OSError as exc:
+            last_error = exc
             continue
-    raise RuntimeError("descriptor-stable pointer linking is unavailable")
+    raise RuntimeError("descriptor-stable pointer linking is unavailable") from last_error
+
+
+def _probe_descriptor_pointer_publication_at(directory_fd: int | None) -> None:
+    if directory_fd is None:
+        return
+    content = b"descriptor-bound-pointer-backend-probe\n"
+    destination = f".pointer-backend-{secrets.token_hex(16)}.probe"
+    temporary_fd, identity, cleanup_name = _write_owned_pointer_temp_at(
+        directory_fd,
+        "pointer-backend-probe",
+        content,
+    )
+    linked = False
+    cleanup_failed = False
+    try:
+        _link_open_file_at(temporary_fd, directory_fd, destination)
+        linked = True
+        observed = _read_regular_file_at(directory_fd, destination)
+        if observed is None or observed != (content, identity):
+            raise RuntimeError("descriptor-stable pointer backend probe failed")
+    finally:
+        try:
+            if linked and not _unlink_pointer_if_version_matches_at(
+                directory_fd,
+                destination,
+                expected_bytes=content,
+                expected_identity=identity,
+            ):
+                cleanup_failed = True
+            if cleanup_name is not None:
+                _unlink_pointer_if_version_matches_at(
+                    directory_fd,
+                    cleanup_name,
+                    expected_bytes=content,
+                    expected_identity=identity,
+                )
+        finally:
+            os.close(temporary_fd)
+        if cleanup_failed:
+            raise RuntimeError("descriptor-stable pointer backend probe cleanup failed")
 
 
 def _new_publication_quarantine_at(directory_fd: int, name: str) -> str:
@@ -1721,10 +1805,12 @@ def _rollback_owned_opportunity_publication(
     if publication.repository_fd is not None:
         try:
             if publication.pointer_before is not None:
-                previous_temp_fd, _ = _write_owned_pointer_temp_at(
-                    publication.repository_fd,
-                    publication.pointer.name,
-                    publication.pointer_before,
+                previous_temp_fd, previous_temp_identity, previous_temp_name = (
+                    _write_owned_pointer_temp_at(
+                        publication.repository_fd,
+                        publication.pointer.name,
+                        publication.pointer_before,
+                    )
                 )
                 try:
                     _replace_pointer_if_version_matches_at(
@@ -1735,6 +1821,13 @@ def _rollback_owned_opportunity_publication(
                         expected_identity=expected_identity,
                     )
                 finally:
+                    if previous_temp_name is not None:
+                        _unlink_pointer_if_version_matches_at(
+                            publication.repository_fd,
+                            previous_temp_name,
+                            expected_bytes=publication.pointer_before,
+                            expected_identity=previous_temp_identity,
+                        )
                     os.close(previous_temp_fd)
             else:
                 _unlink_pointer_if_version_matches_at(

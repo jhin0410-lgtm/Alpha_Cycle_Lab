@@ -335,7 +335,7 @@ def _parse_uncertainty_dimension(payload: dict[str, Any]) -> UncertaintyDimensio
 def _load_object(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise InvestmentThesisRepositoryError(f"cannot load investment thesis: {path}") from exc
     return _object(raw, "investment thesis")
 

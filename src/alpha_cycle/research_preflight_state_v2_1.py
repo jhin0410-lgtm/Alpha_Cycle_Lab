@@ -444,7 +444,7 @@ def _parse_blocker(payload: dict[str, Any]) -> ResearchRoundBlocker:
 def _load_object(path: Path) -> dict[str, Any]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ResearchPreflightStateError(f"cannot read preflight-state artifact: {path}") from exc
     return _object(raw, "root")
 
