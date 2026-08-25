@@ -109,8 +109,18 @@ def _research_snapshot(market_snapshot_id: str) -> FundamentalMacroSnapshot:
     )
     disclosures = pd.DataFrame(
         [
-            {"ticker": "000660", "receipt_date": "2026-03-20", "rcept_no": "A"},
-            {"ticker": "005930", "receipt_date": "2026-03-20", "rcept_no": "B"},
+            {
+                "ticker": "000660",
+                "receipt_date": date(2026, 3, 20),
+                "rcept_no": "A",
+                "is_correction": False,
+            },
+            {
+                "ticker": "005930",
+                "receipt_date": date(2026, 3, 20),
+                "rcept_no": "B",
+                "is_correction": True,
+            },
         ]
     )
     macro = validate_macro_series(pd.DataFrame(
@@ -246,6 +256,8 @@ def test_research_revalidation_preserves_empty_disclosure_strings(tmp_path: Path
 
     assert replayed.snapshot_id == snapshot.snapshot_id
     assert replayed.disclosures.loc[0, "corp_class"] == ""
+    assert bool(replayed.disclosures.loc[0, "is_correction"]) is False
+    assert bool(replayed.disclosures.loc[1, "is_correction"]) is True
 
 
 def test_research_revalidation_preserves_numeric_looking_text(tmp_path: Path) -> None:

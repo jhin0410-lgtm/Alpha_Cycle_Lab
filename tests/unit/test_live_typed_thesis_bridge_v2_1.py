@@ -120,7 +120,12 @@ def _persist_sources(
         financials=validate_financial_statements(financials),
         disclosures=pd.DataFrame(
             [
-                {"ticker": ticker, "receipt_date": "2026-03-20", "rcept_no": ticker}
+                {
+                    "ticker": ticker,
+                    "receipt_date": date(2026, 3, 20),
+                    "rcept_no": ticker,
+                    "is_correction": False,
+                }
                 for ticker in tickers
             ]
         ),
@@ -168,7 +173,7 @@ def test_writer_backed_sources_produce_two_evidence_gated_theses(tmp_path: Path)
         artifact_root=tmp_path,
         security_ids=("000660", "005930"),
         horizon_trading_days=120,
-        captured_at=captured_at + timedelta(minutes=15),
+        captured_at=manifest.research_cutoff_at,
     )
 
     assert not receipt.blockers
@@ -183,6 +188,26 @@ def test_writer_backed_sources_produce_two_evidence_gated_theses(tmp_path: Path)
     assert all(path.is_file() for path in receipt.thesis_paths)
     assert all(not thesis.catalysts for thesis in receipt.theses)
     assert all(not thesis.forecast_refs for thesis in receipt.theses)
+
+
+def test_thesis_capture_time_is_canonical_for_repeated_production(tmp_path: Path) -> None:
+    market_dir, research_dir, captured_at = _persist_sources(tmp_path)
+    manifest = freeze_live_typed_source_manifest(
+        artifact_root=tmp_path,
+        source_directories={"market": market_dir, "research": research_dir},
+        evaluation_date=date(2026, 8, 25),
+        research_cutoff_at=captured_at + timedelta(minutes=20),
+        frozen_at=captured_at + timedelta(minutes=10),
+    )
+
+    with pytest.raises(ValueError, match="must equal the frozen research_cutoff_at"):
+        produce_source_backed_theses(
+            manifest,
+            artifact_root=tmp_path,
+            security_ids=("000660",),
+            horizon_trading_days=120,
+            captured_at=manifest.research_cutoff_at - timedelta(microseconds=1),
+        )
 
 
 def test_missing_official_financial_fact_becomes_structured_blocker(tmp_path: Path) -> None:
@@ -207,7 +232,7 @@ def test_missing_official_financial_fact_becomes_structured_blocker(tmp_path: Pa
             artifact_root=tmp_path,
             security_ids=("000660", "005930"),
             horizon_trading_days=120,
-            captured_at=captured_at + timedelta(minutes=15),
+            captured_at=manifest.research_cutoff_at,
         )
 
 
@@ -230,7 +255,7 @@ def test_mixed_market_research_generation_is_rejected(tmp_path: Path) -> None:
             artifact_root=tmp_path,
             security_ids=("000660", "005930"),
             horizon_trading_days=120,
-            captured_at=captured_at + timedelta(minutes=15),
+            captured_at=manifest.research_cutoff_at,
         )
 
 
@@ -254,7 +279,7 @@ def test_future_market_observation_cannot_be_promoted(tmp_path: Path) -> None:
             artifact_root=tmp_path,
             security_ids=("000660", "005930"),
             horizon_trading_days=120,
-            captured_at=captured_at + timedelta(minutes=15),
+            captured_at=manifest.research_cutoff_at,
         )
 
 
@@ -280,7 +305,7 @@ def test_market_observation_after_evaluation_date_cannot_be_promoted(
             artifact_root=tmp_path,
             security_ids=("000660",),
             horizon_trading_days=120,
-            captured_at=captured_at + timedelta(minutes=15),
+            captured_at=manifest.research_cutoff_at,
         )
 
 
@@ -382,7 +407,7 @@ def test_missing_requested_ticker_is_a_structured_source_blocker(tmp_path: Path)
         artifact_root=tmp_path,
         security_ids=("999999",),
         horizon_trading_days=120,
-        captured_at=captured_at + timedelta(minutes=15),
+        captured_at=manifest.research_cutoff_at,
     )
 
     assert not receipt.theses
@@ -408,7 +433,7 @@ def test_future_financial_retrieval_cannot_be_promoted(tmp_path: Path) -> None:
             artifact_root=tmp_path,
             security_ids=("000660",),
             horizon_trading_days=120,
-            captured_at=captured_at + timedelta(minutes=15),
+            captured_at=manifest.research_cutoff_at,
         )
 
 
@@ -430,7 +455,7 @@ def test_non_opendart_financial_rows_cannot_be_labeled_official(tmp_path: Path) 
         artifact_root=tmp_path,
         security_ids=("000660",),
         horizon_trading_days=120,
-        captured_at=captured_at + timedelta(minutes=15),
+        captured_at=manifest.research_cutoff_at,
     )
 
     assert not receipt.theses
@@ -456,7 +481,7 @@ def test_runner_does_not_fall_back_to_stale_thesis_after_source_blocker(
         artifact_root=tmp_path,
         security_ids=("005930",),
         horizon_trading_days=120,
-        captured_at=captured_at + timedelta(minutes=15),
+        captured_at=old_manifest.research_cutoff_at,
     )
     assert old.theses
     current_market, current_research, _ = _persist_sources(
@@ -541,7 +566,7 @@ def test_thesis_repository_symlink_is_rejected_before_persistence(tmp_path: Path
             artifact_root=tmp_path,
             security_ids=("000660",),
             horizon_trading_days=120,
-            captured_at=captured_at + timedelta(minutes=15),
+            captured_at=manifest.research_cutoff_at,
         )
 
 
@@ -559,7 +584,7 @@ def test_existing_thesis_artifact_symlink_is_rejected(tmp_path: Path) -> None:
         artifact_root=tmp_path,
         security_ids=("000660",),
         horizon_trading_days=120,
-        captured_at=captured_at + timedelta(minutes=15),
+        captured_at=manifest.research_cutoff_at,
     )
     path = first.thesis_paths[0]
     outside = tmp_path / "outside-thesis.json"
@@ -576,5 +601,5 @@ def test_existing_thesis_artifact_symlink_is_rejected(tmp_path: Path) -> None:
             artifact_root=tmp_path,
             security_ids=("000660",),
             horizon_trading_days=120,
-            captured_at=captured_at + timedelta(minutes=15),
+            captured_at=manifest.research_cutoff_at,
         )

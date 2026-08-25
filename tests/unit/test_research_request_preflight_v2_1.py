@@ -238,7 +238,13 @@ def test_expected_binding_selects_exact_snapshot_instead_of_hash_tie_winner(
     )
     expected = min((first, second), key=lambda item: item.snapshot_id)
     samsung = _thesis("005930", captured_at)
-    for thesis in (first, second, samsung):
+    unrelated_invalid = replace(
+        _thesis("000660", captured_at),
+        thesis_id="unrelated-invalid-family",
+        snapshot_version=2,
+        parent_snapshot_id="e" * 64,
+    )
+    for thesis in (first, second, samsung, unrelated_invalid):
         persist_investment_thesis(thesis, artifact_root=tmp_path)
 
     receipt = preflight_pending_request_theses(
@@ -265,6 +271,9 @@ def test_expected_binding_selects_exact_snapshot_instead_of_hash_tie_winner(
         artifact_root=tmp_path,
     )
     assert "preflight_thesis_identity_mismatch" not in {
+        item.code for item in assembly.blockers
+    }
+    assert "investment_thesis_lineage_invalid" not in {
         item.code for item in assembly.blockers
     }
 

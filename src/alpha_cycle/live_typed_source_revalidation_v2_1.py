@@ -375,11 +375,35 @@ def _read_macro_frame(path: Path) -> pd.DataFrame:
 
 
 def _read_disclosure_frame(path: Path) -> pd.DataFrame:
-    return _read_frame(
+    frame = _read_frame(
         path,
-        dtype="string",
+        dtype={
+            column: "string"
+            for column in (
+                "ticker",
+                "corp_code",
+                "corp_name",
+                "rcept_no",
+                "report_name",
+                "corp_class",
+            )
+        },
         empty_as_na=False,
     )
+    if "receipt_date" in frame.columns:
+        frame["receipt_date"] = pd.to_datetime(
+            frame["receipt_date"], errors="raise"
+        ).dt.date
+    if "is_correction" in frame.columns:
+        values = frame["is_correction"]
+        if values.dtype != bool:
+            mapping = {"True": True, "False": False}
+            if not values.astype(str).isin(mapping).all():
+                raise LiveTypedSourceRevalidationError(
+                    "disclosure is_correction must be True or False"
+                )
+            frame["is_correction"] = values.astype(str).map(mapping).astype(bool)
+    return frame
 
 
 def _restore_financial_row_order(

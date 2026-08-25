@@ -79,10 +79,8 @@ def produce_source_backed_theses(
     """Create only factual, evidence-gated theses from frozen market and official facts."""
 
     _require_aware(captured_at, "captured_at")
-    if captured_at < manifest.frozen_at:
-        raise ValueError("thesis captured_at cannot precede source-manifest freeze")
-    if captured_at > manifest.research_cutoff_at:
-        raise ValueError("thesis captured_at cannot follow research_cutoff_at")
+    if captured_at != manifest.research_cutoff_at:
+        raise ValueError("thesis captured_at must equal the frozen research_cutoff_at")
     canonical_security_ids = _canonical_security_ids(security_ids)
     root = Path(artifact_root)
     verify_live_typed_source_manifest(manifest, artifact_root=root)

@@ -419,19 +419,6 @@ def _resolve_preflight_thesis_for_package(
     expected_snapshot_id: str | None,
     blockers: list[ResearchRoundBlocker],
 ) -> InvestmentThesisSnapshot | None:
-    try:
-        thesis_index.find_latest(
-            security_id=security_id,
-            horizon_trading_days=horizon_trading_days,
-        )
-    except InvestmentThesisRepositoryError:
-        _block(
-            blockers,
-            "thesis",
-            "investment_thesis_lineage_invalid",
-            security_id,
-        )
-        return None
     thesis = (
         thesis_index.snapshots_by_id.get(expected_snapshot_id)
         if expected_snapshot_id is not None
@@ -454,6 +441,16 @@ def _resolve_preflight_thesis_for_package(
             blockers,
             "thesis",
             "preflight_thesis_identity_mismatch",
+            security_id,
+        )
+        return None
+    try:
+        thesis_index.validate_exact(thesis)
+    except InvestmentThesisRepositoryError:
+        _block(
+            blockers,
+            "thesis",
+            "investment_thesis_lineage_invalid",
             security_id,
         )
         return None
