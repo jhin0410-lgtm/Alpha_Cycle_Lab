@@ -17,6 +17,12 @@ from alpha_cycle.intelligence.expectation_state import ExpectationStateSnapshot
 from alpha_cycle.intelligence.forward_valuation import ForwardValuationStateSnapshot
 from alpha_cycle.intelligence.price_implied_requirement import PriceImpliedRequirementSnapshot
 from alpha_cycle.intelligence.valuation import ValuationEvidenceSnapshot
+from alpha_cycle.provider_forward_authority_v2_1 import (
+    PROVIDER_ID,
+    ProviderForwardAuthorityError,
+    provider_authority_can_certify_expectation,
+    replay_persisted_kis_provider_authority,
+)
 
 ResearchPackageSourceRevalidationError = _legacy.ResearchPackageSourceRevalidationError
 epistemic_package_sources_are_canonical = _legacy.epistemic_package_sources_are_canonical
@@ -51,6 +57,52 @@ def forward_valuation_sources_are_canonical(
     return False
 
 
+def expectation_sources_are_canonical(
+    root: str | Path,
+    *,
+    snapshot: ExpectationStateSnapshot,
+) -> bool:
+    """Require provider-specific raw replay for every typed expectation observation."""
+
+    repository = Path(root) / "provider_forward_authority_v2_1"
+    if repository.is_symlink() or not repository.is_dir():
+        return False
+    for observation in snapshot.observations:
+        if observation.provider_id != PROVIDER_ID:
+            return False
+        try:
+            matches = tuple(
+                path
+                for path in repository.iterdir()
+                if path.is_dir()
+                and not path.is_symlink()
+                and path.name.endswith(f"__{observation.source_evidence_id[:12]}")
+            )
+        except OSError:
+            return False
+        if len(matches) != 1:
+            return False
+        try:
+            authority = replay_persisted_kis_provider_authority(
+                matches[0],
+                evaluation_date=snapshot.evaluation_date,
+                maximum_research_cutoff_at=snapshot.captured_at,
+                expected_artifact_id=observation.source_evidence_id,
+            )
+        except (OSError, TypeError, ProviderForwardAuthorityError, ValueError):
+            return False
+        if not provider_authority_can_certify_expectation(
+            authority,
+            provider_id=observation.provider_id,
+            security_id=observation.security_id,
+            metric=observation.metric.value,
+            target_period=observation.target_period,
+            market_consensus_certified=observation.market_consensus_certified,
+        ):
+            return False
+    return True
+
+
 def price_implied_sources_are_canonical(
     root: str | Path,
     *,
@@ -65,6 +117,7 @@ def price_implied_sources_are_canonical(
 __all__ = [
     "ResearchPackageSourceRevalidationError",
     "epistemic_package_sources_are_canonical",
+    "expectation_sources_are_canonical",
     "forward_valuation_sources_are_canonical",
     "load_canonical_blind_spot",
     "load_canonical_counter_thesis",

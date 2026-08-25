@@ -632,6 +632,13 @@ def _assemble_security_package(
                 "underwriting_persisted_evidence_canonical_mismatch",
                 security_id,
             )
+            if underwriting.expectation_state_snapshot_id is not None:
+                _block(
+                    blockers,
+                    "expectation_provider",
+                    "provider_source_replay_mismatch",
+                    security_id,
+                )
 
     if underwriting is not None and payoff is not None:
         if (

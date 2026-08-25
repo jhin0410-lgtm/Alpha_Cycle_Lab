@@ -86,6 +86,7 @@ def underwriting_bound_evidence_is_valid(
 
     from alpha_cycle.research_package_source_revalidation_v2_1 import (
         epistemic_package_sources_are_canonical,
+        expectation_sources_are_canonical,
         forward_valuation_sources_are_canonical,
         price_implied_sources_are_canonical,
     )
@@ -133,6 +134,11 @@ def underwriting_bound_evidence_is_valid(
     if expectations is not None and (
         expectations.evaluation_date != underwriting.evaluation_date
         or expectations.captured_at > underwriting.captured_at
+    ):
+        return False
+    if expectations is not None and not expectation_sources_are_canonical(
+        artifact_root,
+        snapshot=expectations,
     ):
         return False
 
@@ -240,8 +246,12 @@ def decision_gap_bound_sources_are_canonical(
     if expectations is None:
         return False
     from alpha_cycle.research_package_source_revalidation_v2_1 import (
+        expectation_sources_are_canonical,
         price_implied_sources_are_canonical,
     )
+
+    if not expectation_sources_are_canonical(artifact_root, snapshot=expectations):
+        return False
 
     price_implied: PriceImpliedRequirementSnapshot | None = None
     if gap.price_implied_gaps and gap.price_implied_requirement_snapshot_id is None:
