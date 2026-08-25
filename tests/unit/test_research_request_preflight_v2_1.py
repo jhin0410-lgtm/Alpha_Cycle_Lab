@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+
+import pytest
 
 from alpha_cycle.intelligence.decision_thesis_v2 import (
     ClaimDirection,
@@ -15,8 +18,12 @@ from alpha_cycle.intelligence.decision_thesis_v2 import (
 from alpha_cycle.intelligence.research_round_orchestrator_v2_1 import ResearchRoundMode
 from alpha_cycle.intelligence.research_run_ledger_v2_1 import ResearchRunKind
 from alpha_cycle.intelligence.underwriter_v2_1 import UnderwritingLane
-from alpha_cycle.investment_thesis_repository_v2_1 import persist_investment_thesis
+from alpha_cycle.investment_thesis_repository_v2_1 import (
+    InvestmentThesisRepositoryError,
+    persist_investment_thesis,
+)
 from alpha_cycle.research_observatory_v2_1 import load_latest_observatory_state
+from alpha_cycle.research_package_assembler_v2_1 import assemble_and_run_research_package
 from alpha_cycle.research_request_intake_v2_1 import record_analysis_request
 from alpha_cycle.research_request_preflight_v2_1 import preflight_pending_request_theses
 
@@ -212,3 +219,84 @@ def test_future_thesis_does_not_satisfy_preflight(tmp_path) -> None:
         artifact_root=tmp_path,
     )
     assert {item.security_id for item in receipt.blockers} == {"000660", "005930"}
+
+
+def test_expected_binding_selects_exact_snapshot_instead_of_hash_tie_winner(
+    tmp_path,
+) -> None:
+    _request(tmp_path)
+    captured_at = NOW + timedelta(seconds=10)
+    first = replace(
+        _thesis("000660", captured_at),
+        thesis_id="source-family-a",
+        variant_view="Source family A; no investment conclusion.",
+    )
+    second = replace(
+        _thesis("000660", captured_at),
+        thesis_id="source-family-b",
+        variant_view="Source family B; no investment conclusion.",
+    )
+    expected = min((first, second), key=lambda item: item.snapshot_id)
+    samsung = _thesis("005930", captured_at)
+    unrelated_invalid = replace(
+        _thesis("000660", captured_at),
+        thesis_id="unrelated-invalid-family",
+        snapshot_version=2,
+        parent_snapshot_id="e" * 64,
+    )
+    for thesis in (first, second, samsung, unrelated_invalid):
+        persist_investment_thesis(thesis, artifact_root=tmp_path)
+
+    receipt = preflight_pending_request_theses(
+        request_id="live-semiconductor-round",
+        run_id="preflight-exact-binding",
+        processed_at=NOW + timedelta(minutes=1),
+        artifact_root=tmp_path,
+        expected_thesis_snapshot_ids=(
+            ("000660", expected.snapshot_id),
+            ("005930", samsung.snapshot_id),
+        ),
+    )
+
+    assert receipt.ready_for_package_assembly is True
+    assert tuple(item.snapshot_id for item in receipt.thesis_snapshots) == (
+        expected.snapshot_id,
+        samsung.snapshot_id,
+    )
+    assembly = assemble_and_run_research_package(
+        request_id="live-semiconductor-round",
+        round_id="exact-binding-round",
+        run_id="exact-binding-run",
+        processed_at=NOW + timedelta(minutes=2),
+        artifact_root=tmp_path,
+    )
+    assert "preflight_thesis_identity_mismatch" not in {
+        item.code for item in assembly.blockers
+    }
+    assert "investment_thesis_lineage_invalid" not in {
+        item.code for item in assembly.blockers
+    }
+
+
+def test_expected_binding_validates_exact_thesis_lineage(tmp_path) -> None:
+    _request(tmp_path)
+    child = replace(
+        _thesis("000660", NOW + timedelta(seconds=10)),
+        snapshot_version=2,
+        parent_snapshot_id="f" * 64,
+    )
+    samsung = _thesis("005930", NOW + timedelta(seconds=10))
+    for thesis in (child, samsung):
+        persist_investment_thesis(thesis, artifact_root=tmp_path)
+
+    with pytest.raises(InvestmentThesisRepositoryError, match="parent artifact is missing"):
+        preflight_pending_request_theses(
+            request_id="live-semiconductor-round",
+            run_id="preflight-invalid-exact-lineage",
+            processed_at=NOW + timedelta(minutes=1),
+            artifact_root=tmp_path,
+            expected_thesis_snapshot_ids=(
+                ("000660", child.snapshot_id),
+                ("005930", samsung.snapshot_id),
+            ),
+        )

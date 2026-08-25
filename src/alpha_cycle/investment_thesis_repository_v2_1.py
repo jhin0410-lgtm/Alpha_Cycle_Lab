@@ -65,6 +65,25 @@ class InvestmentThesisRepositoryIndex:
             key=lambda item: (item.captured_at, item.snapshot_version, item.snapshot_id),
         )
 
+    def validate_exact(self, snapshot: InvestmentThesisSnapshot) -> None:
+        """Validate one exact PIT candidate without replacing it with a latest selection."""
+
+        candidates = self.candidates_by_key.get(
+            (snapshot.security_id, snapshot.horizon_trading_days),
+            (),
+        )
+        family = [
+            candidate
+            for candidate in candidates
+            if _lineage_identity(candidate) == _lineage_identity(snapshot)
+        ]
+        if snapshot not in family:
+            raise InvestmentThesisRepositoryError(
+                "exact investment thesis is not eligible at the repository cutoff"
+            )
+        _validate_unforked_family(family)
+        _validate_lineage(snapshot, self.snapshots_by_id)
+
 
 def persist_investment_thesis(
     snapshot: InvestmentThesisSnapshot,
@@ -104,6 +123,10 @@ def persist_investment_thesis(
 
 def load_investment_thesis(path: str | Path) -> InvestmentThesisSnapshot:
     source = Path(path)
+    if source.is_symlink() or not source.is_file():
+        raise InvestmentThesisRepositoryError(
+            "investment thesis artifact must be a regular non-symlink file"
+        )
     payload = _load_object(source)
     declared = _required_text(payload, "snapshot_id")
     if source.stem != declared:

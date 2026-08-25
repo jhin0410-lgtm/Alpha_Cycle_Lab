@@ -278,11 +278,17 @@ def assemble_and_run_research_package(
 
         packages: list[ResearchSecurityPackage] = []
         resolved_thesis_ids: list[str] = []
-        for security_id in request.security_ids:
-            thesis = _resolve_latest_thesis_for_package(
+        for index, security_id in enumerate(request.security_ids):
+            expected_thesis_id = (
+                preflight.thesis_snapshot_ids[index]
+                if index < len(preflight.thesis_snapshot_ids)
+                else None
+            )
+            thesis = _resolve_preflight_thesis_for_package(
                 thesis_index,
                 security_id=security_id,
                 horizon_trading_days=request.horizon_trading_days,
+                expected_snapshot_id=expected_thesis_id,
                 blockers=blockers,
             )
             if thesis is None:
@@ -405,6 +411,52 @@ def assemble_and_run_research_package(
         )
 
 
+def _resolve_preflight_thesis_for_package(
+    thesis_index: InvestmentThesisRepositoryIndex,
+    *,
+    security_id: str,
+    horizon_trading_days: int,
+    expected_snapshot_id: str | None,
+    blockers: list[ResearchRoundBlocker],
+) -> InvestmentThesisSnapshot | None:
+    thesis = (
+        thesis_index.snapshots_by_id.get(expected_snapshot_id)
+        if expected_snapshot_id is not None
+        else None
+    )
+    if thesis is None:
+        _block(
+            blockers,
+            "thesis",
+            "investment_thesis_snapshot_missing",
+            security_id,
+        )
+        return None
+    if (
+        thesis.captured_at > thesis_index.as_of
+        or thesis.security_id != security_id
+        or thesis.horizon_trading_days != horizon_trading_days
+    ):
+        _block(
+            blockers,
+            "thesis",
+            "preflight_thesis_identity_mismatch",
+            security_id,
+        )
+        return None
+    try:
+        thesis_index.validate_exact(thesis)
+    except InvestmentThesisRepositoryError:
+        _block(
+            blockers,
+            "thesis",
+            "investment_thesis_lineage_invalid",
+            security_id,
+        )
+        return None
+    return thesis
+
+
 def _resolve_latest_thesis_for_package(
     thesis_index: InvestmentThesisRepositoryIndex,
     *,
@@ -412,6 +464,8 @@ def _resolve_latest_thesis_for_package(
     horizon_trading_days: int,
     blockers: list[ResearchRoundBlocker],
 ) -> InvestmentThesisSnapshot | None:
+    """Compatibility resolver retained for integrity tests and non-bound callers."""
+
     try:
         thesis = thesis_index.find_latest(
             security_id=security_id,
