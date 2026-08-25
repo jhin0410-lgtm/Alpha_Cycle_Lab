@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import cast
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -31,6 +32,7 @@ SCHEMA_VERSION = 1
 REPOSITORY_NAME = "valuation_authority_v2_1"
 PARSER_ID = "alpha_cycle.valuation_authority_v2_1"
 PARSER_VERSION = "1.0.0"
+KOREA_TZ = ZoneInfo("Asia/Seoul")
 
 
 class ValuationAuthorityError(ValueError):
@@ -292,7 +294,7 @@ def build_valuation_authority(
         raise ValuationAuthorityError("research/market source generation mismatch")
     if captured_at < max(market.captured_at, research.captured_at):
         raise ValuationAuthorityError("authority capture cannot precede source captures")
-    if captured_at.astimezone(UTC).date() < research.evaluation_date:
+    if captured_at.astimezone(KOREA_TZ).date() < research.evaluation_date:
         raise ValuationAuthorityError("authority capture cannot precede evaluation date")
 
     prices = [item for item in market.prices if item.symbol == security_id]
@@ -301,6 +303,9 @@ def build_valuation_authority(
     price = prices[0]
     if price.timestamp > captured_at:
         raise ValuationAuthorityError("market price cannot follow authority capture")
+    price_date = price.timestamp.astimezone(KOREA_TZ).date()
+    if price_date > research.evaluation_date:
+        raise ValuationAuthorityError("market price is after the evaluation date")
 
     legacy_id, legacy_content_id = _legacy_binding(
         legacy_valuation_directory,
@@ -309,7 +314,12 @@ def build_valuation_authority(
         evaluation_date=research.evaluation_date,
         security_id=security_id,
     )
-    actuals = _trusted_actual_inputs(research.financials, security_id, research.snapshot_id)
+    actuals = _trusted_actual_inputs(
+        research.financials,
+        security_id,
+        research.snapshot_id,
+        evaluation_date=research.evaluation_date,
+    )
     inputs = tuple(
         sorted(
             (
@@ -320,8 +330,8 @@ def build_valuation_authority(
                     value=float(price.last_price),
                     unit="KRW/share",
                     currency=price.currency,
-                    period_end=price.timestamp.date(),
-                    available_date=price.timestamp.date(),
+                    period_end=price_date,
+                    available_date=price_date,
                     statement_basis="market_observation",
                 ),
                 *actuals,
@@ -532,7 +542,11 @@ def revalidate_persisted_valuation_authority(
 
 
 def _trusted_actual_inputs(
-    frame: pd.DataFrame, security_id: str, source_id: str
+    frame: pd.DataFrame,
+    security_id: str,
+    source_id: str,
+    *,
+    evaluation_date: date,
 ) -> tuple[ValuationInput, ...]:
     specs = {
         "trailing_net_income": r"^(?:CIS|IS):ifrs-full_ProfitLoss#",
@@ -544,6 +558,10 @@ def _trusted_actual_inputs(
     for role, pattern in specs.items():
         candidates = company.loc[company["metric"].astype(str).str.match(pattern)].copy()
         candidates = candidates.loc[candidates["fiscal_period"].astype(str).eq("FY")]
+        candidates = candidates.loc[
+            candidates["period_end"].astype(str).le(evaluation_date.isoformat())
+            & candidates["available_date"].astype(str).le(evaluation_date.isoformat())
+        ]
         if candidates.empty:
             result.append(
                 ValuationInput(

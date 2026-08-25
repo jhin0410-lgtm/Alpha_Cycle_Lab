@@ -392,6 +392,57 @@ def test_future_authority_capture_and_unknown_security_fail_closed(tmp_path: Pat
         )
 
 
+def test_market_price_after_evaluation_date_is_rejected(tmp_path: Path) -> None:
+    market = _market()
+    future_prices = tuple(
+        replace(item, timestamp=datetime(2026, 8, 26, 0, 1, tzinfo=UTC)) for item in market.prices
+    )
+    future_market = replace(
+        market,
+        captured_at=datetime(2026, 8, 26, 0, 2, tzinfo=UTC),
+        prices=future_prices,
+    )
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", future_market)[0].parent
+    research = _research(future_market.snapshot_id)
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", research)[0].parent
+    with pytest.raises(ValuationAuthorityError, match="after the evaluation date"):
+        build_valuation_authority(
+            market_directory=market_dir,
+            research_directory=research_dir,
+            legacy_valuation_directory=None,
+            security_id="000660",
+            captured_at=datetime(2026, 8, 26, 0, 3, tzinfo=UTC),
+        )
+
+
+def test_future_financial_actual_cannot_enter_trailing_valuation(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    original = _research(market.snapshot_id)
+    future_financials = original.financials.copy()
+    future_financials["available_date"] = date(2026, 8, 26)
+    future_financials["retrieved_at"] = pd.Timestamp("2026-08-26T00:01:00+00:00")
+    future_research = replace(
+        original,
+        captured_at=datetime(2026, 8, 26, 0, 2, tzinfo=UTC),
+        financials=future_financials,
+    )
+    research_dir = write_fundamental_macro_snapshot(tmp_path / "research", future_research)[
+        0
+    ].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        legacy_valuation_directory=None,
+        security_id="000660",
+        captured_at=datetime(2026, 8, 26, 0, 3, tzinfo=UTC),
+    )
+    inputs = {item.role: item for item in artifact.inputs}
+    assert inputs["trailing_net_income"].value is None
+    assert inputs["trailing_net_income"].authority_class is AuthorityClass.UNSUPPORTED
+    assert inputs["book_equity"].value is None
+
+
 def test_price_mutation_is_detected_by_upstream_replay(tmp_path: Path) -> None:
     artifact, market, research, legacy = _artifact(tmp_path)
     directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
