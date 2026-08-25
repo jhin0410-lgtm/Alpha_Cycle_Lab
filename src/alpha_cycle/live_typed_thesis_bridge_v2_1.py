@@ -170,7 +170,11 @@ def produce_source_backed_theses(
             captured_at=captured_at,
         )
         path = thesis_repository / f"{thesis.snapshot_id}.json"
+        if path.is_symlink():
+            raise ValueError("investment thesis artifact cannot be a symlink")
         if path.exists():
+            if not path.is_file() or path.resolve().parent != thesis_repository:
+                raise ValueError("investment thesis artifact escapes its repository")
             if load_investment_thesis(path) != thesis:
                 raise ValueError("existing investment thesis conflicts with canonical replay")
         else:

@@ -123,6 +123,10 @@ def persist_investment_thesis(
 
 def load_investment_thesis(path: str | Path) -> InvestmentThesisSnapshot:
     source = Path(path)
+    if source.is_symlink() or not source.is_file():
+        raise InvestmentThesisRepositoryError(
+            "investment thesis artifact must be a regular non-symlink file"
+        )
     payload = _load_object(source)
     declared = _required_text(payload, "snapshot_id")
     if source.stem != declared:

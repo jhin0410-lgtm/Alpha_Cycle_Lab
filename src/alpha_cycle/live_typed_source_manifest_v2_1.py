@@ -199,11 +199,17 @@ def persist_live_typed_source_manifest(
             "source-manifest repository escapes artifact_root"
         )
     path = repository / f"{manifest.manifest_id}.json"
+    if path.is_symlink():
+        raise LiveTypedSourceManifestError("source-manifest artifact cannot be a symlink")
     payload = dict(manifest.payload_without_id())
     payload["manifest_id"] = manifest.manifest_id
     encoded = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
     if path.exists():
+        if not path.is_file() or path.resolve().parent != repository:
+            raise LiveTypedSourceManifestError(
+                "source-manifest artifact escapes its repository"
+            )
         loaded = load_live_typed_source_manifest(path)
         if loaded != manifest:
             raise LiveTypedSourceManifestError(

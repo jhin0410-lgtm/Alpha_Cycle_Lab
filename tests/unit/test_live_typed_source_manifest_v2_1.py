@@ -334,3 +334,33 @@ def test_persist_rejects_junction_backed_repository(tmp_path: Path) -> None:
 
     with pytest.raises(LiveTypedSourceManifestError, match="escapes artifact_root"):
         persist_live_typed_source_manifest(manifest, artifact_root=artifact_root)
+
+
+def test_persist_rejects_symlinked_existing_manifest_artifact(tmp_path: Path) -> None:
+    captured_at = datetime(2026, 8, 25, 6, 0, tzinfo=UTC)
+    source = _write_source_snapshot(
+        tmp_path,
+        role="market-intelligence",
+        snapshot_id="d" * 64,
+        captured_at=captured_at,
+        evaluation_date=None,
+        content="stable",
+    )
+    manifest = freeze_live_typed_source_manifest(
+        artifact_root=tmp_path,
+        source_directories={"market": source},
+        evaluation_date=date(2026, 8, 25),
+        research_cutoff_at=captured_at + timedelta(hours=1),
+        frozen_at=captured_at + timedelta(minutes=30),
+    )
+    path = persist_live_typed_source_manifest(manifest, artifact_root=tmp_path)
+    outside = tmp_path / "outside-manifest.json"
+    outside.write_bytes(path.read_bytes())
+    path.unlink()
+    try:
+        os.symlink(outside, path)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+
+    with pytest.raises(LiveTypedSourceManifestError, match="artifact cannot be a symlink"):
+        persist_live_typed_source_manifest(manifest, artifact_root=tmp_path)
