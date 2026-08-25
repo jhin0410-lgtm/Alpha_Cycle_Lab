@@ -1,10 +1,10 @@
 """Fail-closed source-chain revalidation for Decision System v2.1 packages.
 
 The established v2.1 canonical replay remains available for source contracts that have an
-independent authority boundary.  Valuation and certified market-consensus evidence do not yet
-have that boundary: the attempted normalized source envelopes could be created from the derived
-objects they were supposed to authenticate.  Until a production acquisition contract can replay
-those inputs from independently authoritative provider evidence, valuation-derived Deep evidence
+independent authority boundary.  The valuation-authority v2.1 boundary can now replay canonical
+market/company actuals and persist exact blockers, but the available share-count and complete
+capital-structure inputs remain non-authoritative.  Certified market consensus also remains
+unavailable.  Until an authority artifact has an eligible method, valuation-derived Deep evidence
 must not satisfy the package merge gate.
 """
 
@@ -108,7 +108,11 @@ def price_implied_sources_are_canonical(
     *,
     snapshot: PriceImpliedRequirementSnapshot,
 ) -> bool:
-    """Fail closed until valuation inputs are replayable from independent source authority."""
+    """Fail closed while current valuation-authority artifacts have no eligible method.
+
+    The v2.1 authority repository records why the inputs are blocked; a caller-created
+    PriceImpliedRequirementSnapshot cannot promote that negative result into source authority.
+    """
 
     _ = root, snapshot
     return False

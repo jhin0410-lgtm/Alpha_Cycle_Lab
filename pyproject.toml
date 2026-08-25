@@ -53,6 +53,7 @@ alpha-cycle-semiconductor-historical-official-ir = "alpha_cycle.semiconductor_hi
 alpha-cycle-semiconductor-operating-assumptions = "alpha_cycle.semiconductor_operating_assumption_cli:main"
 alpha-cycle-semiconductor-structural-evidence = "alpha_cycle.semiconductor_structural_evidence_cli:main"
 alpha-cycle-valuation = "alpha_cycle.valuation_cli:main"
+alpha-cycle-valuation-authority-v2-1 = "alpha_cycle.valuation_authority_v2_1_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
