@@ -396,6 +396,36 @@ def test_canonical_opendart_metric_aliases_are_authoritative(tmp_path: Path) -> 
     assert all(item.authority_class is AuthorityClass.AUTHORITATIVE_SOURCE for item in actuals)
 
 
+def test_alias_precedence_runs_after_source_and_pit_filters(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    financials = research.financials.copy()
+    exact_mask = financials["ticker"].astype(str).eq("000660") & financials["metric"].astype(
+        str
+    ).str.contains("ProfitLoss#")
+    owner_profit = financials.loc[exact_mask].iloc[0].copy()
+    financials.loc[exact_mask, "source"] = "untrusted_vendor"
+    owner_profit["metric"] = "CIS:ifrs-full_ProfitLossAttributableToOwnersOfParent"
+    owner_profit["value"] = 40_000_000_000_000
+    owner_profit["revision_id"] = "000660-owner-profit"
+    financials = validate_financial_statements(
+        pd.concat([financials, pd.DataFrame([owner_profit])], ignore_index=True)
+    )
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, financials=financials)
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    income = next(item for item in artifact.inputs if item.role == "trailing_net_income")
+    assert income.authority_class is AuthorityClass.AUTHORITATIVE_SOURCE
+    assert income.value == 40_000_000_000_000
+
+
 @pytest.mark.parametrize("ticker,price", [("000660", 1_647_000), ("005930", 273_500)])
 def test_real_security_price_binding(tmp_path: Path, ticker: str, price: int) -> None:
     artifact, _, _, _ = _artifact(tmp_path, ticker)

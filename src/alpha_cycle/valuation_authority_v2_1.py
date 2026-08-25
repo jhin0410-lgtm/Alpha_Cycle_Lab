@@ -654,8 +654,6 @@ def _trusted_actual_inputs(
             .map(lambda value, name=semantic_name: _metric_score(value, name))
         )
         candidates = company.loc[semantic_scores.gt(0)].copy()
-        if not candidates.empty:
-            candidates = candidates.loc[semantic_scores.eq(semantic_scores.max())]
         candidates = candidates.loc[
             candidates["source"].astype(str).str.strip().str.lower().eq("opendart")
         ]
@@ -664,6 +662,9 @@ def _trusted_actual_inputs(
             candidates["period_end"].astype(str).le(evaluation_date.isoformat())
             & candidates["available_date"].astype(str).le(evaluation_date.isoformat())
         ]
+        if not candidates.empty:
+            eligible_scores = semantic_scores.loc[candidates.index]
+            candidates = candidates.loc[eligible_scores.eq(eligible_scores.max())]
         if not candidates.empty:
             ordered = candidates.sort_values(
                 [
