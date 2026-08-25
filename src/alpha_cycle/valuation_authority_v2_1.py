@@ -338,7 +338,7 @@ def build_valuation_authority(
                     source_evidence_id=market.snapshot_id,
                     value=float(price.last_price),
                     unit="KRW/share",
-                    currency=price.currency,
+                    currency="KRW",
                     period_end=price_date,
                     available_date=price_date,
                     statement_basis="market_observation",
@@ -587,38 +587,48 @@ def _opendart_statement_basis(raw: object, security_id: str) -> str | None:
     if not isinstance(raw, dict) or not isinstance(raw.get(security_id), dict):
         return None
     security = cast(dict[str, object], raw[security_id])
+    requested: str | None = None
     request = security.get("request")
     if isinstance(request, dict):
-        requested = str(request.get("fs_div", "")).strip().upper()
-        if requested in {"CFS", "OFS"}:
-            return requested
+        candidate = str(request.get("fs_div", "")).strip().upper()
+        if candidate in {"CFS", "OFS"}:
+            requested = candidate
     financial = security.get("financial")
     if not isinstance(financial, dict):
-        return None
+        return requested
     payload = financial.get("financials")
     if not isinstance(payload, dict) or not isinstance(payload.get("list"), list):
-        return None
+        return requested
     rows = [row for row in payload["list"] if isinstance(row, dict)]
-    bases = {str(row.get("fs_div", "")).strip().upper() for row in rows}
-    return next(iter(bases)) if len(bases) == 1 and bases <= {"CFS", "OFS"} else None
+    raw_bases = {str(row.get("fs_div", "")).strip().upper() for row in rows}
+    response_basis = (
+        next(iter(raw_bases)) if len(raw_bases) == 1 and raw_bases <= {"CFS", "OFS"} else None
+    )
+    if raw_bases != {""} and response_basis is None:
+        return None
+    if requested is not None and response_basis is not None and requested != response_basis:
+        return None
+    return requested or response_basis
 
 
-def _metric_matches(metric: str, semantic_name: str) -> bool:
+def _metric_score(metric: str, semantic_name: str) -> int:
     """Match canonical normalized metrics with the repository's established aliases."""
 
     statement, separator, account = metric.partition(":")
     if not separator:
-        return False
+        return 0
     account = account.split("#", 1)[0].split(":", 1)[0]
     normalized = "".join(character for character in account.lower() if character.isalnum())
     spec = next(item for item in METRIC_SPECS if item.name == semantic_name)
     if statement.strip().upper() not in spec.statements:
-        return False
+        return 0
     aliases = {
         "".join(character for character in alias.lower() if character.isalnum())
         for alias in spec.aliases
     }
-    return any(alias and (normalized == alias or alias in normalized) for alias in aliases)
+    if normalized in aliases:
+        return 100
+    return 60 if any(alias and alias in normalized for alias in aliases) else 0
 
 
 def _trusted_actual_inputs(
@@ -638,11 +648,14 @@ def _trusted_actual_inputs(
     company = frame.loc[frame["ticker"].astype(str).eq(security_id)].copy()
     result: list[ValuationInput] = []
     for role, semantic_name in specs.items():
-        candidates = company.loc[
+        semantic_scores = (
             company["metric"]
             .astype(str)
-            .map(lambda value, name=semantic_name: _metric_matches(value, name))
-        ].copy()
+            .map(lambda value, name=semantic_name: _metric_score(value, name))
+        )
+        candidates = company.loc[semantic_scores.gt(0)].copy()
+        if not candidates.empty:
+            candidates = candidates.loc[semantic_scores.eq(semantic_scores.max())]
         candidates = candidates.loc[
             candidates["source"].astype(str).str.strip().str.lower().eq("opendart")
         ]

@@ -328,6 +328,33 @@ def test_ofs_statement_basis_cannot_be_published_as_cfs(tmp_path: Path) -> None:
     assert all(item.blocker and item.blocker.endswith("basis_unsupported") for item in actuals)
 
 
+def test_conflicting_opendart_basis_proofs_fail_closed(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    raw = {
+        "000660": {
+            "request": {"fs_div": "CFS"},
+            "financial": {"financials": {"list": [{"fs_div": "OFS"}]}},
+        }
+    }
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research", replace(research, raw_opendart=raw)
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    actuals = [
+        item
+        for item in artifact.inputs
+        if item.role in {"trailing_net_income", "book_equity", "cash_and_cash_equivalents"}
+    ]
+    assert all(item.blocker and item.blocker.endswith("basis_missing") for item in actuals)
+
+
 def test_canonical_opendart_metric_aliases_are_authoritative(tmp_path: Path) -> None:
     market = _market()
     market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
@@ -338,6 +365,18 @@ def test_canonical_opendart_metric_aliases_are_authoritative(tmp_path: Path) -> 
         "BS:ifrs-full_CashAndCashEquivalents#9": "BS:현금및현금성자산",
     }
     financials = research.financials.copy()
+    operating = (
+        financials.loc[
+            financials["ticker"].astype(str).eq("000660")
+            & financials["metric"].astype(str).str.contains("ProfitLoss#")
+        ]
+        .iloc[0]
+        .copy()
+    )
+    operating["metric"] = "CIS:ifrs-full_ProfitLossFromOperatingActivities"
+    operating["value"] = 1
+    operating["revision_id"] = "000660-operating-profit"
+    financials = pd.concat([financials, pd.DataFrame([operating])], ignore_index=True)
     financials["metric"] = financials["metric"].replace(aliases)
     financials = validate_financial_statements(financials)
     research_dir = write_fundamental_macro_snapshot(
