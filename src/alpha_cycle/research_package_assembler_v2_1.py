@@ -222,6 +222,7 @@ def assemble_and_run_research_package(
         if request.guardrail_evidence_id != active.evidence_id:
             raise ValueError("analysis request guardrail evidence is no longer active")
 
+        blockers: list[ResearchRoundBlocker] = []
         try:
             validate_thesis_repository_layout(root)
             thesis_index = build_investment_thesis_repository_index(
@@ -235,11 +236,47 @@ def assemble_and_run_research_package(
         except (
             InvestmentThesisRepositoryError,
             ResearchComponentRepositoryError,
-        ) as exc:
-            raise ValueError("persisted research-package repository failed validation") from exc
+        ):
+            _block(
+                blockers,
+                "research_package_repository",
+                "persisted_research_package_repository_validation_failed",
+                None,
+            )
+            blockers_tuple = tuple(blockers)
+            next_ledger, run_path, ledger_path, changed = _record_package_blockers(
+                request=request,
+                run_id=run_id,
+                processed_at=processed_at,
+                preflight_selected_at=current_preflight.selected_at,
+                blockers=blockers_tuple,
+                ledger=ledger,
+                root=root,
+            )
+            recorded_run = (
+                next_ledger.runs[-1]
+                if changed
+                else _matching_package_blocked_run(
+                    ledger,
+                    request.snapshot_id,
+                    blockers_tuple,
+                )
+            )
+            return ResearchPackageAssemblyReceipt(
+                request=request,
+                thesis_preflight=preflight,
+                packages=(),
+                blockers=blockers_tuple,
+                orchestrated=None,
+                run=recorded_run,
+                ledger=next_ledger,
+                research_round_path=None,
+                run_path=run_path,
+                ledger_path=ledger_path,
+                changed_history=changed,
+            )
 
         packages: list[ResearchSecurityPackage] = []
-        blockers: list[ResearchRoundBlocker] = []
         resolved_thesis_ids: list[str] = []
         for security_id in request.security_ids:
             thesis = _resolve_latest_thesis_for_package(
@@ -1189,18 +1226,16 @@ def _persist_owned_opportunity_snapshot(
     ).encode("utf-8")
     pointer_published_by_this_call = False
     if repository_fd is not None:
-        pointer_temp_name, pointer_temp_identity = _write_owned_pointer_temp_at(
+        pointer_temp_fd, pointer_temp_identity = _write_owned_pointer_temp_at(
             repository_fd, pointer_name, pointer_after
         )
         try:
             if pointer_before is None:
                 try:
-                    os.link(
-                        pointer_temp_name,
+                    _link_open_file_at(
+                        pointer_temp_fd,
+                        repository_fd,
                         pointer_name,
-                        src_dir_fd=repository_fd,
-                        dst_dir_fd=repository_fd,
-                        follow_symlinks=False,
                     )
                     pointer_published_by_this_call = True
                 except FileExistsError:
@@ -1208,16 +1243,13 @@ def _persist_owned_opportunity_snapshot(
             elif pointer_before_identity is not None:
                 pointer_published_by_this_call = _replace_pointer_if_version_matches_at(
                     repository_fd,
-                    pointer_temp_name,
+                    pointer_temp_fd,
                     pointer_name,
                     expected_bytes=pointer_before,
                     expected_identity=pointer_before_identity,
                 )
         finally:
-            try:
-                os.unlink(pointer_temp_name, dir_fd=repository_fd)
-            except FileNotFoundError:
-                pass
+            os.close(pointer_temp_fd)
     else:
         pointer_temp = _write_owned_pointer_temp(root, pointer.name, pointer_after)
         pointer_temp_identity = _capture_file_identity(pointer_temp)
@@ -1289,35 +1321,54 @@ def _write_owned_pointer_temp_at(
     directory_fd: int,
     pointer_name: str,
     content: bytes,
-) -> tuple[str, tuple[int, int, int]]:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    for _ in range(64):
-        name = f".{pointer_name}.{secrets.token_hex(16)}.owned.tmp"
+) -> tuple[int, tuple[int, int, int]]:
+    if not pointer_name or Path(pointer_name).name != pointer_name:
+        raise ValueError("pointer name must be one path component")
+    temporary_flag = getattr(os, "O_TMPFILE", 0)
+    if not temporary_flag:
+        raise RuntimeError("descriptor-stable pointer publication is unavailable")
+    flags = os.O_RDWR | temporary_flag
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    fd = os.open(".", flags, 0o644, dir_fd=directory_fd)
+    try:
+        if os.name != "nt":
+            os.fchmod(fd, 0o644)  # type: ignore[attr-defined]
+        remaining = memoryview(content)
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise OSError("could not write complete pointer temporary")
+            remaining = remaining[written:]
+        os.fsync(fd)
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size != len(content):
+            raise RuntimeError("pointer temporary failed descriptor validation")
+        return fd, (opened.st_ino, opened.st_mtime_ns, opened.st_size)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _link_open_file_at(source_fd: int, directory_fd: int, destination: str) -> None:
+    """Hard-link the inode held by ``source_fd`` without reopening a mutable pathname."""
+
+    opened = os.fstat(source_fd)
+    if not stat.S_ISREG(opened.st_mode):
+        raise RuntimeError("pointer publication source descriptor is not regular")
+    for descriptor_root in (Path("/proc/self/fd"), Path("/dev/fd")):
+        descriptor_path = descriptor_root / str(source_fd)
         try:
-            fd = os.open(name, flags, 0o644, dir_fd=directory_fd)
-        except FileExistsError:
+            os.link(
+                descriptor_path,
+                destination,
+                dst_dir_fd=directory_fd,
+                follow_symlinks=True,
+            )
+            return
+        except FileNotFoundError:
             continue
-        try:
-            if os.name != "nt":
-                os.fchmod(fd, 0o644)
-            with os.fdopen(fd, "wb") as handle:
-                fd = -1
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-                opened = os.fstat(handle.fileno())
-            return name, (opened.st_ino, opened.st_mtime_ns, opened.st_size)
-        except BaseException:
-            if fd >= 0:
-                os.close(fd)
-            try:
-                os.unlink(name, dir_fd=directory_fd)
-            except FileNotFoundError:
-                pass
-            raise
-    raise RuntimeError("could not allocate owned pointer temp file")
+    raise RuntimeError("descriptor-stable pointer linking is unavailable")
 
 
 def _new_publication_quarantine_at(directory_fd: int, name: str) -> str:
@@ -1355,7 +1406,7 @@ def _restore_quarantined_file_if_absent_at(
 
 def _replace_pointer_if_version_matches_at(
     directory_fd: int,
-    replacement: str,
+    replacement_fd: int,
     pointer: str,
     *,
     expected_bytes: bytes,
@@ -1385,12 +1436,10 @@ def _replace_pointer_if_version_matches_at(
             )
             return False
         try:
-            os.link(
-                replacement,
+            _link_open_file_at(
+                replacement_fd,
+                directory_fd,
                 pointer,
-                src_dir_fd=directory_fd,
-                dst_dir_fd=directory_fd,
-                follow_symlinks=False,
             )
         except FileExistsError:
             return False
@@ -1520,7 +1569,7 @@ def _write_owned_pointer_temp(root: Path, pointer_name: str, content: bytes) -> 
     temporary = Path(temporary_name)
     try:
         if os.name != "nt":
-            os.fchmod(fd, 0o644)
+            os.fchmod(fd, 0o644)  # type: ignore[attr-defined]
         with os.fdopen(fd, "wb") as handle:
             handle.write(content)
             handle.flush()
@@ -1672,7 +1721,7 @@ def _rollback_owned_opportunity_publication(
     if publication.repository_fd is not None:
         try:
             if publication.pointer_before is not None:
-                previous_temp_name, _ = _write_owned_pointer_temp_at(
+                previous_temp_fd, _ = _write_owned_pointer_temp_at(
                     publication.repository_fd,
                     publication.pointer.name,
                     publication.pointer_before,
@@ -1680,16 +1729,13 @@ def _rollback_owned_opportunity_publication(
                 try:
                     _replace_pointer_if_version_matches_at(
                         publication.repository_fd,
-                        previous_temp_name,
+                        previous_temp_fd,
                         publication.pointer.name,
                         expected_bytes=publication.pointer_after,
                         expected_identity=expected_identity,
                     )
                 finally:
-                    try:
-                        os.unlink(previous_temp_name, dir_fd=publication.repository_fd)
-                    except FileNotFoundError:
-                        pass
+                    os.close(previous_temp_fd)
             else:
                 _unlink_pointer_if_version_matches_at(
                     publication.repository_fd,

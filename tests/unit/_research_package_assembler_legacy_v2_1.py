@@ -711,7 +711,7 @@ def test_missing_components_block_without_running_orchestrator(tmp_path: Path) -
     assert payload["automatic_execution_enabled"] is False
 
 
-def test_full_persisted_package_delegates_to_existing_orchestrator(tmp_path: Path) -> None:
+def test_full_derived_package_stays_blocked_without_source_authority(tmp_path: Path) -> None:
     theses = _prepare_ready_request(tmp_path)
     _persist_components(tmp_path, theses)
 
@@ -723,35 +723,21 @@ def test_full_persisted_package_delegates_to_existing_orchestrator(tmp_path: Pat
         artifact_root=tmp_path,
     )
 
-    assert receipt.full_package_ready is True
-    assert receipt.orchestrated is not None
+    assert receipt.full_package_ready is False
+    assert receipt.orchestrated is None
     assert receipt.run is not None
-    assert receipt.run.kind is ResearchRunKind.ORCHESTRATED
-    assert len(receipt.packages) == 2
-    assert receipt.research_round_path is not None
-    assert receipt.research_round_path.exists()
+    assert receipt.run.kind is ResearchRunKind.PRE_ORCHESTRATION_BLOCKED
+    assert receipt.packages == ()
+    assert receipt.research_round_path is None
     assert receipt.payload()["automatic_execution_enabled"] is False
-
-    candidate_root = tmp_path / "opportunity_candidate"
-    assert (candidate_root / "latest_opportunity_candidate.json").exists()
-    for candidate in receipt.orchestrated.opportunity_candidates:
-        assert any(
-            path.is_dir() and path.name.endswith(candidate.snapshot_id[:12])
-            for path in candidate_root.iterdir()
-        )
-    if receipt.orchestrated.opportunity_set is not None:
-        opportunity_set = receipt.orchestrated.opportunity_set
-        set_root = tmp_path / "opportunity_set"
-        assert (set_root / "latest_opportunity_set.json").exists()
-        assert any(
-            path.is_dir() and path.name.endswith(opportunity_set.snapshot_id[:12])
-            for path in set_root.iterdir()
-        )
+    assert not (tmp_path / "opportunity_candidate").exists()
+    assert not (tmp_path / "opportunity_set").exists()
+    assert not (tmp_path / "research_round_v2_1").exists()
 
     state = load_latest_observatory_state(tmp_path)
     assert state is not None
-    assert state.ledger.summary.orchestrated_run_count == 1
-    assert {row.state for row in state.inbox} == {receipt.run.round_status.value}
+    assert state.ledger.summary.orchestrated_run_count == 0
+    assert {row.state for row in state.inbox} == {"pre_orchestration_blocked"}
 
 
 def test_tournament_binding_mismatch_blocks_before_orchestrator(tmp_path: Path) -> None:

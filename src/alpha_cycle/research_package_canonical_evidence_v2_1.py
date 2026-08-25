@@ -239,6 +239,13 @@ def decision_gap_bound_sources_are_canonical(
     )
     if expectations is None:
         return False
+    # No current persisted provider contract independently proves certified consensus.
+    # Rebuilding gap arithmetic from the same self-declared ExpectationState would be
+    # circular, so every consensus-dependent gap remains fail closed.  This applies to
+    # Fast and Deep packages alike; it deliberately does not create a generic provider
+    # authority or relabel current KIS evidence as certified.
+    if gap.consensus_gaps:
+        return False
     price_implied: PriceImpliedRequirementSnapshot | None = None
     if gap.price_implied_requirement_snapshot_id is not None:
         price_implied = load_canonical_price_implied(
