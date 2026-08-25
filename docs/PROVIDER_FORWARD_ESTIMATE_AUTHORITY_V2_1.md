@@ -13,7 +13,7 @@ The source classes remain distinct:
 |---|---|---|
 | OpenDART filings and provisional earnings | A — official issuer actual | Official company-level actuals for the covered reporting periods. Provisional earnings are actuals, not guidance. |
 | Issuer IR/filing forward statements | B — official issuer guidance | No normalized numeric guidance contract with replayable range/period semantics is currently available. |
-| KIS `estimate-perform` | F — unsupported/unknown financial and aggregation semantics | Exact KIS provider, endpoint, TR, symbol, timestamps, raw archive bytes, original-response hash metadata, and opaque response cells are replayable. The financial meaning of the forward cells is not authoritative. |
+| KIS `estimate-perform` | F — unsupported/unknown provenance, financial, and aggregation semantics | The persisted capture's declared KIS provider, endpoint, TR, symbol, timestamps, raw archive bytes, original-response hash metadata, and opaque response cells are replayable. Original provider provenance and the financial meaning of the forward cells are not authoritative. |
 | KIS normalized forward rows | F — unsupported/unknown | Historical actual comparisons support narrow row/scale hypotheses, but first-party KIS schema material does not certify forecast-column alignment or scale continuity. The existing numeric gate remains closed. |
 | KIS snapshot comparisons | F — unsupported/unknown revision semantics | Only one distinct persisted source vintage exists. No historical revision authority is available. |
 | Semiconductor forward-input evidence | E — derived/model input | Bounded qualitative/model evidence; not issuer guidance, provider estimate, or consensus. |
@@ -34,7 +34,10 @@ of those source bytes. Replay performs no network calls and reruns only the regi
 
 The persisted JSON payload is a decoded/serialized archive, not the original HTTP response body.
 Accordingly, `original_http_response_bytes_archived=false`; the original HTTP SHA-256 values are
-retained as capture metadata and are not misrepresented as locally recomputable hashes.
+retained as capture metadata and are not misrepresented as locally recomputable hashes. Because
+there is no trusted capture attestation or recomputable original response, content addressing proves
+only integrity of the persisted capture and deterministic replay. It does not independently prove
+that KIS emitted the bytes, so `provider_source_authority=false`.
 
 The parser records `output2`/`output3` values only as opaque provider cells. `output4.dt` is retained
 as a period-label candidate, while the unsupported positional relationship is explicit. It does
@@ -51,10 +54,10 @@ authority resolution, and sources captured after the evaluation date.
 `ExpectationStateSnapshot` still normalizes typed observations but cannot certify its source.
 Research Package revalidation resolves `source_evidence_id` only through a registered
 provider-specific repository and reruns provider parsing. Unknown providers and caller flags fail
-closed. Current KIS artifacts return `provider_source_authority=true` but
-`provider_forward_numeric_authority=false`, `market_consensus_authority=false`, and
-`revision_authority=false`; therefore they cannot authorize an Expectation State, Fast/Deep
-expectation gap, valuation input, or opportunity publication.
+closed. Current KIS artifacts return `provider_capture_replay_integrity=true` but
+`provider_source_authority=false`, `provider_forward_numeric_authority=false`,
+`market_consensus_authority=false`, and `revision_authority=false`; therefore they cannot authorize
+an Expectation State, Fast/Deep expectation gap, valuation input, or opportunity publication.
 
 The assembler retains all underwriting, payoff-surface, Decision View, and expectation-gap
 blockers. A referenced expectation whose upstream provider replay cannot authorize it additionally

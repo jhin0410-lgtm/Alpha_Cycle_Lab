@@ -146,7 +146,8 @@ def test_real_parser_replays_source_bytes_without_semantic_promotion(tmp_path: P
     directory, artifact = _published(tmp_path)
     assert directory.is_dir()
     assert artifact.symbols == ("000660", "005930")
-    assert artifact.payload_without_id()["provider_source_authority"] is True
+    assert artifact.payload_without_id()["provider_capture_replay_integrity"] is True
+    assert artifact.payload_without_id()["provider_source_authority"] is False
     assert artifact.payload_without_id()["provider_forward_numeric_authority"] is False
     assert artifact.payload_without_id()["market_consensus_authority"] is False
     assert artifact.payload_without_id()["original_http_response_bytes_archived"] is False
@@ -233,6 +234,16 @@ def test_future_source_and_future_revision_cutoffs_are_rejected(tmp_path: Path) 
         )
 
 
+def test_canonical_utc_cutoff_uses_korean_evaluation_date(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    artifact = build_kis_provider_authority(
+        source,
+        evaluation_date=EVALUATION_DATE,
+        research_cutoff_at=CAPTURED.astimezone(ZoneInfo("UTC")),
+    )
+    assert artifact.evaluation_date == EVALUATION_DATE
+
+
 def test_record_after_cutoff_and_stale_manifest_capture_are_rejected(tmp_path: Path) -> None:
     source = _source(tmp_path, future_record=True)
     with pytest.raises(ProviderForwardAuthorityError, match="retrieved after|latest record"):
@@ -303,6 +314,37 @@ def test_normalized_artifact_mutation_is_rejected_even_with_updated_file_hash(
     with pytest.raises(ProviderForwardAuthorityError, match="normalized artifact mutation"):
         replay_kis_provider_authority(
             directory, evaluation_date=EVALUATION_DATE, research_cutoff_at=CAPTURED
+        )
+
+
+def test_outer_manifest_capture_timestamp_and_directory_identity_are_bound(
+    tmp_path: Path,
+) -> None:
+    directory, _ = _published(tmp_path)
+    manifest_path = directory / "manifest.json"
+    _rewrite_json(
+        manifest_path,
+        lambda value: value.__setitem__(
+            "captured_at", (CAPTURED - timedelta(days=1)).isoformat()
+        ),
+    )
+    with pytest.raises(ProviderForwardAuthorityError, match="capture timestamp"):
+        replay_kis_provider_authority(
+            directory, evaluation_date=EVALUATION_DATE, research_cutoff_at=CAPTURED
+        )
+
+    # Restore a valid publication before testing canonical directory naming.
+    _rewrite_json(
+        manifest_path,
+        lambda value: value.__setitem__(
+            "captured_at", (CAPTURED - timedelta(seconds=1)).isoformat()
+        ),
+    )
+    moved = directory.parent / f"wrong__{directory.name.split('__', 1)[1]}"
+    directory.rename(moved)
+    with pytest.raises(ProviderForwardAuthorityError, match="directory identity"):
+        replay_kis_provider_authority(
+            moved, evaluation_date=EVALUATION_DATE, research_cutoff_at=CAPTURED
         )
 
 

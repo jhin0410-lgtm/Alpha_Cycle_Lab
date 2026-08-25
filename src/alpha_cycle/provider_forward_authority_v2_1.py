@@ -19,6 +19,7 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from alpha_cycle.intelligence.expectations import ExpectationIntelligenceSnapshot
 from alpha_cycle.providers.kis_research import (
@@ -33,6 +34,7 @@ PARSER_ID = "alpha_cycle.kis_estimate_perform.opaque_cells"
 PARSER_VERSION = "1.0.0"
 PROVIDER_ID = "korea_investment_openapi"
 REPOSITORY_NAME = "provider_forward_authority_v2_1"
+KOREA_TZ = ZoneInfo("Asia/Seoul")
 _SOURCE_FILES = ("manifest.json", "records.json", "raw_estimate_perform.json")
 _OUTPUT_FILES = (
     "authority.json",
@@ -109,7 +111,7 @@ class ProviderForwardAuthorityArtifact:
             raise ProviderForwardAuthorityError("source_captured_at must be timezone-aware")
         if self.research_cutoff_at.tzinfo is None:
             raise ProviderForwardAuthorityError("research_cutoff_at must be timezone-aware")
-        if self.research_cutoff_at.date() != self.evaluation_date:
+        if self.research_cutoff_at.astimezone(KOREA_TZ).date() != self.evaluation_date:
             raise ProviderForwardAuthorityError("research cutoff/evaluation date mismatch")
         if self.source_captured_at > self.research_cutoff_at:
             raise ProviderForwardAuthorityError("provider source captured after research cutoff")
@@ -164,7 +166,8 @@ class ProviderForwardAuthorityArtifact:
             "revision_sequence": 0,
             "revision_history_complete": False,
             "historical_point_in_time_complete": False,
-            "provider_source_authority": True,
+            "provider_capture_replay_integrity": True,
+            "provider_source_authority": False,
             "provider_forward_numeric_authority": False,
             "issuer_guidance_authority": False,
             "single_broker_authority": False,
@@ -172,6 +175,7 @@ class ProviderForwardAuthorityArtifact:
             "revision_authority": False,
             "semantic_class": SourceSemanticClass.UNSUPPORTED_UNKNOWN.value,
             "authority_blockers": [
+                "trusted_provider_capture_attestation_unavailable",
                 "provider_financial_metric_semantics_unavailable",
                 "forecast_column_period_alignment_not_certified",
                 "forecast_scale_continuity_not_certified",
@@ -300,6 +304,7 @@ def publish_kis_provider_authority(
             evaluation_date=evaluation_date,
             research_cutoff_at=research_cutoff_at,
             expected_artifact_id=artifact.artifact_id,
+            _staged=True,
         )
         if staged.artifact_id != artifact.artifact_id:
             raise ProviderForwardAuthorityError("staged provider replay identity mismatch")
@@ -324,6 +329,7 @@ def replay_kis_provider_authority(
     evaluation_date: date,
     research_cutoff_at: datetime,
     expected_artifact_id: str | None = None,
+    _staged: bool = False,
 ) -> ProviderForwardAuthorityArtifact:
     """Independently rerun the KIS parser from persisted raw bytes only."""
 
@@ -378,6 +384,18 @@ def replay_kis_provider_authority(
         )
     if replayed.artifact_id != declared:
         raise ProviderForwardAuthorityError("normalized artifact identity mismatch")
+    manifest_captured_at = _aware_datetime(manifest.get("captured_at"), "captured_at")
+    if (
+        manifest_captured_at != replayed.source_captured_at
+        or manifest.get("captured_at") != replayed.source_captured_at.isoformat()
+    ):
+        raise ProviderForwardAuthorityError("authority manifest capture timestamp mismatch")
+    expected_directory = (
+        replayed.source_captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        + f"__{replayed.artifact_id[:12]}"
+    )
+    if not _staged and directory.name != expected_directory:
+        raise ProviderForwardAuthorityError("authority directory identity mismatch")
     if expected_artifact_id is not None and replayed.artifact_id != _required_sha(
         expected_artifact_id, "expected_artifact_id"
     ):

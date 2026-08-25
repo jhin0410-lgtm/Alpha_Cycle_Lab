@@ -57,12 +57,13 @@ def main(argv: list[str] | None = None) -> int:
         print(
             json.dumps(
                 {
-                    "status": "provider_source_replay_verified",
+                    "status": "provider_capture_replay_integrity_verified",
                     "artifact_id": artifact.artifact_id,
                     "artifact_directory": str(directory.resolve()),
                     "provider_id": "korea_investment_openapi",
                     "symbols": list(artifact.symbols),
-                    "provider_source_authority": True,
+                    "provider_capture_replay_integrity": True,
+                    "provider_source_authority": False,
                     "provider_forward_numeric_authority": False,
                     "market_consensus_authority": False,
                     "revision_authority": False,
