@@ -88,16 +88,18 @@ they cannot honestly distinguish CFS from OFS. The exact blockers for both are
 ## Integrity and publication
 
 The authority artifact binds every source identity and the exact byte digest of every legacy
-valuation file. Persistence uses an immutable timestamp/content directory, exclusive file creation,
-file and directory fsync, atomic directory rename, no mutable latest pointer, exact schemas, file
-digests, and mandatory upstream reconstruction. Persisted replay requires the canonical market,
+valuation file. Legacy frames are parsed and hashed from the same once-read byte buffers.
+Persistence uses immutable batch and timestamp/content directories, exclusive file creation, file
+and directory fsync, one atomic batch-directory rename, no mutable latest pointer, exact schemas,
+file digests, and mandatory upstream reconstruction. Persisted replay requires the canonical market,
 research, and optional legacy directories, so a self-consistent payload cannot authorize itself.
 Symlinks/junction aliases, unknown fields, duplicate identities, mutated
 raw inputs, wrong generations/dates/securities, partial publications, and self-consistent forged
 authority JSON fail closed.
-Exact legacy-manifest fields and strict JSON integer/float/boolean types prevent Python equality
-aliases such as `true == 1` from authenticating a noncanonical representation.
-The CLI constructs and validates every requested security artifact before publishing any member of
-the batch, preventing a later invalid security from leaving an earlier partial result.
+Exact legacy-manifest fields, duplicate-key rejection at every JSON object depth, and strict JSON
+integer/float/boolean types prevent parser ambiguity or Python equality aliases such as `true == 1`
+from authenticating a noncanonical representation. The CLI constructs and validates every requested
+security artifact inside a hidden staging directory and publishes the complete durable batch through
+one atomic rename, so termination cannot expose only an earlier member.
 
 The frozen SK hynix 2026Q3 prospective artifacts are neither read nor changed by this path.

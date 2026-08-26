@@ -10,6 +10,7 @@ legacy valuation snapshot as class-B evidence only.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
 import os
@@ -46,7 +47,7 @@ EXPLICIT_ACTUAL_ALIASES = {
         "당기순이익손실": 100,
         "당기순이익": 100,
         "profitloss": 100,
-        "ifrsfullprofitlossattributabletoownersofparent": 80,
+        "ifrsfullprofitlossattributabletoownersofparent": 120,
     },
     "equity": {
         "ifrsfullequity": 100,
@@ -544,11 +545,11 @@ def persist_valuation_authority_batch(
     research_directory: str | Path,
     legacy_valuation_directory: str | Path | None,
 ) -> tuple[Path, ...]:
-    """Publish a fully preflighted batch and roll back this invocation on failure."""
+    """Publish a fully preflighted batch through one atomic directory rename."""
 
     root = _plain_repository(Path(output_root), create=True)
-    targets: list[Path] = []
-    existed: list[bool] = []
+    if not artifacts:
+        raise ValuationAuthorityError("valuation authority batch cannot be empty")
     for artifact in artifacts:
         rebuilt = build_valuation_authority(
             market_directory=market_directory,
@@ -562,10 +563,21 @@ def persist_valuation_authority_batch(
             raise ValuationAuthorityError(
                 "caller-created valuation authority differs from upstream replay"
             )
-        timestamp = artifact.captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-        target = root / f"{timestamp}__{artifact.artifact_id[:12]}"
-        target_existed = target.exists() or target.is_symlink()
-        if target_existed:
+    batch_id = _digest(_canonical([artifact.artifact_id for artifact in artifacts]))
+    batch = root / f"batch__{batch_id[:12]}"
+    names = tuple(
+        f"{artifact.captured_at.astimezone(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
+        f"__{artifact.artifact_id[:12]}"
+        for artifact in artifacts
+    )
+    if len(names) != len(set(names)):
+        raise ValuationAuthorityError("valuation authority batch contains duplicate identities")
+    if batch.exists() or batch.is_symlink():
+        batch_root = _plain_directory(batch)
+        if {child.name for child in batch_root.iterdir()} != set(names):
+            raise ValuationAuthorityError("immutable valuation batch conflicts with content")
+        targets = tuple(batch_root / name for name in names)
+        for artifact, target in zip(artifacts, targets, strict=True):
             replayed = replay_persisted_valuation_authority(
                 target,
                 market_directory=market_directory,
@@ -577,19 +589,13 @@ def persist_valuation_authority_batch(
                 raise ValuationAuthorityError(
                     "duplicate immutable identity conflicts with content"
                 )
-        targets.append(target)
-        existed.append(target_existed)
+        return targets
 
-    staged: list[tuple[Path, Path]] = []
-    created: list[Path] = []
+    temporary = Path(tempfile.mkdtemp(prefix=f".{batch.name}.", dir=root))
     try:
-        for artifact, target, target_existed in zip(
-            artifacts, targets, existed, strict=True
-        ):
-            if target_existed:
-                continue
-            temporary = Path(tempfile.mkdtemp(prefix=f".{target.name}.", dir=root))
-            staged.append((temporary, target))
+        for artifact, name in zip(artifacts, names, strict=True):
+            artifact_directory = temporary / name
+            artifact_directory.mkdir()
             payload_bytes = (
                 json.dumps(artifact.payload(), ensure_ascii=False, indent=2, sort_keys=True)
                 + "\n"
@@ -602,32 +608,26 @@ def persist_valuation_authority_batch(
                 "security_id": artifact.security_id,
                 "files": {"authority.json": _digest(payload_bytes)},
             }
-            _write_new(temporary / "authority.json", payload_bytes)
+            _write_new(artifact_directory / "authority.json", payload_bytes)
             _write_new(
-                temporary / "manifest.json",
+                artifact_directory / "manifest.json",
                 (
                     json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
                     + "\n"
                 ).encode(),
             )
-            _fsync_directory(temporary)
-        for temporary, target in staged:
-            os.rename(temporary, target)
-            created.append(target)
+            _fsync_directory(artifact_directory)
+        _fsync_directory(temporary)
+        os.rename(temporary, batch)
         _fsync_directory(root)
-    except Exception:
-        for directory in reversed(created):
-            for child in directory.iterdir():
-                child.unlink()
-            directory.rmdir()
-        for temporary, _ in staged:
-            if temporary.exists():
-                for child in temporary.iterdir():
+    finally:
+        if temporary.exists():
+            for directory in temporary.iterdir():
+                for child in directory.iterdir():
                     child.unlink()
-                temporary.rmdir()
-        _fsync_directory(root)
-        raise
-    return tuple(targets)
+                directory.rmdir()
+            temporary.rmdir()
+    return tuple(batch / name for name in names)
 
 
 def replay_persisted_valuation_authority(
@@ -664,7 +664,7 @@ def _load_persisted_valuation_authority(
     root = _plain_directory(Path(directory))
     manifest_bytes = _read_plain(root / "manifest.json", root)
     authority_bytes = _read_plain(root / "authority.json", root)
-    manifest = _object(json.loads(manifest_bytes), "manifest")
+    manifest = _object(_load_json(manifest_bytes, "manifest"), "manifest")
     _exact(
         manifest,
         {"schema_version", "artifact_id", "captured_at", "evaluation_date", "security_id", "files"},
@@ -678,7 +678,7 @@ def _load_persisted_valuation_authority(
     files = _object(manifest.get("files"), "files")
     if files != {"authority.json": _digest(authority_bytes)}:
         raise ValuationAuthorityError("authority file digest mismatch")
-    payload = _object(json.loads(authority_bytes), "authority")
+    payload = _object(_load_json(authority_bytes, "authority"), "authority")
     artifact = _artifact_from_payload(payload)
     declared = str(manifest.get("artifact_id", ""))
     if artifact.artifact_id != declared or payload.get("artifact_id") != declared:
@@ -1109,8 +1109,10 @@ def _legacy_binding(
     if directory is None:
         return None, None
     root = _plain_directory(Path(directory))
+    manifest_bytes = _read_plain(root / "manifest.json", root)
     manifest = _object(
-        json.loads(_read_plain(root / "manifest.json", root)), "legacy valuation manifest"
+        _load_json(manifest_bytes, "legacy valuation manifest"),
+        "legacy valuation manifest",
     )
     required = {
         "schema_version",
@@ -1167,6 +1169,7 @@ def _legacy_binding(
     ]
     if declared != expected_files:
         raise ValuationAuthorityError("legacy valuation file set is not canonical")
+    source_bytes = {name: _read_plain(root / name, root) for name in expected_files}
     try:
         snapshot = ValuationEvidenceSnapshot(
             captured_at=legacy_captured_at,
@@ -1174,12 +1177,12 @@ def _legacy_binding(
             research_snapshot_id=str(manifest["research_snapshot_id"]),
             market_snapshot_id=str(manifest["market_snapshot_id"]),
             history_years=int(str(manifest["history_years"])),
-            shares=_read_legacy_frame(root / "shares.csv", root),
-            security_values=_read_legacy_frame(root / "security_values.csv", root),
-            financial_history=_read_legacy_frame(root / "financial_history.csv", root),
-            valuation_metrics=_read_legacy_frame(root / "valuation_metrics.csv", root),
+            shares=_read_legacy_frame(source_bytes["shares.csv"]),
+            security_values=_read_legacy_frame(source_bytes["security_values.csv"]),
+            financial_history=_read_legacy_frame(source_bytes["financial_history.csv"]),
+            valuation_metrics=_read_legacy_frame(source_bytes["valuation_metrics.csv"]),
             raw_valuation=_object(
-                json.loads(_read_plain(root / "raw_valuation.json", root)),
+                _load_json(source_bytes["raw_valuation.json"], "legacy raw valuation"),
                 "legacy raw valuation",
             ),
             warnings=tuple(str(item) for item in _list(manifest.get("warnings"), "warnings")),
@@ -1222,9 +1225,8 @@ def _legacy_binding(
     for name in sorted(declared):
         if not isinstance(name, str) or Path(name).name != name:
             raise ValuationAuthorityError("legacy valuation file name is unsafe")
-        content = _read_plain(root / name, root)
+        content = source_bytes[name]
         bindings.append({"name": name, "size_bytes": len(content), "sha256": _digest(content)})
-    manifest_bytes = _read_plain(root / "manifest.json", root)
     binding_id = _digest(
         _canonical(
             {
@@ -1236,9 +1238,8 @@ def _legacy_binding(
     return snapshot_id, binding_id
 
 
-def _read_legacy_frame(path: Path, root: Path) -> pd.DataFrame:
-    content = _read_plain(path, root)
-    header = pd.read_csv(path, nrows=0)
+def _read_legacy_frame(content: bytes) -> pd.DataFrame:
+    header = pd.read_csv(io.BytesIO(content), nrows=0)
     string_columns = {
         column: "string"
         for column in header.columns
@@ -1246,8 +1247,9 @@ def _read_legacy_frame(path: Path, root: Path) -> pd.DataFrame:
         or column.endswith("_date")
         or column.endswith("_end")
     }
-    _ = content
-    return pd.read_csv(path, dtype=string_columns or None, float_precision="round_trip")
+    return pd.read_csv(
+        io.BytesIO(content), dtype=string_columns or None, float_precision="round_trip"
+    )
 
 
 def _blocked_methods(inputs: tuple[ValuationInput, ...]) -> tuple[MethodEligibility, ...]:
@@ -1573,6 +1575,18 @@ def _object(value: object, field: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValuationAuthorityError(f"{field} must be an object")
     return {str(key): item for key, item in value.items()}
+
+
+def _load_json(content: bytes, field: str) -> object:
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValuationAuthorityError(f"{field} contains duplicate object key {key!r}")
+            result[key] = value
+        return result
+
+    return json.loads(content, object_pairs_hook=unique_object)
 
 
 def _list(value: object, field: str) -> list[object]:

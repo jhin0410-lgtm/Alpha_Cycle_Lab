@@ -676,6 +676,35 @@ def test_alias_precedence_runs_after_source_and_pit_filters(tmp_path: Path) -> N
     assert income.value == 40_000_000_000_000
 
 
+def test_owner_attributable_profit_precedes_total_consolidated_profit(tmp_path: Path) -> None:
+    market = _market()
+    market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
+    research = _research(market.snapshot_id)
+    financials = research.financials.copy()
+    total_mask = financials["ticker"].astype(str).eq("000660") & financials[
+        "metric"
+    ].astype(str).str.contains("ProfitLoss#")
+    owner_profit = financials.loc[total_mask].iloc[0].copy()
+    owner_profit["metric"] = "CIS:ifrs-full_ProfitLossAttributableToOwnersOfParent"
+    owner_profit["value"] = 40_000_000_000_000
+    owner_profit["revision_id"] = "20260317012345"
+    financials = validate_financial_statements(
+        pd.concat([financials, pd.DataFrame([owner_profit])], ignore_index=True)
+    )
+    research_dir = write_fundamental_macro_snapshot(
+        tmp_path / "research",
+        replace(research, financials=financials, raw_opendart=_raw_opendart(financials)),
+    )[0].parent
+    artifact = build_valuation_authority(
+        market_directory=market_dir,
+        research_directory=research_dir,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    income = next(item for item in artifact.inputs if item.role == "trailing_net_income")
+    assert income.value == 40_000_000_000_000
+
+
 def test_latest_fy_is_selected_before_alias_precedence(tmp_path: Path) -> None:
     market = _market()
     market_dir = write_market_intelligence_snapshot(tmp_path / "market", market)[0].parent
@@ -934,6 +963,25 @@ def test_boolean_or_integer_numeric_aliases_are_not_canonical_json(
         _replay(directory, market, research, legacy)
 
 
+def test_duplicate_json_object_keys_are_rejected_before_replay(tmp_path: Path) -> None:
+    artifact, market, research, legacy = _artifact(tmp_path)
+    directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
+    authority_path = directory / "authority.json"
+    content = authority_path.read_text(encoding="utf-8").replace(
+        "{\n", '{\n  "automatic_execution_enabled": true,\n', 1
+    )
+    authority_path.write_text(content, encoding="utf-8")
+    content_bytes = authority_path.read_bytes()
+    _rewrite(
+        directory / "manifest.json",
+        lambda value: value["files"].__setitem__(
+            "authority.json", hashlib.sha256(content_bytes).hexdigest()
+        ),
+    )
+    with pytest.raises(ValuationAuthorityError, match="duplicate object key"):
+        _replay(directory, market, research, legacy)
+
+
 def test_unknown_field_tamper_with_updated_file_hash_remains_noncanonical(tmp_path: Path) -> None:
     artifact, market, research, legacy = _artifact(tmp_path)
     directory = _persist(artifact, tmp_path / "authority", market, research, legacy)
@@ -1062,6 +1110,38 @@ def test_legacy_summary_schema_is_validated_before_column_indexing(tmp_path: Pat
             security_id="000660",
             captured_at=CAPTURED,
         )
+
+
+def test_legacy_binding_reads_each_validated_source_file_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    market, research, legacy = _sources(tmp_path)
+    real_read = valuation_authority_module._read_plain
+    reads: dict[Path, int] = {}
+
+    def counted_read(path: Path, directory: Path) -> bytes:
+        reads[path] = reads.get(path, 0) + 1
+        return real_read(path, directory)
+
+    monkeypatch.setattr(valuation_authority_module, "_read_plain", counted_read)
+    build_valuation_authority(
+        market_directory=market,
+        research_directory=research,
+        legacy_valuation_directory=legacy,
+        security_id="000660",
+        captured_at=CAPTURED,
+    )
+    expected = {legacy / "manifest.json"} | {
+        legacy / name
+        for name in (
+            "shares.csv",
+            "security_values.csv",
+            "financial_history.csv",
+            "valuation_metrics.csv",
+            "raw_valuation.json",
+        )
+    }
+    assert {path: reads[path] for path in expected} == {path: 1 for path in expected}
 
 
 @pytest.mark.parametrize(
@@ -1380,6 +1460,9 @@ def test_cli_records_both_real_security_acceptances(tmp_path: Path, capsys) -> N
     payload = json.loads(capsys.readouterr().out)
     assert result == 0
     assert [item["security_id"] for item in payload["artifacts"]] == ["000660", "005930"]
+    output_directories = [Path(item["output_directory"]) for item in payload["artifacts"]]
+    assert output_directories[0].parent == output_directories[1].parent
+    assert output_directories[0].parent.name.startswith("batch__")
     assert all(item["eligible_methods"] == [] for item in payload["artifacts"])
     assert all(item["probabilities_available"] is False for item in payload["artifacts"])
 
@@ -1435,21 +1518,28 @@ def test_cli_preflights_later_immutable_conflict_before_publication(
     tmp_path: Path, capsys
 ) -> None:
     market, research, legacy = _sources(tmp_path)
-    second = build_valuation_authority(
-        market_directory=market,
-        research_directory=research,
-        legacy_valuation_directory=legacy,
-        security_id="005930",
-        captured_at=CAPTURED,
+    built = tuple(
+        build_valuation_authority(
+            market_directory=market,
+            research_directory=research,
+            legacy_valuation_directory=legacy,
+            security_id=ticker,
+            captured_at=CAPTURED,
+        )
+        for ticker in ("000660", "005930")
     )
     output = tmp_path / "acceptance"
-    conflict = output / (
-        f"{CAPTURED.astimezone(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
-        f"__{second.artifact_id[:12]}"
-    )
+    batch_id = hashlib.sha256(
+        json.dumps(
+            [artifact.artifact_id for artifact in built],
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    conflict = output / f"batch__{batch_id[:12]}"
     conflict.mkdir(parents=True)
-    (conflict / "authority.json").write_text("{}", encoding="utf-8")
-    (conflict / "manifest.json").write_text("{}", encoding="utf-8")
+    (conflict / "unexpected").mkdir()
     result = authority_cli_main(
         [
             "--market-snapshot", str(market),
@@ -1461,38 +1551,23 @@ def test_cli_preflights_later_immutable_conflict_before_publication(
             "--output", str(output),
         ]
     )
-    first = build_valuation_authority(
-        market_directory=market,
-        research_directory=research,
-        legacy_valuation_directory=legacy,
-        security_id="000660",
-        captured_at=CAPTURED,
-    )
-    first_path = output / (
-        f"{CAPTURED.astimezone(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
-        f"__{first.artifact_id[:12]}"
-    )
     assert result == 2
-    assert not first_path.exists()
+    assert {child.name for child in conflict.iterdir()} == {"unexpected"}
     assert capsys.readouterr().err.startswith("Error:")
 
 
-def test_cli_rolls_back_batch_when_later_publication_rename_fails(
+def test_cli_exposes_no_artifacts_when_atomic_batch_rename_fails(
     tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     market, research, legacy = _sources(tmp_path)
     output = tmp_path / "acceptance"
     real_rename = valuation_authority_module.os.rename
-    calls = 0
-
-    def fail_second_rename(source: Path, target: Path) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
+    def fail_batch_rename(source: Path, target: Path) -> None:
+        if Path(target).name.startswith("batch__"):
             raise OSError("injected publication failure")
         real_rename(source, target)
 
-    monkeypatch.setattr(valuation_authority_module.os, "rename", fail_second_rename)
+    monkeypatch.setattr(valuation_authority_module.os, "rename", fail_batch_rename)
     result = authority_cli_main(
         [
             "--market-snapshot", str(market),
