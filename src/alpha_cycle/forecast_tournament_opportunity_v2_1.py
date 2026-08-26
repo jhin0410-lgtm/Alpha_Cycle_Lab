@@ -1007,6 +1007,32 @@ def _validate_upstream_schemas(
     ):
         if type(estimator[field]) is not int:
             raise ForecastTournamentError(f"estimator integer field is noncanonical: {field}")
+    for field in (
+        "condition_number",
+        "historical_benchmark_mae_krw_million",
+        "historical_relative_mae_improvement",
+        "historical_selected_candidate_mae_krw_million",
+        "raw_unit_intercept",
+        "training_mae_krw_million",
+        "training_rmse_krw_million",
+    ):
+        scalar = estimator[field]
+        if type(scalar) is not float:
+            raise ForecastTournamentError(f"estimator float field is noncanonical: {field}")
+        assert isinstance(scalar, float)
+        if not math.isfinite(scalar):
+            raise ForecastTournamentError(f"estimator float field is noncanonical: {field}")
+    for field in (
+        "predictor_means",
+        "predictor_scales",
+        "raw_unit_coefficients",
+        "standardized_coefficients",
+    ):
+        values = estimator[field]
+        if not isinstance(values, list) or any(
+            type(value) is not float or not math.isfinite(value) for value in values
+        ):
+            raise ForecastTournamentError(f"estimator float array is noncanonical: {field}")
     capture_root = _object(_load_json(capture_bytes, "source capture"), "source capture")
     _exact(capture_root, {"schema_version", "status", "capture"}, "source capture")
     if type(capture_root["schema_version"]) is not int or capture_root["schema_version"] != 1:

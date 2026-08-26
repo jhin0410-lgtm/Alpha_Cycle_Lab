@@ -9,6 +9,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from alpha_cycle.forecast_tournament_opportunity_v2_1 import (
+    DEFAULT_ESTIMATOR,
+    DEFAULT_FEATURE,
+    DEFAULT_SOURCE_CAPTURE_DIRECTORY,
     ForecastTournamentError,
     build_forecast_opportunity_bundle,
     persist_forecast_opportunity_bundle,
@@ -18,6 +21,11 @@ from alpha_cycle.forecast_tournament_opportunity_v2_1 import (
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="alpha-cycle-forecast-tournament-v2-1")
     parser.add_argument("--frozen-forecast", type=Path, required=True)
+    parser.add_argument("--frozen-feature", type=Path, default=DEFAULT_FEATURE)
+    parser.add_argument("--selected-estimator", type=Path, default=DEFAULT_ESTIMATOR)
+    parser.add_argument(
+        "--source-capture-directory", type=Path, default=DEFAULT_SOURCE_CAPTURE_DIRECTORY
+    )
     parser.add_argument("--market-snapshot-id", required=True)
     parser.add_argument("--research-snapshot-id", required=True)
     parser.add_argument("--evaluation-date", type=datetime.fromisoformat, required=True)
@@ -36,11 +44,17 @@ def main(argv: list[str] | None = None) -> int:
             evaluation_date=args.evaluation_date.date(),
             market_snapshot_id=args.market_snapshot_id,
             research_snapshot_id=args.research_snapshot_id,
+            frozen_feature_path=args.frozen_feature,
+            selected_estimator_path=args.selected_estimator,
+            source_capture_directory=args.source_capture_directory,
         )
         directory = persist_forecast_opportunity_bundle(
             bundle,
             output_root=args.output,
             frozen_forecast_path=args.frozen_forecast,
+            frozen_feature_path=args.frozen_feature,
+            selected_estimator_path=args.selected_estimator,
+            source_capture_directory=args.source_capture_directory,
         )
         print(
             json.dumps(
