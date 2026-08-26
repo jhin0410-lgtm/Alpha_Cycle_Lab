@@ -54,6 +54,7 @@ alpha-cycle-semiconductor-operating-assumptions = "alpha_cycle.semiconductor_ope
 alpha-cycle-semiconductor-structural-evidence = "alpha_cycle.semiconductor_structural_evidence_cli:main"
 alpha-cycle-valuation = "alpha_cycle.valuation_cli:main"
 alpha-cycle-valuation-authority-v2-1 = "alpha_cycle.valuation_authority_v2_1_cli:main"
+alpha-cycle-forecast-tournament-v2-1 = "alpha_cycle.forecast_tournament_opportunity_v2_1_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

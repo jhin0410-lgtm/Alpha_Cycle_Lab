@@ -63,7 +63,7 @@ class ProspectiveCandidate:
     input_artifact_ids: tuple[str, ...]
     input_cutoff: datetime
     feature_cutoff: datetime
-    training_cutoff: datetime
+    training_cutoff: datetime | None
     registered_at: datetime
     forecast_origin: datetime
     forecast_value: float
@@ -78,6 +78,8 @@ class ProspectiveCandidate:
     tournament_identity: str
     selection_rule: str
     lineage_ids: tuple[str, ...]
+    tournament_eligible: bool
+    eligibility_blockers: tuple[str, ...]
 
     def __post_init__(self) -> None:
         for text_value, field in (
@@ -108,12 +110,16 @@ class ProspectiveCandidate:
         for timestamp_value, field in (
             (self.input_cutoff, "input_cutoff"),
             (self.feature_cutoff, "feature_cutoff"),
-            (self.training_cutoff, "training_cutoff"),
             (self.registered_at, "registered_at"),
             (self.forecast_origin, "forecast_origin"),
         ):
             _aware(timestamp_value, field)
-        if max(self.input_cutoff, self.feature_cutoff, self.training_cutoff) > self.registered_at:
+        if self.training_cutoff is not None:
+            _aware(self.training_cutoff, "training_cutoff")
+        cutoffs = (self.input_cutoff, self.feature_cutoff) + (
+            (self.training_cutoff,) if self.training_cutoff is not None else ()
+        )
+        if max(cutoffs) > self.registered_at:
             raise ForecastTournamentError("forecast cutoff follows registration")
         if self.registered_at > self.forecast_origin:
             raise ForecastTournamentError("forecast registration follows forecast origin")
@@ -127,6 +133,16 @@ class ProspectiveCandidate:
                 or self.interval_upper < self.forecast_value
             ):
                 raise ForecastTournamentError("forecast interval does not contain point forecast")
+        if self.tournament_eligible:
+            if (
+                self.candidate_class is CandidateClass.INTERNAL_DETERMINISTIC_MODEL
+                and self.training_cutoff is None
+            ) or self.eligibility_blockers:
+                raise ForecastTournamentError(
+                    "eligible candidate requires every applicable cutoff and no blockers"
+                )
+        elif not self.eligibility_blockers:
+            raise ForecastTournamentError("ineligible candidate requires blockers")
 
     @property
     def comparability_key(self) -> tuple[str, str, str, str, str, str | None, str]:
@@ -156,7 +172,9 @@ class ProspectiveCandidate:
             "input_artifact_ids": list(self.input_artifact_ids),
             "input_cutoff": self.input_cutoff.isoformat(),
             "feature_cutoff": self.feature_cutoff.isoformat(),
-            "training_cutoff": self.training_cutoff.isoformat(),
+            "training_cutoff": (
+                self.training_cutoff.isoformat() if self.training_cutoff is not None else None
+            ),
             "registered_at": self.registered_at.isoformat(),
             "forecast_origin": self.forecast_origin.isoformat(),
             "forecast_value": self.forecast_value,
@@ -171,6 +189,8 @@ class ProspectiveCandidate:
             "tournament_identity": self.tournament_identity,
             "selection_rule": self.selection_rule,
             "lineage_ids": list(self.lineage_ids),
+            "tournament_eligible": self.tournament_eligible,
+            "eligibility_blockers": list(self.eligibility_blockers),
             "outcome_available": False,
             "evaluation_available": False,
         }
@@ -197,6 +217,12 @@ class ForecastTournament:
             raise ForecastTournamentError("tournament capture precedes candidate registration")
         if not set(self.comparable_candidate_ids).issubset(ids):
             raise ForecastTournamentError("comparable candidate identity is unknown")
+        if any(
+            not item.tournament_eligible
+            for item in self.candidates
+            if item.candidate_id in self.comparable_candidate_ids
+        ):
+            raise ForecastTournamentError("ineligible candidate cannot be tournament-comparable")
         if self.winner_candidate_id is not None:
             if len(self.comparable_candidate_ids) < 2:
                 raise ForecastTournamentError("winner requires at least two comparable candidates")
@@ -340,6 +366,8 @@ class ForecastOpportunityBundle:
             "valuation_available": False,
             "price_implied_available": False,
             "scenario_payoff_available": False,
+            "current_state_status": "partial_evidence_ranking_blocked",
+            "stale_ready_state_allowed": False,
             "automatic_execution_enabled": False,
         }
 
@@ -358,24 +386,27 @@ def build_forecast_opportunity_bundle(
     """Replay the frozen 2026Q3 experiment and build an honest six-cell evidence map."""
 
     _aware(captured_at, "captured_at")
-    path = _plain_file(Path(frozen_forecast_path))
-    content = path.read_bytes()
-    frozen = load_locked_numeric_forecast(path)
+    content = _read_frozen_once(Path(frozen_forecast_path))
+    frozen = _load_frozen_from_exact_bytes(content)
     if frozen.q3_source_outcome_loaded or frozen.q3_evaluated:
         raise ForecastTournamentError("frozen 2026Q3 artifact unexpectedly contains outcome state")
     model = _candidate_from_frozen(frozen, content, benchmark=False)
     benchmark = _candidate_from_frozen(frozen, content, benchmark=True)
     candidates = tuple(sorted((model, benchmark), key=lambda item: item.candidate_id))
-    # Same target, but they are registered candidates within one experiment.  They are comparable
-    # for later error scoring; no winner exists until an authenticated 2026Q3 outcome is available.
+    # These remain valid frozen scientific forecasts, but the legacy artifact lacks an exact
+    # training-cutoff timestamp required by this newer generic registration contract.
     tournament = ForecastTournament(
         tournament_id="skhynix_company_gp_2026q3_prospective_v1",
         captured_at=captured_at,
         candidates=candidates,
-        comparable_candidate_ids=tuple(item.candidate_id for item in candidates),
+        comparable_candidate_ids=(),
         winner_candidate_id=None,
         outcome_scoring_available=False,
-        blockers=("authenticated_2026q3_outcome_unavailable",),
+        blockers=(
+            "authenticated_2026q3_outcome_unavailable",
+            "candidate_training_cutoff_authority_unavailable",
+            "insufficient_tournament_eligible_candidates",
+        ),
     )
     opportunities = tuple(
         _opportunity(
@@ -479,7 +510,8 @@ def replay_forecast_opportunity_bundle(
             "frozen_forecast_bytes_sha256", "tournament", "opportunities",
             "missing_data_policy", "partial_ranking_available", "overall_ranking_available",
             "probabilities_available", "valuation_available", "price_implied_available",
-            "scenario_payoff_available", "automatic_execution_enabled", "artifact_id",
+            "scenario_payoff_available", "current_state_status", "stale_ready_state_allowed",
+            "automatic_execution_enabled", "artifact_id",
         },
         "bundle",
     )
@@ -544,7 +576,7 @@ def _candidate_from_frozen(
         ),
         input_cutoff=frozen.forecast_locked_at,
         feature_cutoff=frozen.forecast_locked_at,
-        training_cutoff=frozen.forecast_locked_at,
+        training_cutoff=None,
         registered_at=frozen.forecast_locked_at,
         forecast_origin=frozen.forecast_origin,
         forecast_value=float(value),
@@ -563,6 +595,10 @@ def _candidate_from_frozen(
         tournament_identity="skhynix_company_gp_2026q3_prospective_v1",
         selection_rule="minimum_historical_pit_mae_frozen_before_2026q3_outcome",
         lineage_ids=(frozen.evidence_id, frozen.protocol_evidence_id),
+        tournament_eligible=benchmark,
+        eligibility_blockers=(
+            () if benchmark else ("exact_training_cutoff_timestamp_unavailable",)
+        ),
     )
 
 
@@ -607,9 +643,13 @@ def _opportunity(
         ),
         OpportunityDimension(
             "prospective_forecast",
-            EvidenceStatus.SUPPORTED if forecast_id else EvidenceStatus.UNAVAILABLE,
+            EvidenceStatus.INCOMPARABLE if forecast_id else EvidenceStatus.UNAVAILABLE,
             (forecast_id,) if forecast_id else (),
-            None if forecast_id else "comparable_prospective_forecast_unavailable",
+            (
+                "prospective_registration_contract_incomplete"
+                if forecast_id
+                else "comparable_prospective_forecast_unavailable"
+            ),
         ),
         OpportunityDimension(
             "scenario_payoff",
@@ -640,6 +680,76 @@ def _opportunity(
 
 def _alias(candidate: ProspectiveCandidate) -> str:
     return "".join(char for char in candidate.candidate_id.lower() if char.isalnum())
+
+
+def _read_frozen_once(path: Path) -> bytes:
+    trusted = _plain_file(path)
+    with trusted.open("rb") as handle:
+        opened = os.fstat(handle.fileno())
+        content = handle.read()
+    current = trusted.stat()
+    if (
+        trusted.is_symlink()
+        or trusted.resolve() != trusted.absolute()
+        or (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+        != (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns)
+    ):
+        raise ForecastTournamentError("frozen forecast changed during validated read")
+    return content
+
+
+def _load_frozen_from_exact_bytes(content: bytes) -> LockedNumericForecast:
+    root = _object(_load_json(content, "frozen forecast"), "frozen forecast")
+    _exact(root, {"schema_version", "status", "forecast"}, "frozen forecast")
+    if type(root["schema_version"]) is not int or root["schema_version"] != 1:
+        raise ForecastTournamentError("frozen forecast schema is noncanonical")
+    body = _object(root["forecast"], "frozen forecast body")
+    _exact(
+        body,
+        {
+            "benchmark_forecast_krw_million", "benchmark_id", "contract_evidence_id",
+            "evidence_id", "feature_values", "feature_vector_evidence_id",
+            "forecast_locked_at", "forecast_origin", "historical_benchmark_mae_krw_million",
+            "historical_selected_candidate_mae_krw_million", "numeric_forward_forecast_enabled",
+            "prediction_interval", "predictors", "prospective_feature_vector_frozen",
+            "prospective_forecast_run", "protocol_evidence_id", "q1_used_for_selection",
+            "q3_evaluated", "q3_source_outcome_loaded", "q3_target_read",
+            "raw_unit_coefficients", "raw_unit_intercept", "selected_candidate_id",
+            "selected_estimator_evidence_id", "selected_forecast_krw_million",
+            "source_capture_evidence_id", "standardized_input", "status", "target_period",
+        },
+        "frozen forecast body",
+    )
+    for field, expected in {
+        "numeric_forward_forecast_enabled": True,
+        "prospective_feature_vector_frozen": True,
+        "prospective_forecast_run": True,
+        "q1_used_for_selection": False,
+        "q3_evaluated": False,
+        "q3_source_outcome_loaded": False,
+        "q3_target_read": False,
+    }.items():
+        if type(body[field]) is not bool or body[field] is not expected:
+            raise ForecastTournamentError(f"frozen forecast boolean field drifted: {field}")
+    numeric_fields = (
+        "benchmark_forecast_krw_million",
+        "historical_benchmark_mae_krw_million",
+        "historical_selected_candidate_mae_krw_million",
+        "raw_unit_intercept",
+        "selected_forecast_krw_million",
+    )
+    if any(type(body[field]) is not float for field in numeric_fields):
+        raise ForecastTournamentError("frozen forecast numerics must be canonical floats")
+    for field in ("feature_values", "raw_unit_coefficients", "standardized_input"):
+        values = body[field]
+        if not isinstance(values, list) or any(type(value) is not float for value in values):
+            raise ForecastTournamentError(f"frozen forecast array is noncanonical: {field}")
+    if body["prediction_interval"] is not None:
+        raise ForecastTournamentError("frozen forecast unexpectedly contains interval")
+    with tempfile.TemporaryDirectory(prefix="alpha-cycle-frozen-replay-") as temporary:
+        exact = Path(temporary) / "frozen.json"
+        exact.write_bytes(content)
+        return load_locked_numeric_forecast(exact)
 
 
 def _plain_file(path: Path) -> Path:

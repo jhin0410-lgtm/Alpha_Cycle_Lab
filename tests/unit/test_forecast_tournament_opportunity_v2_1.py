@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import alpha_cycle.forecast_tournament_opportunity_v2_1 as tournament_module
 from alpha_cycle.forecast_tournament_opportunity_v2_1 import (
     EvidenceStatus,
     ForecastTournamentError,
@@ -16,6 +17,7 @@ from alpha_cycle.forecast_tournament_opportunity_v2_1 import (
     persist_forecast_opportunity_bundle,
     replay_forecast_opportunity_bundle,
 )
+from alpha_cycle.forecast_tournament_opportunity_v2_1_cli import main as cli_main
 
 CAPTURED = datetime(2026, 8, 25, 7, 0, tzinfo=UTC)
 MARKET_ID = "8" * 64
@@ -51,7 +53,9 @@ def test_real_frozen_forecast_registers_two_outcome_blind_candidates() -> None:
     ]
     assert tournament.winner_candidate_id is None
     assert tournament.outcome_scoring_available is False
-    assert tournament.blockers == ("authenticated_2026q3_outcome_unavailable",)
+    assert tournament.comparable_candidate_ids == ()
+    assert sum(item.tournament_eligible for item in tournament.candidates) == 1
+    assert "candidate_training_cutoff_authority_unavailable" in tournament.blockers
 
 
 def test_six_horizon_cells_never_turn_missing_dimensions_into_zero() -> None:
@@ -67,7 +71,7 @@ def test_six_horizon_cells_never_turn_missing_dimensions_into_zero() -> None:
     forecast = next(
         item for item in bundle.opportunities[0].dimensions if item.name == "prospective_forecast"
     )
-    assert forecast.status is EvidenceStatus.SUPPORTED
+    assert forecast.status is EvidenceStatus.INCOMPARABLE
     assert all(
         next(item for item in row.dimensions if item.name == "valuation").status
         is EvidenceStatus.BLOCKED
@@ -98,6 +102,45 @@ def test_source_mutation_after_registration_fails_replay(tmp_path: Path) -> None
         replay_forecast_opportunity_bundle(directory, frozen_forecast_path=source)
 
 
+def test_model_candidate_and_scoring_rule_substitution_cannot_publish(tmp_path: Path) -> None:
+    source = _copy_source(tmp_path)
+    bundle = _bundle(source)
+    model, benchmark = bundle.tournament.candidates
+    for candidate in (
+        replace(model, model_version_id="a" * 64),
+        replace(model, scoring_rule="retrospective_best_error"),
+        replace(model, security_id="005930"),
+        replace(model, target_period="2026Q4"),
+        replace(model, unit="KRW"),
+        replace(model, accounting_basis="consolidated_net_income"),
+    ):
+        forged_tournament = replace(
+            bundle.tournament,
+            candidates=tuple(sorted((candidate, benchmark), key=lambda item: item.candidate_id)),
+        )
+        forged = replace(bundle, tournament=forged_tournament)
+        with pytest.raises(ForecastTournamentError, match="caller bundle"):
+            persist_forecast_opportunity_bundle(
+                forged, output_root=tmp_path / "repo", frozen_forecast_path=source
+            )
+
+
+def test_future_cutoff_and_candidate_set_mutation_fail_closed(tmp_path: Path) -> None:
+    source = _copy_source(tmp_path)
+    bundle = _bundle(source)
+    model = bundle.tournament.candidates[0]
+    with pytest.raises(ForecastTournamentError, match="cutoff"):
+        replace(model, input_cutoff=model.registered_at + timedelta(seconds=1))
+    forged = replace(
+        bundle,
+        tournament=replace(bundle.tournament, candidates=(bundle.tournament.candidates[1],)),
+    )
+    with pytest.raises(ForecastTournamentError, match="caller bundle"):
+        persist_forecast_opportunity_bundle(
+            forged, output_root=tmp_path / "repo", frozen_forecast_path=source
+        )
+
+
 def test_registration_after_origin_and_integer_forecast_fail_closed() -> None:
     candidate = _bundle().tournament.candidates[0]
     with pytest.raises(ForecastTournamentError, match="origin"):
@@ -114,12 +157,13 @@ def test_candidate_alias_and_single_candidate_winner_fail_closed() -> None:
             bundle.tournament,
             candidates=(first, replace(second, candidate_id="lagged-gp affine_ols")),
         )
+    eligible = next(item for item in (first, second) if item.tournament_eligible)
     with pytest.raises(ForecastTournamentError, match="at least two"):
         replace(
             bundle.tournament,
-            candidates=(first,),
-            comparable_candidate_ids=(first.candidate_id,),
-            winner_candidate_id=first.candidate_id,
+            candidates=(eligible,),
+            comparable_candidate_ids=(eligible.candidate_id,),
+            winner_candidate_id=eligible.candidate_id,
             outcome_scoring_available=False,
         )
 
@@ -164,6 +208,97 @@ def test_unknown_field_and_bool_number_alias_fail_closed(tmp_path: Path) -> None
         (directory / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         with pytest.raises(ForecastTournamentError):
             replay_forecast_opportunity_bundle(directory, frozen_forecast_path=source)
+
+
+def test_frozen_source_unknown_bool_alias_and_malformed_utf8_fail_closed(tmp_path: Path) -> None:
+    payload = json.loads(SOURCE.read_text(encoding="utf-8"))
+    mutations = (
+        lambda value: value.__setitem__("unknown", True),
+        lambda value: value["forecast"].__setitem__("q3_evaluated", 0),
+    )
+    for index, mutation in enumerate(mutations):
+        changed = copy.deepcopy(payload)
+        mutation(changed)
+        path = tmp_path / f"source-{index}.json"
+        path.write_text(json.dumps(changed), encoding="utf-8")
+        with pytest.raises(ForecastTournamentError):
+            _bundle(path)
+    malformed = tmp_path / "malformed.json"
+    malformed.write_bytes(b"\xff\xfe")
+    with pytest.raises(ForecastTournamentError, match="malformed UTF-8/JSON"):
+        _bundle(malformed)
+
+
+def test_replay_performs_no_network_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = _copy_source(tmp_path)
+    bundle = _bundle(source)
+    directory = persist_forecast_opportunity_bundle(
+        bundle, output_root=tmp_path / "repo", frozen_forecast_path=source
+    )
+
+    def forbidden_network(*args, **kwargs):
+        raise AssertionError("network access is forbidden during replay")
+
+    import socket
+
+    monkeypatch.setattr(socket, "socket", forbidden_network)
+    assert replay_forecast_opportunity_bundle(directory, frozen_forecast_path=source) == bundle
+
+
+def test_atomic_publication_failure_leaves_no_partial_or_foreign_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _copy_source(tmp_path)
+    bundle = _bundle(source)
+    repository = tmp_path / "repo"
+    foreign = repository / "foreign-artifact"
+    foreign.mkdir(parents=True)
+    (foreign / "owned.txt").write_text("foreign", encoding="utf-8")
+
+    def fail_rename(source_path: Path, target_path: Path) -> None:
+        raise OSError("injected atomic commit failure")
+
+    monkeypatch.setattr(tournament_module.os, "rename", fail_rename)
+    with pytest.raises(OSError, match="injected"):
+        persist_forecast_opportunity_bundle(
+            bundle, output_root=repository, frozen_forecast_path=source
+        )
+    assert (foreign / "owned.txt").read_text(encoding="utf-8") == "foreign"
+    assert {item.name for item in repository.iterdir()} == {"foreign-artifact"}
+
+
+def test_wrong_artifact_root_binding_is_rejected(tmp_path: Path) -> None:
+    source = _copy_source(tmp_path)
+    bundle = _bundle(source)
+    directory = persist_forecast_opportunity_bundle(
+        bundle, output_root=tmp_path / "repo", frozen_forecast_path=source
+    )
+    renamed = directory.with_name("wrong-root")
+    directory.rename(renamed)
+    with pytest.raises(ForecastTournamentError, match="directory identity"):
+        replay_forecast_opportunity_bundle(renamed, frozen_forecast_path=source)
+
+
+def test_cli_records_real_six_cell_acceptance(tmp_path: Path, capsys) -> None:
+    source = _copy_source(tmp_path)
+    result = cli_main(
+        [
+            "--frozen-forecast", str(source),
+            "--market-snapshot-id", MARKET_ID,
+            "--research-snapshot-id", RESEARCH_ID,
+            "--evaluation-date", "2026-08-25",
+            "--captured-at", CAPTURED.isoformat(),
+            "--output", str(tmp_path / "acceptance"),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert result == 0
+    assert len(payload["opportunities"]) == 6
+    assert payload["eligible_candidate_ids"] == [
+        "previous_reported_quarter_gross_profit_persistence"
+    ]
+    assert payload["winner_candidate_id"] is None
+    assert payload["overall_ranking_available"] is False
 
 
 def test_symlink_source_escape_fails_closed(tmp_path: Path) -> None:
