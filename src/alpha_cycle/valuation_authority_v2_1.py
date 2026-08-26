@@ -1,0 +1,1618 @@
+"""Replayable valuation and scenario/payoff authority for Decision System v2.1.
+
+This boundary deliberately separates canonical source replay from valuation eligibility.  A
+legacy ``ValuationEvidenceSnapshot`` may contain useful normalized OpenDART rows, but it cannot
+certify its own share counts or capital structure.  The artifact produced here therefore uses
+the independently replayed live market/research snapshots for class-A actuals and records the
+legacy valuation snapshot as class-B evidence only.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import math
+import os
+import tempfile
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
+from enum import StrEnum
+from pathlib import Path
+from typing import cast
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+
+from alpha_cycle.data.research import RevisionPolicy
+from alpha_cycle.intelligence.valuation import METRIC_SPECS, ValuationEvidenceSnapshot
+from alpha_cycle.live_typed_source_revalidation_v2_1 import (
+    revalidate_market_snapshot,
+    revalidate_research_snapshot,
+)
+from alpha_cycle.providers.opendart import REPORT_PERIODS, normalize_listed_stock_code
+from alpha_cycle.providers.tossinvest import MarketPrice
+
+SCHEMA_VERSION = 1
+REPOSITORY_NAME = "valuation_authority_v2_1"
+PARSER_ID = "alpha_cycle.valuation_authority_v2_1"
+PARSER_VERSION = "1.0.0"
+KOREA_TZ = ZoneInfo("Asia/Seoul")
+MAX_PRICE_AGE_CALENDAR_DAYS = 4
+EXPLICIT_ACTUAL_ALIASES = {
+    "net_income": {
+        "ifrsfullprofitloss": 100,
+        "dartprofitloss": 100,
+        "당기순이익손실": 100,
+        "당기순이익": 100,
+        "profitloss": 100,
+        "ifrsfullprofitlossattributabletoownersofparent": 120,
+    },
+    "equity": {
+        "ifrsfullequity": 100,
+        "자본총계": 100,
+        "equity": 100,
+    },
+    "cash": {
+        "ifrsfullcashandcashequivalents": 100,
+        "현금및현금성자산": 100,
+        "cashandcashequivalents": 100,
+    },
+}
+
+
+class ValuationAuthorityError(ValueError):
+    """Raised when source bytes or a persisted authority artifact fail replay."""
+
+
+class AuthorityClass(StrEnum):
+    AUTHORITATIVE_SOURCE = "A_authoritative_persisted_source"
+    REPLAYABLE_SEMANTICALLY_INSUFFICIENT = "B_replayable_semantically_insufficient"
+    DERIVED_FROM_AUTHORITY = "C_derived_from_A"
+    MODEL_ASSUMPTION = "D_model_assumption"
+    UNSUPPORTED = "E_unsupported_unknown"
+
+
+class ValuationMethod(StrEnum):
+    TRAILING_PE = "trailing_pe"
+    FORWARD_PE = "forward_pe"
+    EV_EBITDA = "ev_ebitda"
+    PRICE_TO_BOOK = "price_to_book"
+    DCF = "dcf"
+
+
+class EligibilityStatus(StrEnum):
+    ELIGIBLE = "eligible"
+    BLOCKED = "blocked"
+
+
+class ScenarioLabel(StrEnum):
+    BEAR = "bear"
+    BASE = "base"
+    BULL = "bull"
+
+
+@dataclass(frozen=True)
+class ValuationInput:
+    role: str
+    authority_class: AuthorityClass
+    source_evidence_id: str | None
+    value: float | None
+    unit: str | None
+    currency: str | None
+    period_end: date | None
+    available_date: date | None
+    statement_basis: str | None
+    blocker: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.role, "role")
+        if self.source_evidence_id is not None:
+            _sha(self.source_evidence_id, "source_evidence_id")
+        if self.value is not None:
+            if type(self.value) is not float:
+                raise ValueError("valuation input value must be a canonical float")
+            if not math.isfinite(self.value):
+                raise ValueError("valuation input value must be finite")
+        if self.available_date is not None and self.period_end is None:
+            raise ValueError("available_date requires period_end")
+        if self.blocker is not None:
+            _text(self.blocker, "blocker")
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "role": self.role,
+            "authority_class": self.authority_class.value,
+            "source_evidence_id": self.source_evidence_id,
+            "value": self.value,
+            "unit": self.unit,
+            "currency": self.currency,
+            "period_end": self.period_end.isoformat() if self.period_end else None,
+            "available_date": self.available_date.isoformat() if self.available_date else None,
+            "statement_basis": self.statement_basis,
+            "blocker": self.blocker,
+        }
+
+
+@dataclass(frozen=True)
+class MethodEligibility:
+    method: ValuationMethod
+    status: EligibilityStatus
+    required_roles: tuple[str, ...]
+    blockers: tuple[str, ...]
+    numerator: float | None = None
+    denominator: float | None = None
+    derived_multiple: float | None = None
+
+    def __post_init__(self) -> None:
+        _unique_texts(self.required_roles, "required_roles")
+        _unique_texts(self.blockers, "blockers")
+        values = (self.numerator, self.denominator, self.derived_multiple)
+        if any(value is not None and type(value) is not float for value in values):
+            raise ValueError("method arithmetic must use canonical floats")
+        if any(value is not None and not math.isfinite(value) for value in values):
+            raise ValueError("method arithmetic must be finite")
+        if self.status is EligibilityStatus.ELIGIBLE:
+            if self.blockers or any(value is None for value in values):
+                raise ValueError("eligible method requires complete arithmetic and no blockers")
+        elif any(value is not None for value in values):
+            raise ValueError("blocked method cannot expose valuation arithmetic")
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "method": self.method.value,
+            "status": self.status.value,
+            "required_roles": list(self.required_roles),
+            "blockers": list(self.blockers),
+            "numerator": self.numerator,
+            "denominator": self.denominator,
+            "derived_multiple": self.derived_multiple,
+        }
+
+
+@dataclass(frozen=True)
+class ScenarioAuthority:
+    label: ScenarioLabel
+    horizon_trading_days: int
+    conditions: tuple[str, ...]
+    source_evidence_ids: tuple[str, ...]
+    model_assumption_ids: tuple[str, ...]
+    valuation_method: ValuationMethod | None
+    implied_value_per_share: float | None
+    upside_downside: float | None
+    blockers: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if self.horizon_trading_days not in {60, 120, 250}:
+            raise ValueError("scenario horizon must be 60, 120, or 250 trading days")
+        _unique_texts(self.conditions, "conditions")
+        _unique_shas(self.source_evidence_ids, "source_evidence_ids")
+        _unique_shas(self.model_assumption_ids, "model_assumption_ids")
+        _unique_texts(self.blockers, "blockers")
+        if not self.conditions:
+            raise ValueError("scenario conditions are required")
+        if self.implied_value_per_share is None:
+            if self.upside_downside is not None or not self.blockers:
+                raise ValueError("unavailable scenario value requires blockers")
+        else:
+            if self.valuation_method is None or self.blockers:
+                raise ValueError("scenario value requires an eligible method")
+            if type(self.implied_value_per_share) is not float or (
+                self.upside_downside is not None and type(self.upside_downside) is not float
+            ):
+                raise ValueError("scenario arithmetic must use canonical floats")
+            if not math.isfinite(self.implied_value_per_share) or self.implied_value_per_share <= 0:
+                raise ValueError("scenario value must be positive and finite")
+            if self.upside_downside is None or not math.isfinite(self.upside_downside):
+                raise ValueError("available scenario value requires finite upside/downside")
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "label": self.label.value,
+            "horizon_trading_days": self.horizon_trading_days,
+            "conditions": list(self.conditions),
+            "source_evidence_ids": list(self.source_evidence_ids),
+            "model_assumption_ids": list(self.model_assumption_ids),
+            "valuation_method": self.valuation_method.value if self.valuation_method else None,
+            "implied_value_per_share": self.implied_value_per_share,
+            "upside_downside": self.upside_downside,
+            "blockers": list(self.blockers),
+            "probability": None,
+            "target_price_claimed": False,
+        }
+
+
+@dataclass(frozen=True)
+class ValuationAuthorityArtifact:
+    captured_at: datetime
+    evaluation_date: date
+    security_id: str
+    market_snapshot_id: str
+    research_snapshot_id: str
+    legacy_valuation_snapshot_id: str | None
+    legacy_valuation_content_id: str | None
+    inputs: tuple[ValuationInput, ...]
+    methods: tuple[MethodEligibility, ...]
+    scenarios: tuple[ScenarioAuthority, ...]
+
+    def __post_init__(self) -> None:
+        _aware(self.captured_at, "captured_at")
+        _text(self.security_id, "security_id")
+        _sha(self.market_snapshot_id, "market_snapshot_id")
+        _sha(self.research_snapshot_id, "research_snapshot_id")
+        if self.legacy_valuation_snapshot_id is not None:
+            _sha(self.legacy_valuation_snapshot_id, "legacy_valuation_snapshot_id")
+        if self.legacy_valuation_content_id is not None:
+            _sha(self.legacy_valuation_content_id, "legacy_valuation_content_id")
+        if (self.legacy_valuation_snapshot_id is None) != (
+            self.legacy_valuation_content_id is None
+        ):
+            raise ValueError("legacy valuation identity and content binding must coexist")
+        roles = tuple(item.role for item in self.inputs)
+        if roles != tuple(sorted(set(roles))):
+            raise ValueError("valuation inputs must have unique sorted roles")
+        method_ids = tuple(item.method.value for item in self.methods)
+        expected_methods = tuple(sorted(item.value for item in ValuationMethod))
+        if method_ids != expected_methods:
+            raise ValueError("valuation artifact requires every method exactly once")
+        labels = tuple(item.label.value for item in self.scenarios)
+        if labels != ("bear", "base", "bull"):
+            raise ValueError("valuation artifact requires ordered bear/base/bull scenarios")
+        if any(
+            item.horizon_trading_days != self.scenarios[0].horizon_trading_days
+            for item in self.scenarios
+        ):
+            raise ValueError("scenarios must share one horizon")
+
+    def payload_without_id(self) -> dict[str, object]:
+        eligible = [
+            item.method.value for item in self.methods if item.status is EligibilityStatus.ELIGIBLE
+        ]
+        blockers = sorted(
+            {blocker for method in self.methods for blocker in method.blockers}
+            | {blocker for scenario in self.scenarios for blocker in scenario.blockers}
+            | {item.blocker for item in self.inputs if item.blocker is not None}
+        )
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "parser_id": PARSER_ID,
+            "parser_version": PARSER_VERSION,
+            "captured_at": self.captured_at.isoformat(),
+            "evaluation_date": self.evaluation_date.isoformat(),
+            "security_id": self.security_id,
+            "market_snapshot_id": self.market_snapshot_id,
+            "research_snapshot_id": self.research_snapshot_id,
+            "legacy_valuation_snapshot_id": self.legacy_valuation_snapshot_id,
+            "legacy_valuation_content_id": self.legacy_valuation_content_id,
+            "inputs": [item.payload() for item in self.inputs],
+            "methods": [item.payload() for item in self.methods],
+            "scenarios": [item.payload() for item in self.scenarios],
+            "eligible_methods": eligible,
+            "blockers": blockers,
+            "share_count_authority_established": False,
+            "capital_structure_authority_established": False,
+            "forward_estimate_authority_established": False,
+            "price_implied_requirement_authority_established": bool(eligible),
+            "payoff_surface_authority_established": all(
+                not item.blockers for item in self.scenarios
+            ),
+            "probabilities_available": False,
+            "probability_weighted_expected_return_available": False,
+            "market_consensus_authority_established": False,
+            "target_price_authority_established": False,
+            "decision_score_enabled": False,
+            "automatic_execution_enabled": False,
+        }
+
+    @property
+    def artifact_id(self) -> str:
+        return _digest(_canonical(self.payload_without_id()))
+
+    def payload(self) -> dict[str, object]:
+        return {**self.payload_without_id(), "artifact_id": self.artifact_id}
+
+
+def build_valuation_authority(
+    *,
+    market_directory: str | Path,
+    research_directory: str | Path,
+    security_id: str,
+    captured_at: datetime,
+    legacy_valuation_directory: str | Path | None = None,
+    horizon_trading_days: int = 250,
+) -> ValuationAuthorityArtifact:
+    """Replay canonical upstream sources and derive honest fail-closed eligibility."""
+
+    _aware(captured_at, "captured_at")
+    market = revalidate_market_snapshot(market_directory)
+    research = revalidate_research_snapshot(research_directory)
+    if research.market_snapshot_id != market.snapshot_id:
+        raise ValuationAuthorityError("research/market source generation mismatch")
+    if market.provider != "tossinvest-readonly":
+        raise ValuationAuthorityError("market provider is not approved for valuation authority")
+    if captured_at < max(market.captured_at, research.captured_at):
+        raise ValuationAuthorityError("authority capture cannot precede source captures")
+    if captured_at.astimezone(KOREA_TZ).date() < research.evaluation_date:
+        raise ValuationAuthorityError("authority capture cannot precede evaluation date")
+
+    prices = [item for item in market.prices if item.symbol == security_id]
+    if len(prices) != 1:
+        raise ValuationAuthorityError("security requires exactly one trusted market price")
+    price = prices[0]
+    if price.currency.strip().upper() != "KRW":
+        raise ValuationAuthorityError("trusted market price must be denominated in KRW")
+    if not math.isfinite(float(price.last_price)) or price.last_price <= 0:
+        raise ValuationAuthorityError("trusted market price must be strictly positive")
+    if price.timestamp > captured_at:
+        raise ValuationAuthorityError("market price cannot follow authority capture")
+    price_date = price.timestamp.astimezone(KOREA_TZ).date()
+    if price_date > research.evaluation_date:
+        raise ValuationAuthorityError("market price is after the evaluation date")
+    if (research.evaluation_date - price_date).days > MAX_PRICE_AGE_CALENDAR_DAYS:
+        raise ValuationAuthorityError("market price is stale for the evaluation date")
+    _require_raw_price_binding(market.raw_prices, price)
+
+    legacy_id, legacy_content_id = _legacy_binding(
+        legacy_valuation_directory,
+        market_snapshot_id=market.snapshot_id,
+        research_snapshot_id=research.snapshot_id,
+        evaluation_date=research.evaluation_date,
+        security_id=security_id,
+        captured_at=captured_at,
+    )
+    statement_basis = _opendart_statement_basis(research.raw_opendart, security_id)
+    actuals = _trusted_actual_inputs(
+        research.financials,
+        research.raw_opendart,
+        security_id,
+        research.snapshot_id,
+        evaluation_date=research.evaluation_date,
+        revision_policy=research.revision_policy,
+        statement_basis=statement_basis,
+    )
+    inputs = tuple(
+        sorted(
+            (
+                ValuationInput(
+                    role="current_price",
+                    authority_class=AuthorityClass.AUTHORITATIVE_SOURCE,
+                    source_evidence_id=market.snapshot_id,
+                    value=float(price.last_price),
+                    unit="KRW/share",
+                    currency="KRW",
+                    period_end=price_date,
+                    available_date=price_date,
+                    statement_basis="market_observation",
+                ),
+                *actuals,
+                ValuationInput(
+                    role="share_count",
+                    authority_class=(
+                        AuthorityClass.REPLAYABLE_SEMANTICALLY_INSUFFICIENT
+                        if legacy_id
+                        else AuthorityClass.UNSUPPORTED
+                    ),
+                    source_evidence_id=legacy_content_id,
+                    value=None,
+                    unit="shares",
+                    currency=None,
+                    period_end=None,
+                    available_date=None,
+                    statement_basis=None,
+                    blocker="valuation_share_count_authority_missing",
+                ),
+                ValuationInput(
+                    role="complete_debt",
+                    authority_class=AuthorityClass.UNSUPPORTED,
+                    source_evidence_id=research.snapshot_id,
+                    value=None,
+                    unit="KRW",
+                    currency="KRW",
+                    period_end=None,
+                    available_date=None,
+                    statement_basis="CFS coverage not independently certified",
+                    blocker="valuation_capital_structure_authority_missing",
+                ),
+                ValuationInput(
+                    role="forward_eps",
+                    authority_class=AuthorityClass.UNSUPPORTED,
+                    source_evidence_id=None,
+                    value=None,
+                    unit="KRW/share",
+                    currency="KRW",
+                    period_end=None,
+                    available_date=None,
+                    statement_basis=None,
+                    blocker="forward_estimate_authority_missing",
+                ),
+                ValuationInput(
+                    role="forecast_and_wacc_assumptions",
+                    authority_class=AuthorityClass.UNSUPPORTED,
+                    source_evidence_id=None,
+                    value=None,
+                    unit=None,
+                    currency=None,
+                    period_end=None,
+                    available_date=None,
+                    statement_basis=None,
+                    blocker="valuation_method_ineligible",
+                ),
+            ),
+            key=lambda item: item.role,
+        )
+    )
+    methods = _blocked_methods(inputs)
+    scenario_blockers = ("scenario_input_authority_missing", "valuation_method_ineligible")
+    scenarios = tuple(
+        ScenarioAuthority(
+            label=label,
+            horizon_trading_days=horizon_trading_days,
+            conditions=(
+                f"{label.value} conditional operating and valuation assumptions unavailable",
+            ),
+            source_evidence_ids=(market.snapshot_id, research.snapshot_id),
+            model_assumption_ids=(),
+            valuation_method=None,
+            implied_value_per_share=None,
+            upside_downside=None,
+            blockers=scenario_blockers,
+        )
+        for label in ScenarioLabel
+    )
+    return ValuationAuthorityArtifact(
+        captured_at=captured_at,
+        evaluation_date=research.evaluation_date,
+        security_id=security_id,
+        market_snapshot_id=market.snapshot_id,
+        research_snapshot_id=research.snapshot_id,
+        legacy_valuation_snapshot_id=legacy_id,
+        legacy_valuation_content_id=legacy_content_id,
+        inputs=inputs,
+        methods=methods,
+        scenarios=scenarios,
+    )
+
+
+def persist_valuation_authority(
+    artifact: ValuationAuthorityArtifact,
+    *,
+    output_root: str | Path,
+    market_directory: str | Path,
+    research_directory: str | Path,
+    legacy_valuation_directory: str | Path | None,
+) -> Path:
+    rebuilt = build_valuation_authority(
+        market_directory=market_directory,
+        research_directory=research_directory,
+        legacy_valuation_directory=legacy_valuation_directory,
+        security_id=artifact.security_id,
+        captured_at=artifact.captured_at,
+        horizon_trading_days=artifact.scenarios[0].horizon_trading_days,
+    )
+    if rebuilt != artifact:
+        raise ValuationAuthorityError(
+            "caller-created valuation authority differs from upstream replay"
+        )
+    root = _plain_repository(Path(output_root), create=True)
+    timestamp = artifact.captured_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    directory = root / f"{timestamp}__{artifact.artifact_id[:12]}"
+    if directory.exists() or directory.is_symlink():
+        replayed = replay_persisted_valuation_authority(
+            directory,
+            market_directory=market_directory,
+            research_directory=research_directory,
+            legacy_valuation_directory=legacy_valuation_directory,
+            expected_artifact_id=artifact.artifact_id,
+        )
+        if replayed != artifact:
+            raise ValuationAuthorityError("duplicate immutable identity conflicts with content")
+        return directory
+    temporary = Path(tempfile.mkdtemp(prefix=f".{directory.name}.", dir=root))
+    try:
+        payload_bytes = (
+            json.dumps(artifact.payload(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode()
+        manifest = {
+            "schema_version": SCHEMA_VERSION,
+            "artifact_id": artifact.artifact_id,
+            "captured_at": artifact.captured_at.isoformat(),
+            "evaluation_date": artifact.evaluation_date.isoformat(),
+            "security_id": artifact.security_id,
+            "files": {"authority.json": _digest(payload_bytes)},
+        }
+        _write_new(temporary / "authority.json", payload_bytes)
+        _write_new(
+            temporary / "manifest.json",
+            (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(),
+        )
+        _fsync_directory(temporary)
+        os.rename(temporary, directory)
+        _fsync_directory(root)
+    finally:
+        if temporary.exists():
+            for child in temporary.iterdir():
+                child.unlink()
+            temporary.rmdir()
+    return directory
+
+
+def persist_valuation_authority_batch(
+    artifacts: tuple[ValuationAuthorityArtifact, ...],
+    *,
+    output_root: str | Path,
+    market_directory: str | Path,
+    research_directory: str | Path,
+    legacy_valuation_directory: str | Path | None,
+) -> tuple[Path, ...]:
+    """Publish a fully preflighted batch through one atomic directory rename."""
+
+    root = _plain_repository(Path(output_root), create=True)
+    if not artifacts:
+        raise ValuationAuthorityError("valuation authority batch cannot be empty")
+    for artifact in artifacts:
+        rebuilt = build_valuation_authority(
+            market_directory=market_directory,
+            research_directory=research_directory,
+            legacy_valuation_directory=legacy_valuation_directory,
+            security_id=artifact.security_id,
+            captured_at=artifact.captured_at,
+            horizon_trading_days=artifact.scenarios[0].horizon_trading_days,
+        )
+        if _canonical(rebuilt.payload()) != _canonical(artifact.payload()):
+            raise ValuationAuthorityError(
+                "caller-created valuation authority differs from upstream replay"
+            )
+    batch_id = _digest(_canonical([artifact.artifact_id for artifact in artifacts]))
+    batch = root / f"batch__{batch_id[:12]}"
+    names = tuple(
+        f"{artifact.captured_at.astimezone(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
+        f"__{artifact.artifact_id[:12]}"
+        for artifact in artifacts
+    )
+    if len(names) != len(set(names)):
+        raise ValuationAuthorityError("valuation authority batch contains duplicate identities")
+    if batch.exists() or batch.is_symlink():
+        batch_root = _plain_directory(batch)
+        if {child.name for child in batch_root.iterdir()} != set(names):
+            raise ValuationAuthorityError("immutable valuation batch conflicts with content")
+        targets = tuple(batch_root / name for name in names)
+        for artifact, target in zip(artifacts, targets, strict=True):
+            replayed = replay_persisted_valuation_authority(
+                target,
+                market_directory=market_directory,
+                research_directory=research_directory,
+                legacy_valuation_directory=legacy_valuation_directory,
+                expected_artifact_id=artifact.artifact_id,
+            )
+            if _canonical(replayed.payload()) != _canonical(artifact.payload()):
+                raise ValuationAuthorityError(
+                    "duplicate immutable identity conflicts with content"
+                )
+        return targets
+
+    temporary = Path(tempfile.mkdtemp(prefix=f".{batch.name}.", dir=root))
+    try:
+        for artifact, name in zip(artifacts, names, strict=True):
+            artifact_directory = temporary / name
+            artifact_directory.mkdir()
+            payload_bytes = (
+                json.dumps(artifact.payload(), ensure_ascii=False, indent=2, sort_keys=True)
+                + "\n"
+            ).encode()
+            manifest = {
+                "schema_version": SCHEMA_VERSION,
+                "artifact_id": artifact.artifact_id,
+                "captured_at": artifact.captured_at.isoformat(),
+                "evaluation_date": artifact.evaluation_date.isoformat(),
+                "security_id": artifact.security_id,
+                "files": {"authority.json": _digest(payload_bytes)},
+            }
+            _write_new(artifact_directory / "authority.json", payload_bytes)
+            _write_new(
+                artifact_directory / "manifest.json",
+                (
+                    json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True)
+                    + "\n"
+                ).encode(),
+            )
+            _fsync_directory(artifact_directory)
+        _fsync_directory(temporary)
+        os.rename(temporary, batch)
+        _fsync_directory(root)
+    finally:
+        if temporary.exists():
+            for directory in temporary.iterdir():
+                for child in directory.iterdir():
+                    child.unlink()
+                directory.rmdir()
+            temporary.rmdir()
+    return tuple(batch / name for name in names)
+
+
+def replay_persisted_valuation_authority(
+    directory: str | Path,
+    *,
+    market_directory: str | Path,
+    research_directory: str | Path,
+    legacy_valuation_directory: str | Path | None,
+    expected_artifact_id: str | None = None,
+) -> ValuationAuthorityArtifact:
+    """Replay persisted claims against mandatory canonical upstream bytes."""
+
+    persisted = _load_persisted_valuation_authority(
+        directory, expected_artifact_id=expected_artifact_id
+    )
+    rebuilt = build_valuation_authority(
+        market_directory=market_directory,
+        research_directory=research_directory,
+        legacy_valuation_directory=legacy_valuation_directory,
+        security_id=persisted.security_id,
+        captured_at=persisted.captured_at,
+        horizon_trading_days=persisted.scenarios[0].horizon_trading_days,
+    )
+    if rebuilt != persisted:
+        raise ValuationAuthorityError("persisted authority differs from upstream replay")
+    return persisted
+
+
+def _load_persisted_valuation_authority(
+    directory: str | Path,
+    *,
+    expected_artifact_id: str | None = None,
+) -> ValuationAuthorityArtifact:
+    root = _plain_directory(Path(directory))
+    manifest_bytes = _read_plain(root / "manifest.json", root)
+    authority_bytes = _read_plain(root / "authority.json", root)
+    manifest = _object(_load_json(manifest_bytes, "manifest"), "manifest")
+    _exact(
+        manifest,
+        {"schema_version", "artifact_id", "captured_at", "evaluation_date", "security_id", "files"},
+        "manifest",
+    )
+    if (
+        type(manifest.get("schema_version")) is not int
+        or manifest.get("schema_version") != SCHEMA_VERSION
+    ):
+        raise ValuationAuthorityError("unsupported valuation authority schema")
+    files = _object(manifest.get("files"), "files")
+    if files != {"authority.json": _digest(authority_bytes)}:
+        raise ValuationAuthorityError("authority file digest mismatch")
+    payload = _object(_load_json(authority_bytes, "authority"), "authority")
+    artifact = _artifact_from_payload(payload)
+    declared = str(manifest.get("artifact_id", ""))
+    if artifact.artifact_id != declared or payload.get("artifact_id") != declared:
+        raise ValuationAuthorityError("authority canonical identity mismatch")
+    if (
+        manifest.get("captured_at") != artifact.captured_at.isoformat()
+        or manifest.get("evaluation_date") != artifact.evaluation_date.isoformat()
+        or manifest.get("security_id") != artifact.security_id
+    ):
+        raise ValuationAuthorityError("authority manifest identity mismatch")
+    if expected_artifact_id is not None and declared != expected_artifact_id:
+        raise ValuationAuthorityError("unexpected valuation authority identity")
+    expected_name = (
+        f"{artifact.captured_at.astimezone(UTC).strftime('%Y%m%dT%H%M%S%fZ')}__{declared[:12]}"
+    )
+    if root.name != expected_name:
+        raise ValuationAuthorityError("authority directory identity mismatch")
+    return artifact
+
+
+def revalidate_persisted_valuation_authority(
+    directory: str | Path,
+    *,
+    market_directory: str | Path,
+    research_directory: str | Path,
+    legacy_valuation_directory: str | Path | None,
+    expected_artifact_id: str | None = None,
+) -> ValuationAuthorityArtifact:
+    """Rebuild an authority artifact from its upstream bytes and require exact equality."""
+
+    persisted = replay_persisted_valuation_authority(
+        directory,
+        market_directory=market_directory,
+        research_directory=research_directory,
+        legacy_valuation_directory=legacy_valuation_directory,
+        expected_artifact_id=expected_artifact_id,
+    )
+    return persisted
+
+
+def _opendart_statement_basis(raw: object, security_id: str) -> str | None:
+    """Return a statement basis only when canonical raw OpenDART bytes prove it."""
+
+    if not isinstance(raw, dict) or not isinstance(raw.get(security_id), dict):
+        return None
+    security = cast(dict[str, object], raw[security_id])
+    requested: str | None = None
+    request = security.get("request")
+    if isinstance(request, dict):
+        candidate = str(request.get("fs_div", "")).strip().upper()
+        if candidate in {"CFS", "OFS"}:
+            requested = candidate
+    financial = security.get("financial")
+    if not isinstance(financial, dict):
+        return requested
+    payload = financial.get("financials")
+    if not isinstance(payload, dict) or not isinstance(payload.get("list"), list):
+        return requested
+    rows = [row for row in payload["list"] if isinstance(row, dict)]
+    raw_bases = {str(row.get("fs_div", "")).strip().upper() for row in rows}
+    response_basis = (
+        next(iter(raw_bases)) if len(raw_bases) == 1 and raw_bases <= {"CFS", "OFS"} else None
+    )
+    if raw_bases != {""} and response_basis is None:
+        return None
+    if requested is not None and response_basis is not None and requested != response_basis:
+        return None
+    return requested or response_basis
+
+
+def _metric_score(metric: str, semantic_name: str) -> int:
+    """Match canonical normalized metrics with the repository's established aliases."""
+
+    statement, separator, account = metric.partition(":")
+    if not separator:
+        return 0
+    account = account.split("#", 1)[0].split(":", 1)[0]
+    normalized = "".join(character for character in account.lower() if character.isalnum())
+
+    spec = next(item for item in METRIC_SPECS if item.name == semantic_name)
+    if statement.strip().upper() not in spec.statements:
+        return 0
+    return EXPLICIT_ACTUAL_ALIASES[semantic_name].get(normalized, 0)
+
+
+def _require_raw_price_binding(raw: object, price: MarketPrice) -> None:
+    """Reconstruct the approved provider row and bind it to the normalized price."""
+
+    if not isinstance(raw, dict) or not isinstance(raw.get("result"), list):
+        raise ValuationAuthorityError("raw TossInvest price capture is unavailable")
+    symbol = price.symbol
+    matches = [
+        row
+        for row in raw["result"]
+        if isinstance(row, dict) and str(row.get("symbol", "")).strip().upper() == symbol
+    ]
+    if len(matches) != 1:
+        raise ValuationAuthorityError("raw TossInvest price row is missing or duplicated")
+    row = matches[0]
+    try:
+        raw_price = Decimal(str(row.get("lastPrice", "")))
+        raw_timestamp = datetime.fromisoformat(str(row.get("timestamp", "")))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValuationAuthorityError("raw TossInvest price row is malformed") from exc
+    raw_currency = str(row.get("currency", "")).strip().upper()
+    if raw_timestamp.tzinfo is None or raw_timestamp.utcoffset() is None:
+        raise ValuationAuthorityError("raw TossInvest price timestamp is not timezone-aware")
+    if (
+        raw_price != price.last_price
+        or raw_timestamp != price.timestamp
+        or raw_currency != price.currency.strip().upper()
+    ):
+        raise ValuationAuthorityError("normalized market price differs from raw TossInvest capture")
+
+
+def _trusted_actual_inputs(
+    frame: pd.DataFrame,
+    raw_opendart: object,
+    security_id: str,
+    source_id: str,
+    *,
+    evaluation_date: date,
+    revision_policy: RevisionPolicy,
+    statement_basis: str | None,
+) -> tuple[ValuationInput, ...]:
+    specs = {
+        "trailing_net_income": "net_income",
+        "book_equity": "equity",
+        "cash_and_cash_equivalents": "cash",
+    }
+    company = frame.loc[frame["ticker"].astype(str).eq(security_id)].copy()
+    result: list[ValuationInput] = []
+    for role, semantic_name in specs.items():
+        semantic_scores = (
+            company["metric"]
+            .astype(str)
+            .map(lambda value, name=semantic_name: _metric_score(value, name))
+        )
+        candidates = company.loc[semantic_scores.gt(0)].copy()
+        candidates = candidates.loc[
+            candidates["source"].astype(str).str.strip().str.lower().eq("opendart")
+        ]
+        candidates = candidates.loc[candidates["fiscal_period"].astype(str).eq("FY")]
+        candidates = candidates.loc[
+            candidates["period_end"].astype(str).le(evaluation_date.isoformat())
+            & candidates["available_date"].astype(str).le(evaluation_date.isoformat())
+        ]
+        if not candidates.empty:
+            latest_end = candidates["period_end"].astype(str).max()
+            candidates = candidates.loc[candidates["period_end"].astype(str).eq(latest_end)]
+            eligible_scores = semantic_scores.loc[candidates.index]
+            candidates = candidates.loc[eligible_scores.eq(eligible_scores.max())]
+        if not candidates.empty:
+            ordered = candidates.sort_values(
+                [
+                    "metric",
+                    "period_end",
+                    "fiscal_period",
+                    "available_date",
+                    "revision_sequence",
+                    "retrieved_at",
+                    "revision_id",
+                ],
+                kind="stable",
+            )
+            grouped = ordered.groupby(
+                ["ticker", "metric", "period_end", "fiscal_period"],
+                sort=True,
+                dropna=False,
+                group_keys=False,
+            )
+            candidates = (
+                grouped.head(1)
+                if revision_policy is RevisionPolicy.FIRST_RELEASE
+                else grouped.tail(1)
+            )
+        basis_blocker = (
+            None
+            if statement_basis == "CFS"
+            else f"{role}_statement_basis_"
+            + ("missing" if statement_basis is None else "unsupported")
+        )
+        if candidates.empty or basis_blocker is not None:
+            result.append(
+                ValuationInput(
+                    role,
+                    AuthorityClass.UNSUPPORTED,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    statement_basis,
+                    basis_blocker or f"{role}_authority_missing",
+                )
+            )
+            continue
+        values = pd.to_numeric(candidates["value"], errors="raise").unique()
+        if len(values) != 1:
+            result.append(
+                ValuationInput(
+                    role,
+                    AuthorityClass.UNSUPPORTED,
+                    source_id,
+                    None,
+                    "KRW",
+                    "KRW",
+                    None,
+                    None,
+                    "CFS",
+                    f"{role}_ambiguous",
+                )
+            )
+            continue
+        row = candidates.sort_values("metric", kind="stable").iloc[0]
+        unit = str(row["unit"]).strip().upper()
+        raw_currency = row.get("currency")
+        currency = None if pd.isna(raw_currency) else str(raw_currency).strip().upper()
+        if currency is None and unit == "KRW":
+            currency = "KRW"
+        if unit != "KRW" or currency != "KRW":
+            result.append(
+                ValuationInput(
+                    role,
+                    AuthorityClass.UNSUPPORTED,
+                    source_id,
+                    None,
+                    unit or None,
+                    currency,
+                    None,
+                    None,
+                    "CFS",
+                    f"{role}_currency_or_unit_unsupported",
+                )
+            )
+            continue
+        _require_raw_actual_binding(raw_opendart, security_id, row)
+        result.append(
+            ValuationInput(
+                role=role,
+                authority_class=AuthorityClass.AUTHORITATIVE_SOURCE,
+                source_evidence_id=source_id,
+                value=float(values[0]),
+                unit=unit,
+                currency=currency,
+                period_end=date.fromisoformat(str(row["period_end"])),
+                available_date=date.fromisoformat(str(row["available_date"])),
+                statement_basis="CFS official actual",
+            )
+        )
+    return tuple(result)
+
+
+def _require_raw_actual_binding(raw: object, security_id: str, normalized: pd.Series) -> None:
+    """Reconstruct OpenDART response rows and bind the selected normalized actual."""
+
+    if not isinstance(raw, dict) or not isinstance(raw.get(security_id), dict):
+        raise ValuationAuthorityError("raw OpenDART security capture is unavailable")
+    security = cast(dict[str, object], raw[security_id])
+    corp = security.get("corp")
+    if not isinstance(corp, dict):
+        raise ValuationAuthorityError("raw OpenDART corporation identity is unavailable")
+    raw_stock_code = str(corp.get("stock_code", "")).strip()
+    if not raw_stock_code or normalize_listed_stock_code(raw_stock_code) != security_id:
+        raise ValuationAuthorityError("raw OpenDART security binding mismatch")
+    financial = security.get("financial")
+    if not isinstance(financial, dict):
+        raise ValuationAuthorityError("raw OpenDART financial response is unavailable")
+    company = financial.get("company")
+    if not isinstance(company, dict):
+        raise ValuationAuthorityError("raw OpenDART company identity is unavailable")
+    company_stock_code = str(company.get("stock_code", "")).strip()
+    if company_stock_code and normalize_listed_stock_code(company_stock_code) != security_id:
+        raise ValuationAuthorityError("raw OpenDART company identity mismatch")
+    if str(company.get("acc_mt", "")).strip().zfill(2) != "12":
+        raise ValuationAuthorityError("raw OpenDART company settlement month is not December")
+    request = security.get("request")
+    if not isinstance(request, dict):
+        raise ValuationAuthorityError("raw OpenDART request metadata is unavailable")
+    report_code = str(request.get("report_code", "")).strip()
+    if report_code not in REPORT_PERIODS:
+        raise ValuationAuthorityError("raw OpenDART request report code is unsupported")
+    try:
+        business_year = int(str(request.get("business_year", "")))
+    except ValueError as exc:
+        raise ValuationAuthorityError("raw OpenDART request business year is invalid") from exc
+    payload = financial.get("financials") if isinstance(financial, dict) else None
+    if not isinstance(payload, dict) or payload.get("status") != "000":
+        raise ValuationAuthorityError("raw OpenDART financial response status is not successful")
+    raw_rows = payload.get("list") if isinstance(payload, dict) else None
+    if not isinstance(raw_rows, list):
+        raise ValuationAuthorityError("raw OpenDART financial response is unavailable")
+    reconstructed: list[dict[str, object]] = []
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            raise ValuationAuthorityError("raw OpenDART financial row is not an object")
+        item = _reconstruct_raw_actual(
+            raw_row,
+            security_id,
+            business_year=business_year,
+            report_code=report_code,
+        )
+        if item is not None:
+            reconstructed.append(item)
+    keys = [
+        (
+            str(item["ticker"]),
+            str(item["metric"]),
+            str(item["period_end"]),
+            str(item["fiscal_period"]),
+            cast(int, item["revision_sequence"]),
+        )
+        for item in reconstructed
+    ]
+    if len(keys) != len(set(keys)):
+        raise ValuationAuthorityError("raw OpenDART response contains duplicate canonical facts")
+    raw_currency = normalized.get("currency")
+    normalized_unit = str(normalized["unit"]).strip().upper()
+    normalized_currency = (
+        normalized_unit
+        if pd.isna(raw_currency) and normalized_unit == "KRW"
+        else ("" if pd.isna(raw_currency) else str(raw_currency).strip().upper())
+    )
+    expected = {
+        "ticker": security_id,
+        "metric": str(normalized["metric"]),
+        "period_end": str(normalized["period_end"]),
+        "fiscal_period": str(normalized["fiscal_period"]),
+        "value": Decimal(str(normalized["value"])),
+        "unit": normalized_unit,
+        "currency": normalized_currency,
+        "available_date": str(normalized["available_date"]),
+        "revision_id": str(normalized["revision_id"]),
+        "revision_sequence": int(normalized["revision_sequence"]),
+    }
+    matches = [item for item in reconstructed if item == expected]
+    if len(matches) != 1:
+        raise ValuationAuthorityError(
+            "normalized financial actual differs from raw OpenDART capture"
+        )
+
+
+def _reconstruct_raw_actual(
+    raw: dict[object, object],
+    security_id: str,
+    *,
+    business_year: int,
+    report_code: str,
+) -> dict[str, object] | None:
+    row_stock_code = str(raw.get("stock_code", "")).strip()
+    if row_stock_code and normalize_listed_stock_code(row_stock_code) != security_id:
+        raise ValuationAuthorityError("raw OpenDART financial row security mismatch")
+    echoed_report_code = str(raw.get("reprt_code", "")).strip()
+    if echoed_report_code and echoed_report_code != report_code:
+        raise ValuationAuthorityError("raw OpenDART row report code conflicts with request")
+    echoed_business_year = str(raw.get("bsns_year", "")).strip()
+    if echoed_business_year and echoed_business_year != str(business_year):
+        raise ValuationAuthorityError("raw OpenDART row business year conflicts with request")
+    fiscal_period, month, day = REPORT_PERIODS[report_code]
+    try:
+        period_end = date(business_year, month, day)
+        amount = _opendart_amount(raw.get("thstrm_amount"))
+    except (TypeError, ValueError):
+        raise ValuationAuthorityError("raw OpenDART financial amount is invalid") from None
+    if amount is None:
+        return None
+    receipt = str(raw.get("rcept_no", "")).strip()
+    if len(receipt) != 14 or not receipt.isdigit():
+        raise ValuationAuthorityError("raw OpenDART receipt number is invalid")
+    try:
+        available_date = datetime.strptime(receipt[:8], "%Y%m%d").date()
+    except ValueError:
+        raise ValuationAuthorityError("raw OpenDART receipt date is invalid") from None
+    statement = str(raw.get("sj_div", "")).strip()
+    account_id = str(raw.get("account_id", "")).strip()
+    account_name = str(raw.get("account_nm", "")).strip()
+    if not statement or not account_name:
+        raise ValuationAuthorityError("raw OpenDART statement and account are required")
+    account_key = account_id if account_id not in {"", "-"} else account_name
+    detail = str(raw.get("account_detail", "")).strip()
+    order = str(raw.get("ord", "")).strip()
+    suffix = f":{detail}" if detail and detail != "-" else ""
+    if order:
+        suffix = f"{suffix}#{order}"
+    raw_currency = str(raw.get("currency", "")).strip().upper()
+    if raw_currency != "KRW":
+        raise ValuationAuthorityError("raw OpenDART currency is not KRW")
+    return {
+        "ticker": security_id,
+        "metric": f"{statement}:{account_key}{suffix}",
+        "period_end": period_end.isoformat(),
+        "fiscal_period": fiscal_period,
+        "value": amount,
+        "unit": "KRW",
+        "currency": "KRW",
+        "available_date": available_date.isoformat(),
+        "revision_id": receipt,
+        "revision_sequence": 0,
+    }
+
+
+def _opendart_amount(value: object) -> Decimal | None:
+    text = str(value).strip().replace(",", "")
+    if text in {"", "-", "None", "nan"}:
+        return None
+    negative = text.startswith("(") and text.endswith(")")
+    if negative:
+        text = text[1:-1]
+    try:
+        amount = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError("raw OpenDART amount is invalid") from exc
+    if not amount.is_finite():
+        raise ValueError("raw OpenDART amount must be finite")
+    return -amount if negative else amount
+
+
+def _legacy_binding(
+    directory: str | Path | None,
+    *,
+    market_snapshot_id: str,
+    research_snapshot_id: str,
+    evaluation_date: date,
+    security_id: str,
+    captured_at: datetime,
+) -> tuple[str | None, str | None]:
+    if directory is None:
+        return None, None
+    root = _plain_directory(Path(directory))
+    manifest_bytes = _read_plain(root / "manifest.json", root)
+    manifest = _object(
+        _load_json(manifest_bytes, "legacy valuation manifest"),
+        "legacy valuation manifest",
+    )
+    required = {
+        "schema_version",
+        "snapshot_id",
+        "captured_at",
+        "evaluation_date",
+        "research_snapshot_id",
+        "market_snapshot_id",
+        "files",
+        "symbols",
+        "history_years",
+        "market_cap_complete_count",
+        "valuation_scored_count",
+        "warnings",
+        "valuation_method",
+        "consensus_available",
+        "order_api_enabled",
+    }
+    _exact(manifest, required, "legacy valuation manifest")
+    if (
+        type(manifest["schema_version"]) is not int
+        or manifest["schema_version"] != 1
+        or type(manifest["history_years"]) is not int
+        or type(manifest["market_cap_complete_count"]) is not int
+        or type(manifest["valuation_scored_count"]) is not int
+        or manifest["valuation_method"] != "peer_relative_percentile_shrunk_to_neutral"
+        or manifest["consensus_available"] is not False
+        or manifest["order_api_enabled"] is not False
+    ):
+        raise ValuationAuthorityError("legacy valuation manifest contract mismatch")
+    snapshot_id = str(manifest["snapshot_id"])
+    _sha(snapshot_id, "legacy valuation snapshot_id")
+    legacy_captured_at = datetime.fromisoformat(str(manifest["captured_at"]))
+    _aware(legacy_captured_at, "legacy valuation captured_at")
+    if legacy_captured_at > captured_at:
+        raise ValuationAuthorityError("legacy valuation capture follows authority capture")
+    if (
+        manifest["market_snapshot_id"] != market_snapshot_id
+        or manifest["research_snapshot_id"] != research_snapshot_id
+    ):
+        raise ValuationAuthorityError("legacy valuation source generation mismatch")
+    if manifest["evaluation_date"] != evaluation_date.isoformat():
+        raise ValuationAuthorityError("legacy valuation evaluation date mismatch")
+    symbols = manifest["symbols"]
+    if not isinstance(symbols, list) or security_id not in symbols:
+        raise ValuationAuthorityError("legacy valuation does not contain security")
+    declared = manifest["files"]
+    expected_files = [
+        "shares.csv",
+        "security_values.csv",
+        "financial_history.csv",
+        "valuation_metrics.csv",
+        "raw_valuation.json",
+    ]
+    if declared != expected_files:
+        raise ValuationAuthorityError("legacy valuation file set is not canonical")
+    source_bytes = {name: _read_plain(root / name, root) for name in expected_files}
+    try:
+        snapshot = ValuationEvidenceSnapshot(
+            captured_at=legacy_captured_at,
+            evaluation_date=date.fromisoformat(str(manifest["evaluation_date"])),
+            research_snapshot_id=str(manifest["research_snapshot_id"]),
+            market_snapshot_id=str(manifest["market_snapshot_id"]),
+            history_years=int(str(manifest["history_years"])),
+            shares=_read_legacy_frame(source_bytes["shares.csv"]),
+            security_values=_read_legacy_frame(source_bytes["security_values.csv"]),
+            financial_history=_read_legacy_frame(source_bytes["financial_history.csv"]),
+            valuation_metrics=_read_legacy_frame(source_bytes["valuation_metrics.csv"]),
+            raw_valuation=_object(
+                _load_json(source_bytes["raw_valuation.json"], "legacy raw valuation"),
+                "legacy raw valuation",
+            ),
+            warnings=tuple(str(item) for item in _list(manifest.get("warnings"), "warnings")),
+        )
+    except (KeyError, TypeError, ValueError, pd.errors.ParserError) as exc:
+        raise ValuationAuthorityError("legacy valuation cannot be reconstructed") from exc
+    required_summary_columns = {"ticker", "market_cap_complete", "valuation_score"}
+    if not required_summary_columns.issubset(snapshot.valuation_metrics.columns):
+        raise ValuationAuthorityError("legacy valuation summary schema is incomplete")
+    if snapshot.snapshot_id != snapshot_id:
+        raise ValuationAuthorityError("legacy valuation canonical identity mismatch")
+    expected_symbols = snapshot.valuation_metrics["ticker"].astype(str).tolist()
+    if (
+        manifest["symbols"] != expected_symbols
+        or manifest["warnings"] != list(snapshot.warnings)
+        or manifest["market_cap_complete_count"]
+        != int(snapshot.valuation_metrics["market_cap_complete"].astype(bool).sum())
+        or manifest["valuation_scored_count"]
+        != int(snapshot.valuation_metrics["valuation_score"].notna().sum())
+    ):
+        raise ValuationAuthorityError("legacy valuation manifest summary mismatch")
+    raw = cast(dict[str, object], snapshot.raw_valuation)
+    if (
+        raw.get("source_market_snapshot_id") != market_snapshot_id
+        or raw.get("source_research_snapshot_id") != research_snapshot_id
+    ):
+        raise ValuationAuthorityError("legacy valuation raw lineage mismatch")
+    required_share_columns = {
+        "ticker",
+        "security_class",
+        "issued_shares",
+        "treasury_shares",
+    }
+    if not required_share_columns.issubset(snapshot.shares.columns):
+        raise ValuationAuthorityError("legacy valuation share schema is incomplete")
+    share_rows = snapshot.shares.loc[snapshot.shares["ticker"].astype(str).eq(security_id)]
+    if share_rows.empty:
+        raise ValuationAuthorityError("legacy valuation contains no replayable share evidence")
+    bindings: list[dict[str, object]] = []
+    for name in sorted(declared):
+        if not isinstance(name, str) or Path(name).name != name:
+            raise ValuationAuthorityError("legacy valuation file name is unsafe")
+        content = source_bytes[name]
+        bindings.append({"name": name, "size_bytes": len(content), "sha256": _digest(content)})
+    binding_id = _digest(
+        _canonical(
+            {
+                "manifest_sha256": _digest(manifest_bytes),
+                "files": bindings,
+            }
+        )
+    )
+    return snapshot_id, binding_id
+
+
+def _read_legacy_frame(content: bytes) -> pd.DataFrame:
+    header = pd.read_csv(io.BytesIO(content), nrows=0)
+    string_columns = {
+        column: "string"
+        for column in header.columns
+        if column in {"ticker", "stock_code", "corp_code", "report_code", "symbol"}
+        or column.endswith("_date")
+        or column.endswith("_end")
+    }
+    return pd.read_csv(
+        io.BytesIO(content), dtype=string_columns or None, float_precision="round_trip"
+    )
+
+
+def _blocked_methods(inputs: tuple[ValuationInput, ...]) -> tuple[MethodEligibility, ...]:
+    rows = (
+        (ValuationMethod.DCF, ("forecast_and_wacc_assumptions",), ("valuation_method_ineligible",)),
+        (
+            ValuationMethod.EV_EBITDA,
+            (
+                "current_price",
+                "share_count",
+                "complete_debt",
+                "cash_and_cash_equivalents",
+                "trailing_ebitda",
+            ),
+            (
+                "valuation_share_count_authority_missing",
+                "valuation_capital_structure_authority_missing",
+                "trailing_ebitda_authority_missing",
+            ),
+        ),
+        (
+            ValuationMethod.FORWARD_PE,
+            ("current_price", "forward_eps"),
+            ("forward_estimate_authority_missing",),
+        ),
+        (
+            ValuationMethod.PRICE_TO_BOOK,
+            ("current_price", "share_count", "book_equity"),
+            ("valuation_share_count_authority_missing",),
+        ),
+        (
+            ValuationMethod.TRAILING_PE,
+            ("current_price", "share_count", "trailing_net_income"),
+            ("valuation_share_count_authority_missing",),
+        ),
+    )
+    input_by_role = {item.role: item for item in inputs}
+    result = []
+    for method, required, fixed_blockers in rows:
+        blockers = list(fixed_blockers)
+        for role in required:
+            item = input_by_role.get(role)
+            if item is not None and item.blocker is not None and item.blocker not in blockers:
+                blockers.append(item.blocker)
+        result.append(
+            MethodEligibility(method, EligibilityStatus.BLOCKED, required, tuple(blockers))
+        )
+    return tuple(result)
+
+
+def _artifact_from_payload(payload: dict[str, object]) -> ValuationAuthorityArtifact:
+    expected = {
+        "schema_version",
+        "parser_id",
+        "parser_version",
+        "captured_at",
+        "evaluation_date",
+        "security_id",
+        "market_snapshot_id",
+        "research_snapshot_id",
+        "legacy_valuation_snapshot_id",
+        "legacy_valuation_content_id",
+        "inputs",
+        "methods",
+        "scenarios",
+        "eligible_methods",
+        "blockers",
+        "share_count_authority_established",
+        "capital_structure_authority_established",
+        "forward_estimate_authority_established",
+        "price_implied_requirement_authority_established",
+        "payoff_surface_authority_established",
+        "probabilities_available",
+        "probability_weighted_expected_return_available",
+        "market_consensus_authority_established",
+        "target_price_authority_established",
+        "decision_score_enabled",
+        "automatic_execution_enabled",
+        "artifact_id",
+    }
+    _exact(payload, expected, "authority")
+    boolean_fields = {
+        "share_count_authority_established",
+        "capital_structure_authority_established",
+        "forward_estimate_authority_established",
+        "price_implied_requirement_authority_established",
+        "payoff_surface_authority_established",
+        "probabilities_available",
+        "probability_weighted_expected_return_available",
+        "market_consensus_authority_established",
+        "target_price_authority_established",
+        "decision_score_enabled",
+        "automatic_execution_enabled",
+    }
+    if type(payload.get("schema_version")) is not int or any(
+        type(payload.get(field)) is not bool for field in boolean_fields
+    ):
+        raise ValuationAuthorityError("authority JSON types differ from canonical schema")
+    if (
+        payload.get("schema_version") != SCHEMA_VERSION
+        or payload.get("parser_id") != PARSER_ID
+        or payload.get("parser_version") != PARSER_VERSION
+    ):
+        raise ValuationAuthorityError("authority parser contract mismatch")
+    inputs_raw = _list(payload.get("inputs"), "inputs")
+    methods_raw = _list(payload.get("methods"), "methods")
+    scenarios_raw = _list(payload.get("scenarios"), "scenarios")
+    inputs = tuple(_input_from_payload(_object(item, "input")) for item in inputs_raw)
+    methods = tuple(_method_from_payload(_object(item, "method")) for item in methods_raw)
+    scenarios = tuple(_scenario_from_payload(_object(item, "scenario")) for item in scenarios_raw)
+    artifact = ValuationAuthorityArtifact(
+        captured_at=datetime.fromisoformat(str(payload["captured_at"])),
+        evaluation_date=date.fromisoformat(str(payload["evaluation_date"])),
+        security_id=str(payload["security_id"]),
+        market_snapshot_id=str(payload["market_snapshot_id"]),
+        research_snapshot_id=str(payload["research_snapshot_id"]),
+        legacy_valuation_snapshot_id=cast(str | None, payload["legacy_valuation_snapshot_id"]),
+        legacy_valuation_content_id=cast(str | None, payload["legacy_valuation_content_id"]),
+        inputs=inputs,
+        methods=methods,
+        scenarios=scenarios,
+    )
+    if artifact.payload_without_id() != {
+        key: value for key, value in payload.items() if key != "artifact_id"
+    }:
+        raise ValuationAuthorityError("authority payload is not canonical")
+    return artifact
+
+
+def _input_from_payload(raw: dict[str, object]) -> ValuationInput:
+    _exact(
+        raw,
+        {
+            "role",
+            "authority_class",
+            "source_evidence_id",
+            "value",
+            "unit",
+            "currency",
+            "period_end",
+            "available_date",
+            "statement_basis",
+            "blocker",
+        },
+        "input",
+    )
+    return ValuationInput(
+        str(raw["role"]),
+        AuthorityClass(str(raw["authority_class"])),
+        cast(str | None, raw["source_evidence_id"]),
+        _optional_json_float(raw["value"], "input value"),
+        cast(str | None, raw["unit"]),
+        cast(str | None, raw["currency"]),
+        date.fromisoformat(str(raw["period_end"])) if raw["period_end"] else None,
+        date.fromisoformat(str(raw["available_date"])) if raw["available_date"] else None,
+        cast(str | None, raw["statement_basis"]),
+        cast(str | None, raw["blocker"]),
+    )
+
+
+def _method_from_payload(raw: dict[str, object]) -> MethodEligibility:
+    _exact(
+        raw,
+        {
+            "method",
+            "status",
+            "required_roles",
+            "blockers",
+            "numerator",
+            "denominator",
+            "derived_multiple",
+        },
+        "method",
+    )
+    return MethodEligibility(
+        ValuationMethod(str(raw["method"])),
+        EligibilityStatus(str(raw["status"])),
+        tuple(str(item) for item in _list(raw["required_roles"], "required_roles")),
+        tuple(str(item) for item in _list(raw["blockers"], "blockers")),
+        _optional_json_float(raw["numerator"], "method numerator"),
+        _optional_json_float(raw["denominator"], "method denominator"),
+        _optional_json_float(raw["derived_multiple"], "method derived_multiple"),
+    )
+
+
+def _scenario_from_payload(raw: dict[str, object]) -> ScenarioAuthority:
+    _exact(
+        raw,
+        {
+            "label",
+            "horizon_trading_days",
+            "conditions",
+            "source_evidence_ids",
+            "model_assumption_ids",
+            "valuation_method",
+            "implied_value_per_share",
+            "upside_downside",
+            "blockers",
+            "probability",
+            "target_price_claimed",
+        },
+        "scenario",
+    )
+    if raw["probability"] is not None or raw["target_price_claimed"] is not False:
+        raise ValuationAuthorityError("unsupported scenario authority claim")
+    if type(raw["horizon_trading_days"]) is not int:
+        raise ValuationAuthorityError("scenario horizon must be a canonical integer")
+    method = ValuationMethod(str(raw["valuation_method"])) if raw["valuation_method"] else None
+    return ScenarioAuthority(
+        ScenarioLabel(str(raw["label"])),
+        raw["horizon_trading_days"],
+        tuple(str(item) for item in _list(raw["conditions"], "conditions")),
+        tuple(str(item) for item in _list(raw["source_evidence_ids"], "source_evidence_ids")),
+        tuple(str(item) for item in _list(raw["model_assumption_ids"], "model_assumption_ids")),
+        method,
+        _optional_json_float(raw["implied_value_per_share"], "scenario implied value"),
+        _optional_json_float(raw["upside_downside"], "scenario upside/downside"),
+        tuple(str(item) for item in _list(raw["blockers"], "blockers")),
+    )
+
+
+def _optional_json_float(value: object, field: str) -> float | None:
+    if value is None:
+        return None
+    if type(value) is not float:
+        raise ValuationAuthorityError(f"{field} must be a canonical JSON float")
+    return value
+
+
+def _plain_repository(path: Path, *, create: bool) -> Path:
+    lexical = path.absolute()
+    existing = lexical
+    while not existing.exists() and not existing.is_symlink():
+        parent = existing.parent
+        if parent == existing:
+            raise ValuationAuthorityError("authority repository has no trusted ancestor")
+        existing = parent
+    if existing.is_symlink() or not existing.is_dir() or existing.resolve() != existing.absolute():
+        raise ValuationAuthorityError("authority repository ancestor contains a junction or alias")
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_dir():
+            raise ValuationAuthorityError("authority repository must be a plain directory")
+    elif create:
+        path.mkdir(parents=True)
+    resolved = path.resolve()
+    if resolved != lexical:
+        raise ValuationAuthorityError("authority repository path contains a junction or alias")
+    return resolved
+
+
+def _plain_directory(path: Path) -> Path:
+    if path.is_symlink() or not path.is_dir():
+        raise ValuationAuthorityError("snapshot must be a plain directory")
+    resolved = path.resolve()
+    if resolved != path.absolute():
+        raise ValuationAuthorityError("snapshot path contains a junction or alias")
+    return resolved
+
+
+def _read_plain(path: Path, directory: Path) -> bytes:
+    if path.is_symlink() or not path.is_file() or path.resolve().parent != directory:
+        raise ValuationAuthorityError("source file escapes snapshot directory")
+    return path.read_bytes()
+
+
+def _write_new(path: Path, data: bytes) -> None:
+    with path.open("xb") as handle:
+        handle.write(data)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _canonical(value: object) -> bytes:
+    return json.dumps(
+        value, allow_nan=False, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    ).encode()
+
+
+def _digest(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _sha(value: str, field: str) -> None:
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(f"{field} must be a lowercase SHA-256 digest")
+
+
+def _aware(value: datetime, field: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field} must be timezone-aware")
+
+
+def _text(value: str, field: str) -> None:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be non-empty text")
+
+
+def _unique_texts(values: tuple[str, ...], field: str) -> None:
+    for value in values:
+        _text(value, field)
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field} cannot contain duplicates")
+
+
+def _unique_shas(values: tuple[str, ...], field: str) -> None:
+    for value in values:
+        _sha(value, field)
+    if len(values) != len(set(values)):
+        raise ValueError(f"{field} cannot contain duplicates")
+
+
+def _object(value: object, field: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValuationAuthorityError(f"{field} must be an object")
+    return {str(key): item for key, item in value.items()}
+
+
+def _load_json(content: bytes, field: str) -> object:
+    def unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValuationAuthorityError(f"{field} contains duplicate object key {key!r}")
+            result[key] = value
+        return result
+
+    return json.loads(content, object_pairs_hook=unique_object)
+
+
+def _list(value: object, field: str) -> list[object]:
+    if not isinstance(value, list):
+        raise ValuationAuthorityError(f"{field} must be an array")
+    return value
+
+
+def _exact(value: dict[str, object], expected: set[str], field: str) -> None:
+    if set(value) != expected:
+        raise ValuationAuthorityError(f"{field} fields differ from canonical schema")
+
+
+__all__ = [
+    "AuthorityClass",
+    "EligibilityStatus",
+    "MethodEligibility",
+    "ScenarioAuthority",
+    "ScenarioLabel",
+    "ValuationAuthorityArtifact",
+    "ValuationAuthorityError",
+    "ValuationInput",
+    "ValuationMethod",
+    "build_valuation_authority",
+    "persist_valuation_authority",
+    "persist_valuation_authority_batch",
+    "revalidate_persisted_valuation_authority",
+    "replay_persisted_valuation_authority",
+]
