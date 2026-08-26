@@ -39,7 +39,8 @@ All six records expose the same explicit missing-data policy:
   satisfies the newer generic registration fields; the internal model lacks an exact training
   cutoff timestamp in the immutable legacy artifact.
 - SK hynix 6M/12M and all Samsung horizons have no comparable prospective forecast.
-- Market state is measured but non-directional and cannot become forecast authority.
+- Market/research snapshot IDs remain lineage hints only; because their bytes are not replayed by
+  this boundary, market state and actual trajectory remain unavailable rather than self-authorized.
 - Estimate revision history remains non-authoritative.
 - Dated source-backed catalysts are unavailable.
 - Valuation, price-implied expectation and scenario/payoff remain blocked by #309 conclusions.

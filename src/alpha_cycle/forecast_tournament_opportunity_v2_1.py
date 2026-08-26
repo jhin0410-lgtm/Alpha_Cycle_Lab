@@ -21,12 +21,34 @@ from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_2026q3_numeric_forecas
     LockedNumericForecast,
     load_locked_numeric_forecast,
 )
+from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_2026q3_prospective_feature import (
+    FrozenProspectiveFeatureVector,
+    ProspectiveSourceCapture,
+    load_prospective_feature_vector,
+    load_prospective_source_capture,
+    load_selected_estimator_artifact,
+)
+from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_selected_estimator_freeze import (
+    FrozenSelectedEstimatorFullFit,
+)
 
 SCHEMA_VERSION = 1
 PARSER_ID = "alpha_cycle.forecast_tournament_opportunity_v2_1"
 PARSER_VERSION = "1.0.0"
 SUPPORTED_SECURITIES = ("000660", "005930")
 SUPPORTED_HORIZONS = (63, 126, 252)
+DEFAULT_FEATURE = Path(
+    "data/private/research/skhynix-company-gp-ex-ante-2026q3-prospective/"
+    "feature-vector-139d50940b27582dbaa9206989439c7b9253d75d65e12e45bcb7a14512214bda.json"
+)
+DEFAULT_ESTIMATOR = Path(
+    "data/private/research/skhynix-company-gp-ex-ante-selected-estimator/"
+    "selected-estimator-4ddf0e7206fcbb6a58ba2e7fcb93b48bf79195171dfc96a894481dbfa612a2d1.json"
+)
+DEFAULT_SOURCE_CAPTURE_DIRECTORY = Path(
+    "data/private/research/skhynix-company-gp-ex-ante-2026q3-prospective/"
+    "source-capture-81be10f546a65c6f2e89ec8b82779c7ac2c529846750e95320c1cb8e0980db5a"
+)
 
 
 class ForecastTournamentError(ValueError):
@@ -321,6 +343,10 @@ class ForecastOpportunityBundle:
     market_snapshot_id: str
     research_snapshot_id: str
     frozen_forecast_bytes_sha256: str
+    frozen_feature_bytes_sha256: str
+    frozen_estimator_bytes_sha256: str
+    frozen_source_capture_bytes_sha256: str
+    frozen_source_raw_bytes_sha256: str
     tournament: ForecastTournament
     opportunities: tuple[HorizonOpportunity, ...]
 
@@ -329,6 +355,10 @@ class ForecastOpportunityBundle:
         _sha_text(self.market_snapshot_id, "market_snapshot_id")
         _sha_text(self.research_snapshot_id, "research_snapshot_id")
         _sha_text(self.frozen_forecast_bytes_sha256, "frozen_forecast_bytes_sha256")
+        _sha_text(self.frozen_feature_bytes_sha256, "frozen_feature_bytes_sha256")
+        _sha_text(self.frozen_estimator_bytes_sha256, "frozen_estimator_bytes_sha256")
+        _sha_text(self.frozen_source_capture_bytes_sha256, "frozen_source_capture_bytes_sha256")
+        _sha_text(self.frozen_source_raw_bytes_sha256, "frozen_source_raw_bytes_sha256")
         keys = tuple((item.security_id, item.horizon_months) for item in self.opportunities)
         expected = tuple(
             (security, horizon)
@@ -354,6 +384,10 @@ class ForecastOpportunityBundle:
             "market_snapshot_id": self.market_snapshot_id,
             "research_snapshot_id": self.research_snapshot_id,
             "frozen_forecast_bytes_sha256": self.frozen_forecast_bytes_sha256,
+            "frozen_feature_bytes_sha256": self.frozen_feature_bytes_sha256,
+            "frozen_estimator_bytes_sha256": self.frozen_estimator_bytes_sha256,
+            "frozen_source_capture_bytes_sha256": self.frozen_source_capture_bytes_sha256,
+            "frozen_source_raw_bytes_sha256": self.frozen_source_raw_bytes_sha256,
             "tournament": {
                 **self.tournament.payload_without_id(),
                 "snapshot_id": self.tournament.snapshot_id,
@@ -382,16 +416,62 @@ def build_forecast_opportunity_bundle(
     evaluation_date: date,
     market_snapshot_id: str,
     research_snapshot_id: str,
+    frozen_feature_path: str | Path = DEFAULT_FEATURE,
+    selected_estimator_path: str | Path = DEFAULT_ESTIMATOR,
+    source_capture_directory: str | Path = DEFAULT_SOURCE_CAPTURE_DIRECTORY,
 ) -> ForecastOpportunityBundle:
     """Replay the frozen 2026Q3 experiment and build an honest six-cell evidence map."""
 
     _aware(captured_at, "captured_at")
+    if captured_at.date() < evaluation_date:
+        raise ForecastTournamentError("bundle capture cannot precede evaluation date")
     content = _read_frozen_once(Path(frozen_forecast_path))
     frozen = _load_frozen_from_exact_bytes(content)
+    lineage = _load_exact_upstream_lineage(
+        feature_path=Path(frozen_feature_path),
+        estimator_path=Path(selected_estimator_path),
+        source_capture_directory=Path(source_capture_directory),
+    )
+    feature, estimator, capture, feature_bytes, estimator_bytes, capture_bytes, raw_bytes = lineage
+    if (
+        feature.evidence_id != frozen.feature_vector_evidence_id
+        or estimator.evidence_id != frozen.selected_estimator_evidence_id
+        or capture.evidence_id != frozen.source_capture_evidence_id
+        or feature.selected_estimator_evidence_id != estimator.evidence_id
+        or feature.source_capture_evidence_id != capture.evidence_id
+    ):
+        raise ForecastTournamentError("frozen forecast upstream identity binding mismatch")
+    recomputed = estimator.raw_unit_intercept + sum(
+        coefficient * value
+        for coefficient, value in zip(
+            estimator.raw_unit_coefficients, feature.feature_values, strict=True
+        )
+    )
+    if not math.isclose(
+        recomputed, frozen.selected_forecast_krw_million, rel_tol=1e-12, abs_tol=1e-6
+    ) or not math.isclose(
+        feature.feature_values[0],
+        frozen.benchmark_forecast_krw_million,
+        rel_tol=1e-12,
+        abs_tol=1e-6,
+    ):
+        raise ForecastTournamentError("frozen forecast does not reconstruct from exact inputs")
     if frozen.q3_source_outcome_loaded or frozen.q3_evaluated:
         raise ForecastTournamentError("frozen 2026Q3 artifact unexpectedly contains outcome state")
-    model = _candidate_from_frozen(frozen, content, benchmark=False)
-    benchmark = _candidate_from_frozen(frozen, content, benchmark=True)
+    model = _candidate_from_frozen(
+        frozen,
+        content,
+        input_cutoff=feature.source_available_at,
+        feature_cutoff=feature.frozen_at,
+        benchmark=False,
+    )
+    benchmark = _candidate_from_frozen(
+        frozen,
+        content,
+        input_cutoff=feature.source_available_at,
+        feature_cutoff=feature.frozen_at,
+        benchmark=True,
+    )
     candidates = tuple(sorted((model, benchmark), key=lambda item: item.candidate_id))
     # These remain valid frozen scientific forecasts, but the legacy artifact lacks an exact
     # training-cutoff timestamp required by this newer generic registration contract.
@@ -425,6 +505,10 @@ def build_forecast_opportunity_bundle(
         market_snapshot_id=market_snapshot_id,
         research_snapshot_id=research_snapshot_id,
         frozen_forecast_bytes_sha256=_digest(content),
+        frozen_feature_bytes_sha256=_digest(feature_bytes),
+        frozen_estimator_bytes_sha256=_digest(estimator_bytes),
+        frozen_source_capture_bytes_sha256=_digest(capture_bytes),
+        frozen_source_raw_bytes_sha256=_digest(raw_bytes),
         tournament=tournament,
         opportunities=opportunities,
     )
@@ -435,6 +519,9 @@ def persist_forecast_opportunity_bundle(
     *,
     output_root: str | Path,
     frozen_forecast_path: str | Path,
+    frozen_feature_path: str | Path = DEFAULT_FEATURE,
+    selected_estimator_path: str | Path = DEFAULT_ESTIMATOR,
+    source_capture_directory: str | Path = DEFAULT_SOURCE_CAPTURE_DIRECTORY,
 ) -> Path:
     """Rebuild from frozen upstream bytes before one immutable directory publication."""
 
@@ -444,6 +531,9 @@ def persist_forecast_opportunity_bundle(
         evaluation_date=bundle.evaluation_date,
         market_snapshot_id=bundle.market_snapshot_id,
         research_snapshot_id=bundle.research_snapshot_id,
+        frozen_feature_path=frozen_feature_path,
+        selected_estimator_path=selected_estimator_path,
+        source_capture_directory=source_capture_directory,
     )
     if _canonical(rebuilt.payload()) != _canonical(bundle.payload()):
         raise ForecastTournamentError("caller bundle differs from frozen upstream replay")
@@ -458,6 +548,9 @@ def persist_forecast_opportunity_bundle(
             destination,
             frozen_forecast_path=frozen_forecast_path,
             expected_artifact_id=bundle.artifact_id,
+            frozen_feature_path=frozen_feature_path,
+            selected_estimator_path=selected_estimator_path,
+            source_capture_directory=source_capture_directory,
         )
         if _canonical(replayed.payload()) != _canonical(bundle.payload()):
             raise ForecastTournamentError("immutable bundle identity conflicts with content")
@@ -491,6 +584,9 @@ def replay_forecast_opportunity_bundle(
     *,
     frozen_forecast_path: str | Path,
     expected_artifact_id: str | None = None,
+    frozen_feature_path: str | Path = DEFAULT_FEATURE,
+    selected_estimator_path: str | Path = DEFAULT_ESTIMATOR,
+    source_capture_directory: str | Path = DEFAULT_SOURCE_CAPTURE_DIRECTORY,
 ) -> ForecastOpportunityBundle:
     root = _plain_directory(Path(directory))
     manifest_bytes = _read_plain(root / "manifest.json", root)
@@ -507,7 +603,9 @@ def replay_forecast_opportunity_bundle(
         {
             "schema_version", "parser_id", "parser_version", "captured_at",
             "evaluation_date", "market_snapshot_id", "research_snapshot_id",
-            "frozen_forecast_bytes_sha256", "tournament", "opportunities",
+            "frozen_forecast_bytes_sha256", "frozen_feature_bytes_sha256",
+            "frozen_estimator_bytes_sha256", "frozen_source_capture_bytes_sha256",
+            "frozen_source_raw_bytes_sha256", "tournament", "opportunities",
             "missing_data_policy", "partial_ranking_available", "overall_ranking_available",
             "probabilities_available", "valuation_available", "price_implied_available",
             "scenario_payoff_available", "current_state_status", "stale_ready_state_allowed",
@@ -526,6 +624,9 @@ def replay_forecast_opportunity_bundle(
         evaluation_date=date.fromisoformat(str(payload["evaluation_date"])),
         market_snapshot_id=str(payload["market_snapshot_id"]),
         research_snapshot_id=str(payload["research_snapshot_id"]),
+        frozen_feature_path=frozen_feature_path,
+        selected_estimator_path=selected_estimator_path,
+        source_capture_directory=source_capture_directory,
     )
     if _canonical(rebuilt.payload()) != _canonical(payload):
         raise ForecastTournamentError("persisted bundle differs from frozen upstream replay")
@@ -539,7 +640,12 @@ def replay_forecast_opportunity_bundle(
 
 
 def _candidate_from_frozen(
-    frozen: LockedNumericForecast, content: bytes, *, benchmark: bool
+    frozen: LockedNumericForecast,
+    content: bytes,
+    *,
+    input_cutoff: datetime,
+    feature_cutoff: datetime,
+    benchmark: bool,
 ) -> ProspectiveCandidate:
     candidate_id = frozen.benchmark_id if benchmark else frozen.selected_candidate_id
     value = (
@@ -574,8 +680,8 @@ def _candidate_from_frozen(
             frozen.feature_vector_evidence_id,
             frozen.source_capture_evidence_id,
         ),
-        input_cutoff=frozen.forecast_locked_at,
-        feature_cutoff=frozen.forecast_locked_at,
+        input_cutoff=input_cutoff,
+        feature_cutoff=feature_cutoff,
         training_cutoff=None,
         registered_at=frozen.forecast_locked_at,
         forecast_origin=frozen.forecast_origin,
@@ -631,9 +737,9 @@ def _opportunity(
         ),
         OpportunityDimension(
             "market_state",
-            EvidenceStatus.MEASURED_BUT_NON_DIRECTIONAL,
+            EvidenceStatus.UNAVAILABLE,
             (market_snapshot_id,),
-            "technical_state_is_not_forecast_authority",
+            "market_snapshot_bytes_not_replayed_at_opportunity_boundary",
         ),
         OpportunityDimension(
             "price_implied_expectation",
@@ -750,6 +856,179 @@ def _load_frozen_from_exact_bytes(content: bytes) -> LockedNumericForecast:
         exact = Path(temporary) / "frozen.json"
         exact.write_bytes(content)
         return load_locked_numeric_forecast(exact)
+
+
+def _load_exact_upstream_lineage(
+    *,
+    feature_path: Path,
+    estimator_path: Path,
+    source_capture_directory: Path,
+) -> tuple[
+    FrozenProspectiveFeatureVector,
+    FrozenSelectedEstimatorFullFit,
+    ProspectiveSourceCapture,
+    bytes,
+    bytes,
+    bytes,
+    bytes,
+]:
+    feature_bytes = _read_frozen_once(feature_path)
+    estimator_bytes = _read_frozen_once(estimator_path)
+    capture_root = _plain_directory(source_capture_directory)
+    capture_bytes = _read_plain(capture_root / "capture.json", capture_root)
+    raw_root = _plain_directory(capture_root / "raw")
+    raw_bytes = _read_plain(raw_root / "2026Q2.json", raw_root)
+    _load_json(raw_bytes, "raw OpenDART capture")
+    _validate_upstream_schemas(feature_bytes, estimator_bytes, capture_bytes)
+    with tempfile.TemporaryDirectory(prefix="alpha-cycle-lineage-replay-") as temporary:
+        root = Path(temporary)
+        feature_file = root / "feature.json"
+        estimator_file = root / "estimator.json"
+        capture_directory = root / "capture"
+        raw_directory = capture_directory / "raw"
+        raw_directory.mkdir(parents=True)
+        feature_file.write_bytes(feature_bytes)
+        estimator_file.write_bytes(estimator_bytes)
+        (capture_directory / "capture.json").write_bytes(capture_bytes)
+        (raw_directory / "2026Q2.json").write_bytes(raw_bytes)
+        capture_pointer = _object(
+            _load_json(capture_bytes, "source capture"), "source capture"
+        )
+        capture_pointer["artifact_directory"] = str(capture_directory)
+        pointer = root / "capture-pointer.json"
+        pointer.write_text(json.dumps(capture_pointer), encoding="utf-8")
+        feature = load_prospective_feature_vector(feature_file)
+        estimator = load_selected_estimator_artifact(estimator_file)
+        capture, _ = load_prospective_source_capture(pointer)
+    if (
+        feature.source_captured_payload_bytes_sha256 != _digest(raw_bytes)
+        or capture.captured_payload_bytes_sha256 != _digest(raw_bytes)
+        or feature.source_raw_payload_sha256 != capture.raw_payload_sha256
+    ):
+        raise ForecastTournamentError("feature/source capture raw byte binding mismatch")
+    return (
+        feature,
+        estimator,
+        capture,
+        feature_bytes,
+        estimator_bytes,
+        capture_bytes,
+        raw_bytes,
+    )
+
+
+def _validate_upstream_schemas(
+    feature_bytes: bytes, estimator_bytes: bytes, capture_bytes: bytes
+) -> None:
+    feature_root = _object(_load_json(feature_bytes, "feature"), "feature")
+    _exact(feature_root, {"schema_version", "status", "feature_vector"}, "feature")
+    if type(feature_root["schema_version"]) is not int or feature_root["schema_version"] != 1:
+        raise ForecastTournamentError("feature schema version is noncanonical")
+    feature = _object(feature_root["feature_vector"], "feature body")
+    _exact(
+        feature,
+        {
+            "contract_evidence_id", "evidence_id", "feature_values", "forecast_origin",
+            "frozen_at", "historical_execution_evidence_id", "numeric_forward_forecast_enabled",
+            "predictors", "prospective_feature_vector_frozen", "prospective_forecast_run",
+            "protocol_evidence_id", "q1_used_for_selection", "q3_evaluated",
+            "q3_source_outcome_loaded", "q3_target_read", "selected_estimator_evidence_id",
+            "source_available_at", "source_capture_evidence_id",
+            "source_captured_payload_bytes_sha256", "source_period", "source_raw_payload_sha256",
+            "source_receipt_date", "source_receipt_no", "status", "target_period",
+        },
+        "feature body",
+    )
+    _exact_booleans(
+        feature,
+        {
+            "numeric_forward_forecast_enabled": False,
+            "prospective_feature_vector_frozen": True,
+            "prospective_forecast_run": False,
+            "q1_used_for_selection": False,
+            "q3_evaluated": False,
+            "q3_source_outcome_loaded": False,
+            "q3_target_read": False,
+        },
+        "feature",
+    )
+    if not isinstance(feature["feature_values"], list) or any(
+        type(value) is not float for value in feature["feature_values"]
+    ):
+        raise ForecastTournamentError("feature values must be canonical floats")
+    estimator_root = _object(_load_json(estimator_bytes, "estimator"), "estimator")
+    _exact(
+        estimator_root, {"schema_version", "status", "selected_estimator"}, "estimator"
+    )
+    if (
+        type(estimator_root["schema_version"]) is not int
+        or estimator_root["schema_version"] != 1
+    ):
+        raise ForecastTournamentError("estimator schema version is noncanonical")
+    estimator = _object(estimator_root["selected_estimator"], "estimator body")
+    _exact(
+        estimator,
+        {
+            "backtest_evidence_id", "combined_bundle_evidence_id", "condition_number",
+            "contract_evidence_id", "design_rank", "estimator", "estimator_freeze_evidence_id",
+            "evidence_id", "execution_evidence_id", "historical_benchmark_mae_krw_million",
+            "historical_relative_mae_improvement", "historical_selected_candidate_mae_krw_million",
+            "numeric_forward_forecast_enabled", "parameter_count", "predictor_means",
+            "predictor_scales", "predictors", "prospective_feature_vector_frozen",
+            "prospective_forecast_run", "q1_used_for_selection", "q3_evaluated",
+            "q3_source_outcome_loaded", "q3_target_read", "raw_target_capture_evidence_id",
+            "raw_unit_coefficients", "raw_unit_intercept", "residual_degrees_of_freedom",
+            "scaling_ddof", "scope_evidence_id", "selected_candidate_id",
+            "standardized_coefficients", "status", "target_join_evidence_id",
+            "target_source_evidence_id", "training_mae_krw_million", "training_periods",
+            "training_rmse_krw_million", "training_row_count",
+        },
+        "estimator body",
+    )
+    _exact_booleans(
+        estimator,
+        {
+            "numeric_forward_forecast_enabled": False,
+            "prospective_feature_vector_frozen": False,
+            "prospective_forecast_run": False,
+            "q1_used_for_selection": False,
+            "q3_evaluated": False,
+            "q3_source_outcome_loaded": False,
+            "q3_target_read": False,
+        },
+        "estimator",
+    )
+    for field in (
+        "design_rank",
+        "parameter_count",
+        "residual_degrees_of_freedom",
+        "scaling_ddof",
+        "training_row_count",
+    ):
+        if type(estimator[field]) is not int:
+            raise ForecastTournamentError(f"estimator integer field is noncanonical: {field}")
+    capture_root = _object(_load_json(capture_bytes, "source capture"), "source capture")
+    _exact(capture_root, {"schema_version", "status", "capture"}, "source capture")
+    if type(capture_root["schema_version"]) is not int or capture_root["schema_version"] != 1:
+        raise ForecastTournamentError("source capture schema version is noncanonical")
+    capture = _object(capture_root["capture"], "source capture body")
+    _exact(
+        capture,
+        {
+            "captured_at", "captured_payload_bytes_sha256", "contract_evidence_id",
+            "evidence_id", "forecast_origin", "historical_execution_evidence_id",
+            "raw_payload_sha256", "source_period", "status", "target_period",
+        },
+        "source capture body",
+    )
+
+
+def _exact_booleans(
+    value: dict[str, object], expected: dict[str, bool], field: str
+) -> None:
+    for name, expected_value in expected.items():
+        if type(value[name]) is not bool or value[name] is not expected_value:
+            raise ForecastTournamentError(f"{field} boolean field drifted: {name}")
 
 
 def _plain_file(path: Path) -> Path:

@@ -44,6 +44,21 @@ def _copy_source(tmp_path: Path) -> Path:
     return target
 
 
+def _copy_lineage(tmp_path: Path) -> tuple[Path, Path, Path]:
+    feature = tmp_path / "feature.json"
+    estimator = tmp_path / "estimator.json"
+    capture = tmp_path / "capture"
+    feature.write_bytes(tournament_module.DEFAULT_FEATURE.read_bytes())
+    estimator.write_bytes(tournament_module.DEFAULT_ESTIMATOR.read_bytes())
+    (capture / "raw").mkdir(parents=True)
+    source_capture = tournament_module.DEFAULT_SOURCE_CAPTURE_DIRECTORY
+    (capture / "capture.json").write_bytes((source_capture / "capture.json").read_bytes())
+    (capture / "raw" / "2026Q2.json").write_bytes(
+        (source_capture / "raw" / "2026Q2.json").read_bytes()
+    )
+    return feature, estimator, capture
+
+
 def test_real_frozen_forecast_registers_two_outcome_blind_candidates() -> None:
     bundle = _bundle()
     tournament = bundle.tournament
@@ -102,6 +117,44 @@ def test_source_mutation_after_registration_fails_replay(tmp_path: Path) -> None
         replay_forecast_opportunity_bundle(directory, frozen_forecast_path=source)
 
 
+@pytest.mark.parametrize("target", ["feature", "estimator", "raw"])
+def test_each_upstream_generation_mutation_fails_replay(tmp_path: Path, target: str) -> None:
+    source = _copy_source(tmp_path)
+    feature, estimator, capture = _copy_lineage(tmp_path)
+    bundle = build_forecast_opportunity_bundle(
+        frozen_forecast_path=source,
+        frozen_feature_path=feature,
+        selected_estimator_path=estimator,
+        source_capture_directory=capture,
+        captured_at=CAPTURED,
+        evaluation_date=date(2026, 8, 25),
+        market_snapshot_id=MARKET_ID,
+        research_snapshot_id=RESEARCH_ID,
+    )
+    directory = persist_forecast_opportunity_bundle(
+        bundle,
+        output_root=tmp_path / "repo",
+        frozen_forecast_path=source,
+        frozen_feature_path=feature,
+        selected_estimator_path=estimator,
+        source_capture_directory=capture,
+    )
+    path = {
+        "feature": feature,
+        "estimator": estimator,
+        "raw": capture / "raw" / "2026Q2.json",
+    }[target]
+    path.write_bytes(path.read_bytes() + b" ")
+    with pytest.raises((ForecastTournamentError, ValueError)):
+        replay_forecast_opportunity_bundle(
+            directory,
+            frozen_forecast_path=source,
+            frozen_feature_path=feature,
+            selected_estimator_path=estimator,
+            source_capture_directory=capture,
+        )
+
+
 def test_model_candidate_and_scoring_rule_substitution_cannot_publish(tmp_path: Path) -> None:
     source = _copy_source(tmp_path)
     bundle = _bundle(source)
@@ -147,6 +200,17 @@ def test_registration_after_origin_and_integer_forecast_fail_closed() -> None:
         replace(candidate, registered_at=candidate.forecast_origin + timedelta(seconds=1))
     with pytest.raises(ForecastTournamentError, match="canonical finite float"):
         replace(candidate, forecast_value=int(candidate.forecast_value))
+
+
+def test_bundle_capture_cannot_predate_evaluation_date() -> None:
+    with pytest.raises(ForecastTournamentError, match="precede evaluation"):
+        build_forecast_opportunity_bundle(
+            frozen_forecast_path=SOURCE,
+            captured_at=CAPTURED,
+            evaluation_date=date(2026, 8, 26),
+            market_snapshot_id=MARKET_ID,
+            research_snapshot_id=RESEARCH_ID,
+        )
 
 
 def test_candidate_alias_and_single_candidate_winner_fail_closed() -> None:
