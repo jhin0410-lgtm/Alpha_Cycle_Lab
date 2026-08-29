@@ -207,9 +207,17 @@ def synthetic_lineage(tmp_path_factory: pytest.TempPathFactory):
         )
     )
     (capture_directory / "raw" / "2026Q2.json").write_bytes(raw_bytes)
+    original_evidence_id = tournament_module.EXPECTED_FROZEN_FORECAST_EVIDENCE_ID
+    original_bytes_sha256 = tournament_module.EXPECTED_FROZEN_FORECAST_BYTES_SHA256
+    tournament_module.EXPECTED_FROZEN_FORECAST_EVIDENCE_ID = forecast.evidence_id
+    tournament_module.EXPECTED_FROZEN_FORECAST_BYTES_SHA256 = hashlib.sha256(
+        forecast_path.read_bytes()
+    ).hexdigest()
     TEST_PATHS = (forecast_path, feature_path, estimator_path, capture_directory)
     yield
     TEST_PATHS = None
+    tournament_module.EXPECTED_FROZEN_FORECAST_EVIDENCE_ID = original_evidence_id
+    tournament_module.EXPECTED_FROZEN_FORECAST_BYTES_SHA256 = original_bytes_sha256
 
 
 def _test_paths() -> tuple[Path, Path, Path, Path]:
@@ -426,6 +434,21 @@ def test_bundle_capture_cannot_predate_evaluation_date() -> None:
         )
 
 
+def test_bundle_capture_uses_korean_market_date() -> None:
+    forecast, feature, estimator, capture = _test_paths()
+    bundle = build_forecast_opportunity_bundle(
+        frozen_forecast_path=forecast,
+        frozen_feature_path=feature,
+        selected_estimator_path=estimator,
+        source_capture_directory=capture,
+        captured_at=datetime(2026, 8, 24, 16, 0, tzinfo=UTC),
+        evaluation_date=date(2026, 8, 25),
+        market_snapshot_id=MARKET_ID,
+        research_snapshot_id=RESEARCH_ID,
+    )
+    assert bundle.evaluation_date == date(2026, 8, 25)
+
+
 def test_candidate_alias_and_single_candidate_winner_fail_closed() -> None:
     bundle = _bundle()
     first, second = bundle.tournament.candidates
@@ -500,6 +523,20 @@ def test_frozen_source_unknown_bool_alias_and_malformed_utf8_fail_closed(tmp_pat
     malformed.write_bytes(b"\xff\xfe")
     with pytest.raises(ForecastTournamentError, match="malformed UTF-8/JSON"):
         _bundle(malformed)
+
+
+def test_self_hashed_forecast_lineage_mutation_is_not_registered_identity(
+    tmp_path: Path,
+) -> None:
+    source = _copy_source(tmp_path)
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    body = payload["forecast"]
+    body["contract_evidence_id"] = "d" * 64
+    body_without_id = {key: value for key, value in body.items() if key != "evidence_id"}
+    body["evidence_id"] = numeric_module._sha(body_without_id)
+    source.write_bytes(numeric_module._canonical_bytes(payload))
+    with pytest.raises(ForecastTournamentError, match="registered immutable identity"):
+        _bundle(source)
 
 
 @pytest.mark.parametrize(

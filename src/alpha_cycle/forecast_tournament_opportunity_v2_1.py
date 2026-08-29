@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from enum import StrEnum
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from alpha_cycle.intelligence.sk_hynix_company_gp_ex_ante_2026q3_numeric_forecast import (
     LockedNumericForecast,
@@ -37,6 +38,13 @@ PARSER_ID = "alpha_cycle.forecast_tournament_opportunity_v2_1"
 PARSER_VERSION = "1.0.0"
 SUPPORTED_SECURITIES = ("000660", "005930")
 SUPPORTED_HORIZONS = (63, 126, 252)
+EXPECTED_FROZEN_FORECAST_EVIDENCE_ID = (
+    "1fd34ba0f43bc2fbc296a6823f2f313296955d8a3860994b7757eb6e23dad468"
+)
+EXPECTED_FROZEN_FORECAST_BYTES_SHA256 = (
+    "7a87374e2e0ec484a9b758a7cc5b0b2389ace8bd359ce161d3d8455c37a2b049"
+)
+_KOREA_TZ = ZoneInfo("Asia/Seoul")
 DEFAULT_FEATURE = Path(
     "data/private/research/skhynix-company-gp-ex-ante-2026q3-prospective/"
     "feature-vector-139d50940b27582dbaa9206989439c7b9253d75d65e12e45bcb7a14512214bda.json"
@@ -423,10 +431,16 @@ def build_forecast_opportunity_bundle(
     """Replay the frozen 2026Q3 experiment and build an honest six-cell evidence map."""
 
     _aware(captured_at, "captured_at")
-    if captured_at.date() < evaluation_date:
+    if captured_at.astimezone(_KOREA_TZ).date() < evaluation_date:
         raise ForecastTournamentError("bundle capture cannot precede evaluation date")
     content = _read_frozen_once(Path(frozen_forecast_path))
     frozen = _load_frozen_from_exact_bytes(content)
+    if _digest(content) != EXPECTED_FROZEN_FORECAST_BYTES_SHA256:
+        raise ForecastTournamentError(
+            "frozen forecast bytes are not the registered immutable identity"
+        )
+    if frozen.evidence_id != EXPECTED_FROZEN_FORECAST_EVIDENCE_ID:
+        raise ForecastTournamentError("frozen forecast evidence identity drifted")
     lineage = _load_exact_upstream_lineage(
         feature_path=Path(frozen_feature_path),
         estimator_path=Path(selected_estimator_path),
@@ -439,6 +453,14 @@ def build_forecast_opportunity_bundle(
         or capture.evidence_id != frozen.source_capture_evidence_id
         or feature.selected_estimator_evidence_id != estimator.evidence_id
         or feature.source_capture_evidence_id != capture.evidence_id
+        or frozen.protocol_evidence_id != feature.protocol_evidence_id
+        or frozen.forecast_origin != feature.forecast_origin
+        or frozen.forecast_origin != capture.forecast_origin
+        or frozen.target_period != feature.target_period
+        or frozen.target_period != capture.target_period
+        or frozen.selected_candidate_id != estimator.selected_candidate_id
+        or frozen.predictors != feature.predictors
+        or frozen.predictors != estimator.predictors
     ):
         raise ForecastTournamentError("frozen forecast upstream identity binding mismatch")
     recomputed = estimator.raw_unit_intercept + sum(
