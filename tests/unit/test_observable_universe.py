@@ -214,13 +214,23 @@ def test_newly_available_newly_missing_and_stale() -> None:
     available1 = observation(2.0, at=T1)
     assert (
         compare_universe_snapshots(
-            snapshot(obs=(missing0,)), snapshot(cutoff=T1, obs=(available1,), version="2")
+            snapshot(
+                obs=(missing0,),
+                members=(member(available=(), unavailable=("market_return", "consensus")),),
+            ),
+            snapshot(cutoff=T1, obs=(available1,), version="2"),
         )[0].state
         is ChangeState.NEWLY_AVAILABLE
     )
     assert (
         compare_universe_snapshots(
-            snapshot(obs=(available0,)), snapshot(cutoff=T1, obs=(missing1,), version="2")
+            snapshot(obs=(available0,)),
+            snapshot(
+                cutoff=T1,
+                obs=(missing1,),
+                version="2",
+                members=(member(available=(), unavailable=("market_return", "consensus")),),
+            ),
         )[0].state
         is ChangeState.NEWLY_MISSING
     )
@@ -243,6 +253,24 @@ def test_missing_evidence_is_explicit_and_cannot_become_value() -> None:
     assert missing.evidence == ()
     with pytest.raises(ObservableUniverseError, match="null value"):
         replace(missing, value=0.0)
+
+
+def test_observation_cannot_promote_upstream_maturity_or_conflict_with_membership() -> None:
+    low_maturity = evidence(
+        maturity=EvidenceMaturity.CITED_CONTEXT,
+        authority="cited context only",
+    )
+    with pytest.raises(ObservableUniverseError, match="cannot exceed"):
+        replace(
+            observation(1.0),
+            maturity=EvidenceMaturity.INDEPENDENTLY_VALIDATED_AUTHORITY,
+            evidence=(low_maturity,),
+        )
+    with pytest.raises(ObservableUniverseError, match="availability conflicts"):
+        snapshot(
+            obs=(observation(1.0, dimension="consensus"),),
+            members=(member(available=(), unavailable=("market_return", "consensus")),),
+        )
 
 
 def test_macro_and_verified_flow_remain_descriptive_upstream_evidence() -> None:
@@ -401,6 +429,7 @@ def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidat
         snapshot(
             cutoff=T1,
             version="2",
+            members=(member(available=(), unavailable=("market_return", "consensus")),),
             obs=(
                 observation(
                     None,

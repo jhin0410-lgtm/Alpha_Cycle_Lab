@@ -198,6 +198,14 @@ class MeasuredObservation:
                 raise ObservableUniverseError(
                     "observation available_at cannot precede referenced evidence"
                 )
+            maturity_rank = {item: rank for rank, item in enumerate(EvidenceMaturity)}
+            if any(
+                maturity_rank[item.maturity] < maturity_rank[self.maturity]
+                for item in self.evidence
+            ):
+                raise ObservableUniverseError(
+                    "observation maturity cannot exceed its upstream evidence maturity"
+                )
             if len({item.reference_id for item in self.evidence}) != len(self.evidence):
                 raise ObservableUniverseError("evidence references cannot repeat")
 
@@ -247,18 +255,41 @@ class ObservableUniverseSnapshot:
             raise ObservableUniverseError("observable universe requires at least one member")
         _validate_members(self.members)
         _unique_text(self.source_evidence_refs, "source_evidence_refs")
-        member_ids = {item.member_id for item in self.members}
+        members_by_id = {item.member_id: item for item in self.members}
         slots: set[tuple[str, str]] = set()
         for observation in self.observations:
-            if observation.member_id not in member_ids:
+            member = members_by_id.get(observation.member_id)
+            if member is None:
                 raise ObservableUniverseError("observation is outside the defined universe")
             if observation.available_at > self.research_cutoff_at:
                 raise ObservableUniverseError("future evidence exceeds the research cutoff")
+            expected_dimensions = (
+                member.unavailable_dimensions
+                if observation.maturity is EvidenceMaturity.UNAVAILABLE
+                else member.available_dimensions
+            )
+            if observation.dimension_id not in expected_dimensions:
+                raise ObservableUniverseError(
+                    "observation availability conflicts with its member dimension declaration"
+                )
             if observation.slot in slots:
                 raise ObservableUniverseError(
                     "one universe snapshot cannot contain ambiguous duplicate metric slots"
                 )
             slots.add(observation.slot)
+        available_slots = {
+            item.slot
+            for item in self.observations
+            if item.maturity is not EvidenceMaturity.UNAVAILABLE
+        }
+        for member in self.members:
+            if any(
+                (member.member_id, dimension) not in available_slots
+                for dimension in member.available_dimensions
+            ):
+                raise ObservableUniverseError(
+                    "every declared available dimension requires an available observation"
+                )
         declared_refs = {
             evidence.reference_id
             for observation in self.observations
