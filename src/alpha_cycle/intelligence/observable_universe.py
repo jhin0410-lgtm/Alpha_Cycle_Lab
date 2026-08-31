@@ -509,10 +509,22 @@ def surface_research_candidates(
     if len({item.rule_id for item in rules}) != len(rules):
         raise ObservableUniverseError("candidate rule_id values cannot repeat")
     member_by_id = {item.member_id: item for item in snapshot.members}
+    current_observation_ids = {item.observation_id for item in snapshot.observations}
     hits: dict[str, list[tuple[CandidateRule, ObservationChange]]] = {}
     for change in changes:
         if change.member_id not in member_by_id:
             raise ObservableUniverseError("candidate change is outside the current universe")
+        if change.evaluated_at != snapshot.research_cutoff_at:
+            raise ObservableUniverseError(
+                "candidate change evaluation does not match the current universe cutoff"
+            )
+        if (
+            change.current_observation_id is not None
+            and change.current_observation_id not in current_observation_ids
+        ):
+            raise ObservableUniverseError(
+                "candidate change does not bind to a current universe observation"
+            )
         for rule in rules:
             if rule.dimension_id != change.dimension_id or change.state not in rule.states:
                 continue
@@ -599,6 +611,10 @@ def persist_successful_universe_attempt(
 
     root = Path(output_root)
     attempted = _utc(attempted_at)
+    if attempted < _utc(snapshot.research_cutoff_at):
+        raise ObservableUniverseError(
+            "successful publication attempt cannot precede the research cutoff"
+        )
     snapshot_bytes = _encoded(snapshot.payload())
     snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot.snapshot_id}.json"
     _write_immutable(snapshot_path, snapshot_bytes)

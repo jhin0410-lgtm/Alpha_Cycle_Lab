@@ -424,22 +424,20 @@ def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidat
     current = snapshot(2.0, cutoff=T1, version="2")
     changes = compare_universe_snapshots(snapshot(1.0), current)
     assert surface_research_candidates(current, changes, ()) == ()
-    missing_change = compare_universe_snapshots(
-        snapshot(1.0),
-        snapshot(
-            cutoff=T1,
-            version="2",
-            members=(member(available=(), unavailable=("market_return", "consensus")),),
-            obs=(
-                observation(
-                    None,
-                    at=T1,
-                    maturity=EvidenceMaturity.UNAVAILABLE,
-                    unavailable_reason="source failed",
-                ),
+    missing_current = snapshot(
+        cutoff=T1,
+        version="2",
+        members=(member(available=(), unavailable=("market_return", "consensus")),),
+        obs=(
+            observation(
+                None,
+                at=T1,
+                maturity=EvidenceMaturity.UNAVAILABLE,
+                unavailable_reason="source failed",
             ),
         ),
     )
+    missing_change = compare_universe_snapshots(snapshot(1.0), missing_current)
     positive_only = CandidateRule(
         "changed-only",
         "market_return",
@@ -447,7 +445,22 @@ def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidat
         ResearchPriority.URGENT,
         "measured change",
     )
-    assert surface_research_candidates(current, missing_change, (positive_only,)) == ()
+    assert surface_research_candidates(missing_current, missing_change, (positive_only,)) == ()
+
+
+def test_candidate_changes_must_bind_to_current_snapshot() -> None:
+    current = snapshot(2.0, cutoff=T1, version="2")
+    change = compare_universe_snapshots(snapshot(1.0), current)[0]
+    foreign_current = snapshot(3.0, cutoff=T1, version="foreign")
+    rule = CandidateRule(
+        "changed",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ROUTINE,
+        "changed",
+    )
+    with pytest.raises(ObservableUniverseError, match="bind to a current"):
+        surface_research_candidates(foreign_current, (change,), (rule,))
 
 
 def test_candidate_ordering_is_deterministic_across_members() -> None:
@@ -517,4 +530,11 @@ def test_attempt_time_cannot_move_backward(tmp_path: Path) -> None:
     with pytest.raises(ObservableUniverseError, match="move backward"):
         publish_failed_universe_attempt(
             output_root=tmp_path, attempted_at=T0, failure_code="old_failure"
+        )
+
+
+def test_successful_attempt_cannot_predate_research_cutoff(tmp_path: Path) -> None:
+    with pytest.raises(ObservableUniverseError, match="precede the research cutoff"):
+        persist_successful_universe_attempt(
+            snapshot(cutoff=T1), output_root=tmp_path, attempted_at=T0
         )
