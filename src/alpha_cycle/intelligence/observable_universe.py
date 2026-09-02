@@ -12,16 +12,25 @@ import json
 import math
 import os
 import tempfile
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
 
+from alpha_cycle.research_ledger_write_lock_v2_1 import (
+    exclusive_research_ledger_write_lock,
+)
+
 SCHEMA_VERSION = 1
 _SNAPSHOT_DIRECTORY = "observable_universe_v1/snapshots"
 _MANIFEST_DIRECTORY = "observable_universe_v1/manifests"
 _CURRENT_PATH = "observable_universe_v1/current.json"
+_IDENTITY_PATH = "observable_universe_v1/universe.json"
+_LOCK_WAIT_SECONDS = 30.0
 
 
 class ObservableUniverseError(ValueError):
@@ -49,11 +58,6 @@ class ChangeState(StrEnum):
     NEWLY_MISSING = "newly_missing"
     STALE = "stale"
     INCOMPARABLE = "incomparable"
-    ACCELERATION = "acceleration"
-    DECELERATION = "deceleration"
-    THRESHOLD_CROSSING = "threshold_crossing"
-    INFLECTION = "inflection"
-    DIVERGENCE = "divergence"
 
 
 class ResearchPriority(StrEnum):
@@ -299,6 +303,15 @@ class ObservableUniverseSnapshot:
             raise ObservableUniverseError(
                 "snapshot source_evidence_refs must include every observation reference"
             )
+        canonical_refs: dict[str, dict[str, object]] = {}
+        for observation in self.observations:
+            for evidence in observation.evidence:
+                payload = evidence.payload()
+                prior_payload = canonical_refs.setdefault(evidence.reference_id, payload)
+                if prior_payload != payload:
+                    raise ObservableUniverseError(
+                        "one evidence reference_id cannot have conflicting definitions"
+                    )
 
     @property
     def snapshot_id(self) -> str:
@@ -325,6 +338,7 @@ class ObservableUniverseSnapshot:
 
 @dataclass(frozen=True)
 class ObservationChange:
+    current_snapshot_id: str
     member_id: str
     dimension_id: str
     state: ChangeState
@@ -333,17 +347,20 @@ class ObservationChange:
     current_observation_id: str | None
     prior_value: ObservationValue
     current_value: ObservationValue
-    delta: float | None
+    delta: float | int | None
     reason: str
-    evidence_refs: tuple[str, ...]
+    prior_evidence_refs: tuple[str, ...]
+    current_evidence_refs: tuple[str, ...]
     causal_claim: bool = False
 
     def __post_init__(self) -> None:
+        _sha_text(self.current_snapshot_id, "current_snapshot_id")
         _text(self.member_id, "member_id")
         _text(self.dimension_id, "dimension_id")
         _aware(self.evaluated_at, "evaluated_at")
         _text(self.reason, "reason")
-        _unique_text(self.evidence_refs, "evidence_refs")
+        _unique_text(self.prior_evidence_refs, "prior_evidence_refs")
+        _unique_text(self.current_evidence_refs, "current_evidence_refs")
         if self.causal_claim:
             raise ObservableUniverseError("change detection cannot make a causal claim")
 
@@ -351,8 +368,13 @@ class ObservationChange:
     def change_id(self) -> str:
         return _sha(self.payload_without_id())
 
+    @property
+    def evidence_refs(self) -> tuple[str, ...]:
+        return tuple(sorted(set(self.prior_evidence_refs) | set(self.current_evidence_refs)))
+
     def payload_without_id(self) -> dict[str, object]:
         return {
+            "current_snapshot_id": self.current_snapshot_id,
             "member_id": self.member_id,
             "dimension_id": self.dimension_id,
             "state": self.state.value,
@@ -363,7 +385,8 @@ class ObservationChange:
             "current_value": self.current_value,
             "delta": self.delta,
             "reason": self.reason,
-            "evidence_refs": list(self.evidence_refs),
+            "prior_evidence_refs": list(self.prior_evidence_refs),
+            "current_evidence_refs": list(self.current_evidence_refs),
             "causal_claim": False,
         }
 
@@ -485,12 +508,15 @@ def compare_universe_snapshots(
         raise ObservableUniverseError("cannot compare different universe identities")
     if prior.research_cutoff_at >= current.research_cutoff_at:
         raise ObservableUniverseError("current cutoff must be later than prior cutoff")
+    if stale_after is not None and stale_after < timedelta(0):
+        raise ObservableUniverseError("stale_after cannot be negative")
     prior_by_slot = {item.slot: item for item in prior.observations}
     current_by_slot = {item.slot: item for item in current.observations}
     changes = [
         _compare_observations(
             prior_by_slot.get(slot),
             current_by_slot.get(slot),
+            current_snapshot_id=current.snapshot_id,
             evaluated_at=current.research_cutoff_at,
             stale_after=stale_after,
         )
@@ -509,21 +535,41 @@ def surface_research_candidates(
     if len({item.rule_id for item in rules}) != len(rules):
         raise ObservableUniverseError("candidate rule_id values cannot repeat")
     member_by_id = {item.member_id: item for item in snapshot.members}
-    current_observation_ids = {item.observation_id for item in snapshot.observations}
+    current_observations_by_slot = {item.slot: item for item in snapshot.observations}
     hits: dict[str, list[tuple[CandidateRule, ObservationChange]]] = {}
     for change in changes:
+        if change.current_snapshot_id != snapshot.snapshot_id:
+            raise ObservableUniverseError(
+                "candidate change does not bind to the exact current universe snapshot"
+            )
         if change.member_id not in member_by_id:
-            raise ObservableUniverseError("candidate change is outside the current universe")
+            # A prior-only member is an explicit reconstitution/removal change.  It
+            # remains in the change history but cannot become a current candidate.
+            continue
         if change.evaluated_at != snapshot.research_cutoff_at:
             raise ObservableUniverseError(
                 "candidate change evaluation does not match the current universe cutoff"
             )
-        if (
-            change.current_observation_id is not None
-            and change.current_observation_id not in current_observation_ids
+        current_observation = current_observations_by_slot.get(
+            (change.member_id, change.dimension_id)
+        )
+        if change.current_observation_id is None:
+            if current_observation is not None or change.current_evidence_refs:
+                raise ObservableUniverseError(
+                    "candidate change current lineage does not match its observation slot"
+                )
+        elif (
+            current_observation is None
+            or current_observation.observation_id != change.current_observation_id
         ):
             raise ObservableUniverseError(
-                "candidate change does not bind to a current universe observation"
+                "candidate change does not bind to its current universe observation slot"
+            )
+        elif change.current_evidence_refs != tuple(
+            sorted(item.reference_id for item in current_observation.evidence)
+        ):
+            raise ObservableUniverseError(
+                "candidate change evidence does not bind to its current observation"
             )
         for rule in rules:
             if rule.dimension_id != change.dimension_id or change.state not in rule.states:
@@ -575,11 +621,11 @@ def surface_research_candidates(
                     (rule.priority for rule, _ in selected), key=priority_rank.__getitem__
                 ),
                 measured_reasons=tuple(
-                    f"{rule.reason}: {change.reason}" for rule, change in selected
+                    dict.fromkeys(f"{rule.reason}: {change.reason}" for rule, change in selected)
                 ),
-                triggering_change_ids=tuple(change.change_id for _, change in selected),
+                triggering_change_ids=tuple(sorted({change.change_id for _, change in selected})),
                 triggering_evidence_refs=tuple(
-                    sorted({ref for _, change in selected for ref in change.evidence_refs})
+                    sorted({ref for _, change in selected for ref in change.current_evidence_refs})
                 ),
                 missing_dimensions=missing,
                 blocked_evidence=blocked,
@@ -615,35 +661,40 @@ def persist_successful_universe_attempt(
         raise ObservableUniverseError(
             "successful publication attempt cannot precede the research cutoff"
         )
-    snapshot_bytes = _encoded(snapshot.payload())
-    snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot.snapshot_id}.json"
-    _write_immutable(snapshot_path, snapshot_bytes)
-    manifest_without_id = {
-        "schema_version": SCHEMA_VERSION,
-        "snapshot_id": snapshot.snapshot_id,
-        "snapshot_bytes_sha256": _digest(snapshot_bytes),
-    }
-    manifest_id = _sha(manifest_without_id)
-    manifest = {**manifest_without_id, "manifest_id": manifest_id}
-    _write_immutable(root / _MANIFEST_DIRECTORY / f"{manifest_id}.json", _encoded(manifest))
-    pointer_without_id = {
-        "schema_version": SCHEMA_VERSION,
-        "status": AttemptStatus.SUCCEEDED.value,
-        "attempted_at": attempted.isoformat(),
-        "attempt_id": _sha(
-            {
-                "status": AttemptStatus.SUCCEEDED.value,
-                "attempted_at": attempted.isoformat(),
-                "snapshot_id": snapshot.snapshot_id,
-                "manifest_id": manifest_id,
-            }
-        ),
-        "snapshot_id": snapshot.snapshot_id,
-        "manifest_id": manifest_id,
-        "failure_code": None,
-    }
-    _publish_pointer(root, pointer_without_id)
-    return snapshot_path
+    with _exclusive_universe_write_lock(root):
+        _bind_universe_identity(root, snapshot.universe_id)
+        snapshot_bytes = _encoded(snapshot.payload())
+        snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot.snapshot_id}.json"
+        _write_immutable(snapshot_path, snapshot_bytes)
+        manifest_without_id = {
+            "schema_version": SCHEMA_VERSION,
+            "snapshot_id": snapshot.snapshot_id,
+            "snapshot_bytes_sha256": _digest(snapshot_bytes),
+        }
+        manifest_id = _sha(manifest_without_id)
+        manifest = {**manifest_without_id, "manifest_id": manifest_id}
+        _write_immutable(
+            root / _MANIFEST_DIRECTORY / f"{manifest_id}.json",
+            _encoded(manifest),
+        )
+        pointer_without_id = {
+            "schema_version": SCHEMA_VERSION,
+            "status": AttemptStatus.SUCCEEDED.value,
+            "attempted_at": attempted.isoformat(),
+            "attempt_id": _sha(
+                {
+                    "status": AttemptStatus.SUCCEEDED.value,
+                    "attempted_at": attempted.isoformat(),
+                    "snapshot_id": snapshot.snapshot_id,
+                    "manifest_id": manifest_id,
+                }
+            ),
+            "snapshot_id": snapshot.snapshot_id,
+            "manifest_id": manifest_id,
+            "failure_code": None,
+        }
+        _publish_pointer(root, pointer_without_id)
+        return snapshot_path
 
 
 def publish_failed_universe_attempt(
@@ -670,8 +721,9 @@ def publish_failed_universe_attempt(
         "failure_code": failure_code,
     }
     root = Path(output_root)
-    _publish_pointer(root, pointer_without_id)
-    return root / _CURRENT_PATH
+    with _exclusive_universe_write_lock(root):
+        _publish_pointer(root, pointer_without_id)
+        return root / _CURRENT_PATH
 
 
 def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState | None:
@@ -744,6 +796,14 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
     if _digest(snapshot_bytes) != manifest.get("snapshot_bytes_sha256"):
         raise ObservableUniverseError("persisted snapshot bytes do not match manifest")
     snapshot = load_universe_snapshot(snapshot_path)
+    if _load_universe_identity(root) != snapshot.universe_id:
+        raise ObservableUniverseError(
+            "selected snapshot does not match the bound universe identity"
+        )
+    if attempted_at < _utc(snapshot.research_cutoff_at):
+        raise ObservableUniverseError(
+            "successful current attempt predates the selected snapshot research cutoff"
+        )
     expected_attempt = _sha(
         {
             "status": status.value,
@@ -794,24 +854,18 @@ def _compare_observations(
     prior: MeasuredObservation | None,
     current: MeasuredObservation | None,
     *,
+    current_snapshot_id: str,
     evaluated_at: datetime,
     stale_after: timedelta | None,
 ) -> ObservationChange:
     template = current or prior
     assert template is not None
-    refs = tuple(
-        sorted(
-            {
-                item.reference_id
-                for observation in (prior, current)
-                if observation is not None
-                for item in observation.evidence
-            }
-        )
-    )
+    prior_refs = tuple(sorted(item.reference_id for item in prior.evidence)) if prior else ()
+    current_refs = tuple(sorted(item.reference_id for item in current.evidence)) if current else ()
 
-    def make(state: ChangeState, delta: float | None, reason: str) -> ObservationChange:
+    def make(state: ChangeState, delta: float | int | None, reason: str) -> ObservationChange:
         return ObservationChange(
+            current_snapshot_id=current_snapshot_id,
             member_id=template.member_id,
             dimension_id=template.dimension_id,
             state=state,
@@ -822,11 +876,24 @@ def _compare_observations(
             current_value=current.value if current else None,
             delta=delta,
             reason=reason,
-            evidence_refs=refs,
+            prior_evidence_refs=prior_refs,
+            current_evidence_refs=current_refs,
         )
 
+    current_is_stale = (
+        current is not None
+        and current.maturity is not EvidenceMaturity.UNAVAILABLE
+        and stale_after is not None
+        and evaluated_at - current.available_at > stale_after
+    )
     if prior is None or prior.maturity is EvidenceMaturity.UNAVAILABLE:
         if current is not None and current.maturity is not EvidenceMaturity.UNAVAILABLE:
+            if current_is_stale:
+                return make(
+                    ChangeState.STALE,
+                    None,
+                    "newly available evidence exceeds the configured staleness window",
+                )
             return make(ChangeState.NEWLY_AVAILABLE, None, "evidence became available")
     if current is None or current.maturity is EvidenceMaturity.UNAVAILABLE:
         if prior is not None and prior.maturity is not EvidenceMaturity.UNAVAILABLE:
@@ -848,21 +915,44 @@ def _compare_observations(
             None,
             "comparison identity differs: " + ", ".join(differences),
         )
-    if stale_after is not None and evaluated_at - current.available_at > stale_after:
+    maturity_rank = {item: rank for rank, item in enumerate(EvidenceMaturity)}
+    if maturity_rank[current.maturity] < maturity_rank[prior.maturity]:
+        return make(
+            ChangeState.INCOMPARABLE,
+            None,
+            "current evidence maturity is lower than the prior observation",
+        )
+    if current_is_stale:
         return make(
             ChangeState.STALE,
             None,
             "current evidence exceeds the configured staleness window",
         )
-    if type(prior.value) in (int, float) and type(current.value) in (int, float):
-        delta = float(cast(float | int, current.value)) - float(cast(float | int, prior.value))
-        state = ChangeState.UNCHANGED if delta == 0 else ChangeState.CHANGED
+    if type(prior.value) is int and type(current.value) is int:
+        int_delta = current.value - prior.value
+        state = ChangeState.UNCHANGED if int_delta == 0 else ChangeState.CHANGED
         reason = (
-            f"{current.metric_id} changed by {delta:g} {current.unit}"
-            if delta
+            f"{current.metric_id} changed by {int_delta:g} {current.unit}"
+            if int_delta
             else f"{current.metric_id} is unchanged"
         )
-        return make(state, delta, reason)
+        return make(state, int_delta, reason)
+    if type(prior.value) in (int, float) and type(current.value) in (int, float):
+        try:
+            float_delta = float(cast(float | int, current.value)) - float(
+                cast(float | int, prior.value)
+            )
+        except OverflowError:
+            return make(ChangeState.INCOMPARABLE, None, "numeric delta exceeds finite range")
+        if not math.isfinite(float_delta):
+            return make(ChangeState.INCOMPARABLE, None, "numeric delta exceeds finite range")
+        state = ChangeState.UNCHANGED if float_delta == 0 else ChangeState.CHANGED
+        reason = (
+            f"{current.metric_id} changed by {float_delta:g} {current.unit}"
+            if float_delta
+            else f"{current.metric_id} is unchanged"
+        )
+        return make(state, float_delta, reason)
     equal = prior.value == current.value
     return make(
         ChangeState.UNCHANGED if equal else ChangeState.CHANGED,
@@ -938,6 +1028,40 @@ def _parse_evidence(raw: object) -> EvidenceReference:
     )
 
 
+@contextmanager
+def _exclusive_universe_write_lock(root: Path) -> Iterator[None]:
+    """Wait for the repository's trusted cross-process lock, then hold it through commit."""
+
+    deadline = time.monotonic() + _LOCK_WAIT_SECONDS
+    while True:
+        lock = exclusive_research_ledger_write_lock(root)
+        try:
+            lock.__enter__()
+        except FileExistsError as exc:
+            if time.monotonic() >= deadline:
+                raise ObservableUniverseError(
+                    "timed out waiting for observable-universe publication lock"
+                ) from exc
+            time.sleep(0.01)
+            continue
+        except RuntimeError as exc:
+            # The shared contextmanager's fail-closed acquisition path currently
+            # surfaces an O_EXCL collision as contextlib's no-yield RuntimeError.
+            if str(exc) != "generator didn't yield":
+                raise
+            if time.monotonic() >= deadline:
+                raise ObservableUniverseError(
+                    "timed out waiting for observable-universe publication lock"
+                ) from exc
+            time.sleep(0.01)
+            continue
+        try:
+            yield
+        finally:
+            lock.__exit__(None, None, None)
+        return
+
+
 def _publish_pointer(root: Path, without_id: dict[str, object]) -> None:
     path = root / _CURRENT_PATH
     if path.exists():
@@ -953,6 +1077,31 @@ def _publish_pointer(root: Path, without_id: dict[str, object]) -> None:
     _atomic_replace(path, _encoded(pointer))
 
 
+def _bind_universe_identity(root: Path, universe_id: str) -> None:
+    path = root / _IDENTITY_PATH
+    if path.exists():
+        if _load_universe_identity(root) != universe_id:
+            raise ObservableUniverseError(
+                "observable-universe store cannot switch universe identity"
+            )
+        return
+    without_id = {"schema_version": SCHEMA_VERSION, "universe_id": universe_id}
+    _write_immutable(path, _encoded({**without_id, "identity_id": _sha(without_id)}))
+
+
+def _load_universe_identity(root: Path) -> str:
+    value = _load_json(root / _IDENTITY_PATH, "universe identity")
+    _exact(value, {"schema_version", "universe_id", "identity_id"}, "universe identity")
+    if _required_int(value, "schema_version") != SCHEMA_VERSION:
+        raise ObservableUniverseError("unsupported universe identity schema")
+    identity_id = _required_text(value, "identity_id")
+    without_id = dict(value)
+    del without_id["identity_id"]
+    if _sha(without_id) != identity_id:
+        raise ObservableUniverseError("universe identity content mismatch")
+    return _required_text(value, "universe_id")
+
+
 def _write_immutable(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -961,14 +1110,21 @@ def _write_immutable(path: Path, content: bytes) -> None:
                 "content-addressed artifact conflicts with existing bytes"
             )
         return
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(name)
     try:
-        with path.open("xb") as handle:
+        with os.fdopen(fd, "wb") as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-    except FileExistsError as exc:
-        if path.read_bytes() != content:
-            raise ObservableUniverseError("concurrent immutable publication conflict") from exc
+        try:
+            os.link(temporary, path)
+            _fsync_directory(path.parent)
+        except FileExistsError as exc:
+            if path.read_bytes() != content:
+                raise ObservableUniverseError("concurrent immutable publication conflict") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _atomic_replace(path: Path, content: bytes) -> None:
@@ -981,8 +1137,19 @@ def _atomic_replace(path: Path, content: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temporary, path)
+        _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    if os.name != "posix":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _load_json(path: Path, field: str) -> dict[str, Any]:
@@ -1078,6 +1245,11 @@ def _observation_value(value: object) -> ObservationValue:
 def _text(value: str | None, field: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ObservableUniverseError(f"{field} must be non-empty text")
+
+
+def _sha_text(value: str, field: str) -> None:
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise ObservableUniverseError(f"{field} must be a lowercase SHA-256")
 
 
 def _optional_text(value: str | None, field: str) -> None:

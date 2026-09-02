@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import AbstractContextManager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -8,6 +12,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import alpha_cycle.intelligence.observable_universe as observable_module
 from alpha_cycle.intelligence.investor_flow_evidence import (
     FlowWindowSummary,
     InvestorFlowEvidence,
@@ -39,6 +44,18 @@ T0 = datetime(2026, 8, 1, tzinfo=UTC)
 T1 = datetime(2026, 8, 2, tzinfo=UTC)
 
 
+def content_id(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def evidence(
     reference_id: str = "market-000660-20260801",
     *,
@@ -50,7 +67,7 @@ def evidence(
 
 
 def observation(
-    value: float | None,
+    value: float | int | None,
     *,
     member_id: str = "000660",
     dimension: str = "market_return",
@@ -203,6 +220,57 @@ def test_changed_unchanged_and_exact_lineage() -> None:
     assert unchanged.state is ChangeState.UNCHANGED
 
 
+def test_evidence_maturity_downgrade_is_not_reported_as_unchanged() -> None:
+    prior = snapshot(
+        obs=(
+            observation(
+                1.0,
+                maturity=EvidenceMaturity.INDEPENDENTLY_VALIDATED_AUTHORITY,
+            ),
+        )
+    )
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(
+            observation(
+                1.0,
+                at=T1,
+                maturity=EvidenceMaturity.CITED_CONTEXT,
+                reference_id="downgraded-context",
+            ),
+        ),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.INCOMPARABLE
+    assert "maturity is lower" in change.reason
+
+
+def test_integer_delta_remains_exact_beyond_binary64_range() -> None:
+    prior = snapshot(obs=(observation(2**53),))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(observation(2**53 + 1, at=T1, reference_id="large-integer"),),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.CHANGED
+    assert change.delta == 1
+    assert type(change.delta) is int
+
+
+def test_non_finite_derived_float_delta_is_incomparable() -> None:
+    prior = snapshot(obs=(observation(-1.7e308),))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(observation(1.7e308, at=T1, reference_id="large-float"),),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.INCOMPARABLE
+    assert change.delta is None
+
+
 def test_newly_available_newly_missing_and_stale() -> None:
     missing0 = observation(
         None,
@@ -271,6 +339,41 @@ def test_observation_cannot_promote_upstream_maturity_or_conflict_with_membershi
             obs=(observation(1.0, dimension="consensus"),),
             members=(member(available=(), unavailable=("market_return", "consensus")),),
         )
+
+
+def test_one_reference_id_cannot_have_conflicting_canonical_definitions() -> None:
+    first = observation(1.0, member_id="000660", reference_id="shared-reference")
+    second = observation(2.0, member_id="005930", reference_id="shared-reference")
+    second = replace(
+        second,
+        evidence=(
+            evidence(
+                "shared-reference",
+                authority="conflicting semantic authority",
+            ),
+        ),
+    )
+    members = (
+        member("000660", aliases=("Hynix",)),
+        member("005930", aliases=("Samsung",)),
+    )
+    with pytest.raises(ObservableUniverseError, match="conflicting definitions"):
+        snapshot(obs=(first, second), members=members)
+
+
+def test_repeated_identical_evidence_reference_is_unambiguous() -> None:
+    observations = (
+        observation(1.0, member_id="000660", reference_id="shared-reference"),
+        observation(2.0, member_id="005930", reference_id="shared-reference"),
+    )
+    state = snapshot(
+        obs=observations,
+        members=(
+            member("000660", aliases=("Hynix",)),
+            member("005930", aliases=("Samsung",)),
+        ),
+    )
+    assert state.source_evidence_refs == ("shared-reference",)
 
 
 def test_macro_and_verified_flow_remain_descriptive_upstream_evidence() -> None:
@@ -459,8 +562,233 @@ def test_candidate_changes_must_bind_to_current_snapshot() -> None:
         ResearchPriority.ROUTINE,
         "changed",
     )
-    with pytest.raises(ObservableUniverseError, match="bind to a current"):
+    with pytest.raises(ObservableUniverseError, match="exact current"):
         surface_research_candidates(foreign_current, (change,), (rule,))
+
+
+def test_candidate_change_must_bind_to_its_exact_observation_slot() -> None:
+    members = (
+        member("000660", aliases=("Hynix",)),
+        member("005930", aliases=("Samsung",)),
+    )
+    prior = snapshot(
+        members=members,
+        obs=(
+            observation(1.0),
+            observation(1.0, member_id="005930", reference_id="samsung-prior"),
+        ),
+    )
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        members=members,
+        obs=(
+            observation(2.0, at=T1),
+            observation(
+                2.0,
+                member_id="005930",
+                at=T1,
+                reference_id="samsung-current",
+            ),
+        ),
+    )
+    change = next(
+        item for item in compare_universe_snapshots(prior, current) if item.member_id == "000660"
+    )
+    forged = replace(change, member_id="005930")
+    rule = CandidateRule(
+        "changed",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ROUTINE,
+        "changed",
+    )
+    with pytest.raises(ObservableUniverseError, match="observation slot"):
+        surface_research_candidates(current, (forged,), (rule,))
+
+
+def test_candidate_change_rejects_unbound_current_evidence() -> None:
+    current = snapshot(2.0, cutoff=T1, version="2")
+    change = compare_universe_snapshots(snapshot(1.0), current)[0]
+    forged = replace(change, current_evidence_refs=("undeclared-evidence",))
+    rule = CandidateRule(
+        "changed",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ROUTINE,
+        "changed",
+    )
+    with pytest.raises(ObservableUniverseError, match="evidence does not bind"):
+        surface_research_candidates(current, (forged,), (rule,))
+
+
+@pytest.mark.parametrize("variant", ["version", "domain", "membership", "missing"])
+def test_change_lineage_binds_snapshot_metadata_even_when_observations_match(
+    variant: str,
+) -> None:
+    current = snapshot(2.0, cutoff=T1, version="2")
+    change = compare_universe_snapshots(snapshot(1.0), current)[0]
+    base_member = current.members[0]
+    if variant == "version":
+        alternate = replace(current, version="other")
+    elif variant == "domain":
+        alternate = replace(current, members=(replace(base_member, domain_id="other"),))
+    elif variant == "membership":
+        alternate = replace(
+            current,
+            members=(
+                base_member,
+                UniverseMember(
+                    "DOMAIN_ONLY",
+                    MemberKind.DOMAIN,
+                    domain_id="macro",
+                    unavailable_dimensions=("policy",),
+                ),
+            ),
+        )
+    else:
+        alternate = replace(
+            current,
+            members=(
+                replace(
+                    base_member,
+                    required_dimensions=("market_return", "consensus", "guidance"),
+                    unavailable_dimensions=("consensus", "guidance"),
+                ),
+            ),
+        )
+    rule = CandidateRule(
+        "changed",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ROUTINE,
+        "changed",
+    )
+    with pytest.raises(ObservableUniverseError, match="exact current"):
+        surface_research_candidates(alternate, (change,), (rule,))
+
+
+def test_missing_current_observation_still_binds_exact_snapshot() -> None:
+    prior = snapshot(1.0)
+    missing_member = member(available=(), unavailable=("market_return", "consensus"))
+    current = snapshot(cutoff=T1, version="2", obs=(), members=(missing_member,))
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.current_observation_id is None
+    alternate = replace(current, version="other")
+    rule = CandidateRule(
+        "missing",
+        "market_return",
+        (ChangeState.NEWLY_MISSING,),
+        ResearchPriority.ELEVATED,
+        "evidence disappeared",
+    )
+    with pytest.raises(ObservableUniverseError, match="exact current"):
+        surface_research_candidates(alternate, (change,), (rule,))
+
+
+def test_multiple_rules_deduplicate_one_change_and_preserve_distinct_reasons() -> None:
+    current = snapshot(3.0, cutoff=T1, version="2")
+    change = compare_universe_snapshots(snapshot(1.0), current)[0]
+    rules = (
+        CandidateRule(
+            "a-routine",
+            "market_return",
+            (ChangeState.CHANGED,),
+            ResearchPriority.ROUTINE,
+            "price changed",
+        ),
+        CandidateRule(
+            "b-urgent",
+            "market_return",
+            (ChangeState.CHANGED,),
+            ResearchPriority.URGENT,
+            "large move requires review",
+        ),
+    )
+    candidate = surface_research_candidates(current, (change,), rules)[0]
+    assert candidate.triggering_change_ids == (change.change_id,)
+    assert len(candidate.measured_reasons) == 2
+    assert candidate.priority is ResearchPriority.URGENT
+
+
+def test_removed_members_do_not_abort_retained_candidates() -> None:
+    prior_members = (
+        member("000660", aliases=("Hynix",)),
+        member("005930", aliases=("Samsung",)),
+    )
+    prior = snapshot(
+        members=prior_members,
+        obs=(
+            observation(1.0),
+            observation(1.0, member_id="005930", reference_id="samsung-prior"),
+        ),
+    )
+    current = snapshot(3.0, cutoff=T1, version="2")
+    changes = compare_universe_snapshots(prior, current)
+    removed = next(item for item in changes if item.member_id == "005930")
+    assert removed.state is ChangeState.NEWLY_MISSING
+    assert removed.current_snapshot_id == current.snapshot_id
+    rules = (
+        CandidateRule(
+            "changed",
+            "market_return",
+            (ChangeState.CHANGED,),
+            ResearchPriority.ELEVATED,
+            "retained member changed",
+        ),
+        CandidateRule(
+            "missing",
+            "market_return",
+            (ChangeState.NEWLY_MISSING,),
+            ResearchPriority.URGENT,
+            "member evidence missing",
+        ),
+    )
+    candidates = surface_research_candidates(current, changes, rules)
+    assert [item.member_id for item in candidates] == ["000660"]
+
+
+def test_newly_available_but_old_evidence_is_stale_not_fresh() -> None:
+    prior_missing = observation(
+        None,
+        maturity=EvidenceMaturity.UNAVAILABLE,
+        unavailable_reason="not yet available",
+    )
+    prior = snapshot(
+        obs=(prior_missing,),
+        members=(member(available=(), unavailable=("market_return", "consensus")),),
+    )
+    current = snapshot(cutoff=T1, obs=(observation(2.0, at=T0),), version="2")
+    change = compare_universe_snapshots(prior, current, stale_after=timedelta(hours=12))[0]
+    assert change.state is ChangeState.STALE
+    fresh_rule = CandidateRule(
+        "fresh",
+        "market_return",
+        (ChangeState.NEWLY_AVAILABLE,),
+        ResearchPriority.ELEVATED,
+        "fresh evidence",
+    )
+    assert surface_research_candidates(current, (change,), (fresh_rule,)) == ()
+
+
+def test_negative_staleness_window_is_rejected() -> None:
+    with pytest.raises(ObservableUniverseError, match="cannot be negative"):
+        compare_universe_snapshots(
+            snapshot(1.0),
+            snapshot(2.0, cutoff=T1, version="2"),
+            stale_after=timedelta(seconds=-1),
+        )
+
+
+def test_public_change_states_only_advertise_emitted_r1a_semantics() -> None:
+    assert set(ChangeState) == {
+        ChangeState.CHANGED,
+        ChangeState.UNCHANGED,
+        ChangeState.NEWLY_AVAILABLE,
+        ChangeState.NEWLY_MISSING,
+        ChangeState.STALE,
+        ChangeState.INCOMPARABLE,
+    }
 
 
 def test_candidate_ordering_is_deterministic_across_members() -> None:
@@ -508,7 +836,7 @@ def test_persistence_replay_and_failed_later_attempt_semantics(tmp_path: Path) -
     assert path.exists()  # immutable history remains, but is not current readiness
 
 
-@pytest.mark.parametrize("target", ["snapshot", "manifest", "pointer"])
+@pytest.mark.parametrize("target", ["snapshot", "manifest", "pointer", "identity"])
 def test_persisted_tampering_fails_closed(tmp_path: Path, target: str) -> None:
     state = snapshot()
     snapshot_path = persist_successful_universe_attempt(
@@ -517,7 +845,13 @@ def test_persisted_tampering_fails_closed(tmp_path: Path, target: str) -> None:
     current_path = tmp_path / "observable_universe_v1/current.json"
     pointer = json.loads(current_path.read_text(encoding="utf-8"))
     manifest_path = tmp_path / "observable_universe_v1/manifests" / f"{pointer['manifest_id']}.json"
-    path = {"snapshot": snapshot_path, "manifest": manifest_path, "pointer": current_path}[target]
+    identity_path = tmp_path / "observable_universe_v1/universe.json"
+    path = {
+        "snapshot": snapshot_path,
+        "manifest": manifest_path,
+        "pointer": current_path,
+        "identity": identity_path,
+    }[target]
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["tampered"] = True
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -538,3 +872,138 @@ def test_successful_attempt_cannot_predate_research_cutoff(tmp_path: Path) -> No
         persist_successful_universe_attempt(
             snapshot(cutoff=T1), output_root=tmp_path, attempted_at=T0
         )
+
+
+def test_store_rejects_switch_to_an_unrelated_universe(tmp_path: Path) -> None:
+    original = snapshot()
+    persist_successful_universe_attempt(original, output_root=tmp_path, attempted_at=T0)
+    unrelated = replace(snapshot(2.0, cutoff=T1, version="2"), universe_id="unrelated-universe")
+    with pytest.raises(ObservableUniverseError, match="cannot switch universe identity"):
+        persist_successful_universe_attempt(unrelated, output_root=tmp_path, attempted_at=T1)
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.snapshot == original
+
+
+def test_pointer_replace_fsyncs_publication_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synced: list[Path] = []
+    monkeypatch.setattr(observable_module, "_fsync_directory", synced.append)
+    observable_module._atomic_replace(tmp_path / "current.json", b"{}")
+    assert synced == [tmp_path]
+
+
+def test_replay_rejects_attempt_that_predates_selected_snapshot_cutoff(
+    tmp_path: Path,
+) -> None:
+    persist_successful_universe_attempt(snapshot(cutoff=T1), output_root=tmp_path, attempted_at=T1)
+    current_path = tmp_path / "observable_universe_v1/current.json"
+    pointer = json.loads(current_path.read_text(encoding="utf-8"))
+    pointer["attempted_at"] = T0.isoformat()
+    pointer["attempt_id"] = content_id(
+        {
+            "status": pointer["status"],
+            "attempted_at": pointer["attempted_at"],
+            "snapshot_id": pointer["snapshot_id"],
+            "manifest_id": pointer["manifest_id"],
+        }
+    )
+    pointer_without_id = dict(pointer)
+    del pointer_without_id["pointer_id"]
+    pointer["pointer_id"] = content_id(pointer_without_id)
+    current_path.write_text(
+        json.dumps(pointer, allow_nan=False, separators=(",", ":"), sort_keys=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ObservableUniverseError, match="predates.*research cutoff"):
+        load_current_universe_state(tmp_path)
+
+
+def test_immutable_install_failure_leaves_no_partial_artifact_and_can_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = snapshot()
+    snapshot_path = tmp_path / "observable_universe_v1/snapshots" / f"{state.snapshot_id}.json"
+    real_link = observable_module.os.link
+    calls = 0
+
+    def fail_snapshot_link(source: str | bytes, destination: str | bytes) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected immutable install failure")
+        real_link(source, destination)
+
+    monkeypatch.setattr(observable_module.os, "link", fail_snapshot_link)
+    with pytest.raises(OSError, match="injected immutable install failure"):
+        persist_successful_universe_attempt(state, output_root=tmp_path, attempted_at=T0)
+
+    assert not snapshot_path.exists()
+    assert load_current_universe_state(tmp_path) is None
+
+    monkeypatch.setattr(observable_module.os, "link", real_link)
+    assert (
+        persist_successful_universe_attempt(state, output_root=tmp_path, attempted_at=T0)
+        == snapshot_path
+    )
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.ready and current.snapshot == state
+
+
+def test_later_failure_wins_when_it_races_an_older_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entered_success_write = threading.Event()
+    attempted_failure_publish = threading.Event()
+    release_success_write = threading.Event()
+    real_write_immutable = observable_module._write_immutable
+    real_lock = observable_module.exclusive_research_ledger_write_lock
+    blocked_once = False
+    lock_attempts = 0
+
+    def note_lock_attempt(root: str | Path) -> AbstractContextManager[None]:
+        nonlocal lock_attempts
+        lock_attempts += 1
+        if lock_attempts >= 2:
+            attempted_failure_publish.set()
+        return real_lock(root)
+
+    def block_first_immutable_write(path: Path, content: bytes) -> None:
+        nonlocal blocked_once
+        if not blocked_once:
+            blocked_once = True
+            entered_success_write.set()
+            assert release_success_write.wait(timeout=5)
+        real_write_immutable(path, content)
+
+    monkeypatch.setattr(observable_module, "_write_immutable", block_first_immutable_write)
+    monkeypatch.setattr(
+        observable_module,
+        "exclusive_research_ledger_write_lock",
+        note_lock_attempt,
+    )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        success = pool.submit(
+            persist_successful_universe_attempt,
+            snapshot(),
+            output_root=tmp_path,
+            attempted_at=T0,
+        )
+        assert entered_success_write.wait(timeout=5)
+        failure = pool.submit(
+            publish_failed_universe_attempt,
+            output_root=tmp_path,
+            attempted_at=T1,
+            failure_code="provider_timeout",
+        )
+        assert attempted_failure_publish.wait(timeout=5)
+        release_success_write.set()
+        success.result(timeout=5)
+        failure.result(timeout=5)
+
+    current = load_current_universe_state(tmp_path)
+    assert current is not None
+    assert current.status is AttemptStatus.FAILED
+    assert current.attempted_at == T1
+    assert current.snapshot is None
