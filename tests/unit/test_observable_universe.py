@@ -42,6 +42,7 @@ from alpha_cycle.intelligence.observable_universe import (
 
 T0 = datetime(2026, 8, 1, tzinfo=UTC)
 T1 = datetime(2026, 8, 2, tzinfo=UTC)
+T2 = datetime(2026, 8, 3, tzinfo=UTC)
 
 
 def content_id(value: object) -> str:
@@ -246,6 +247,38 @@ def test_evidence_maturity_downgrade_is_not_reported_as_unchanged() -> None:
     assert "maturity is lower" in change.reason
 
 
+def test_semantic_authority_change_is_incomparable() -> None:
+    prior = snapshot(obs=(observation(1.0, authority="audited filing metric"),))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(
+            observation(
+                1.0,
+                at=T1,
+                reference_id="weaker-authority",
+                authority="unverified narrative context",
+            ),
+        ),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.INCOMPARABLE
+    assert "semantic authority differs" in change.reason
+
+
+def test_observation_chronology_cannot_regress() -> None:
+    prior = snapshot(obs=(observation(1.0, at=T0),))
+    older = T0 - timedelta(hours=1)
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(observation(2.0, at=older, reference_id="older-evidence"),),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.INCOMPARABLE
+    assert "chronology regresses" in change.reason
+
+
 def test_integer_delta_remains_exact_beyond_binary64_range() -> None:
     prior = snapshot(obs=(observation(2**53),))
     current = snapshot(
@@ -259,7 +292,20 @@ def test_integer_delta_remains_exact_beyond_binary64_range() -> None:
     assert type(change.delta) is int
 
 
-def test_non_finite_derived_float_delta_is_incomparable() -> None:
+def test_mixed_numeric_encodings_do_not_erase_an_exact_change() -> None:
+    prior = snapshot(obs=(observation(2**53 + 1),))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(observation(float(2**53), at=T1, reference_id="mixed-number"),),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.CHANGED
+    assert change.delta == -1
+    assert type(change.delta) is int
+
+
+def test_opposing_large_floats_produce_an_exact_integer_delta() -> None:
     prior = snapshot(obs=(observation(-1.7e308),))
     current = snapshot(
         cutoff=T1,
@@ -267,8 +313,8 @@ def test_non_finite_derived_float_delta_is_incomparable() -> None:
         obs=(observation(1.7e308, at=T1, reference_id="large-float"),),
     )
     change = compare_universe_snapshots(prior, current)[0]
-    assert change.state is ChangeState.INCOMPARABLE
-    assert change.delta is None
+    assert change.state is ChangeState.CHANGED
+    assert type(change.delta) is int
 
 
 def test_newly_available_newly_missing_and_stale() -> None:
@@ -496,8 +542,9 @@ def test_real_upstream_evidence_types_fit_envelope_without_authority_promotion()
 
 
 def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
+    prior = snapshot(1.0)
     current = snapshot(3.0, cutoff=T1, version="2")
-    changes = compare_universe_snapshots(snapshot(1.0), current)
+    changes = compare_universe_snapshots(prior, current)
     rule = CandidateRule(
         "material-return-change",
         "market_return",
@@ -506,8 +553,10 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
         "material market-state change deserves research",
         minimum_absolute_delta=1.0,
     )
-    first = surface_research_candidates(current, changes, (rule,))
-    second = surface_research_candidates(current, tuple(reversed(changes)), (rule,))
+    first = surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)
+    second = surface_research_candidates(
+        current, tuple(reversed(changes)), (rule,), prior_snapshot=prior
+    )
     assert first == second
     candidate = first[0]
     assert candidate.candidate_id == second[0].candidate_id
@@ -524,9 +573,10 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
 
 
 def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidate() -> None:
+    prior = snapshot(1.0)
     current = snapshot(2.0, cutoff=T1, version="2")
-    changes = compare_universe_snapshots(snapshot(1.0), current)
-    assert surface_research_candidates(current, changes, ()) == ()
+    changes = compare_universe_snapshots(prior, current)
+    assert surface_research_candidates(current, changes, (), prior_snapshot=prior) == ()
     missing_current = snapshot(
         cutoff=T1,
         version="2",
@@ -540,7 +590,7 @@ def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidat
             ),
         ),
     )
-    missing_change = compare_universe_snapshots(snapshot(1.0), missing_current)
+    missing_change = compare_universe_snapshots(prior, missing_current)
     positive_only = CandidateRule(
         "changed-only",
         "market_return",
@@ -548,12 +598,21 @@ def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidat
         ResearchPriority.URGENT,
         "measured change",
     )
-    assert surface_research_candidates(missing_current, missing_change, (positive_only,)) == ()
+    assert (
+        surface_research_candidates(
+            missing_current,
+            missing_change,
+            (positive_only,),
+            prior_snapshot=prior,
+        )
+        == ()
+    )
 
 
 def test_candidate_changes_must_bind_to_current_snapshot() -> None:
+    prior = snapshot(1.0)
     current = snapshot(2.0, cutoff=T1, version="2")
-    change = compare_universe_snapshots(snapshot(1.0), current)[0]
+    change = compare_universe_snapshots(prior, current)[0]
     foreign_current = snapshot(3.0, cutoff=T1, version="foreign")
     rule = CandidateRule(
         "changed",
@@ -562,8 +621,8 @@ def test_candidate_changes_must_bind_to_current_snapshot() -> None:
         ResearchPriority.ROUTINE,
         "changed",
     )
-    with pytest.raises(ObservableUniverseError, match="exact current"):
-        surface_research_candidates(foreign_current, (change,), (rule,))
+    with pytest.raises(ObservableUniverseError, match="bound prior/current"):
+        surface_research_candidates(foreign_current, (change,), (rule,), prior_snapshot=prior)
 
 
 def test_candidate_change_must_bind_to_its_exact_observation_slot() -> None:
@@ -603,13 +662,14 @@ def test_candidate_change_must_bind_to_its_exact_observation_slot() -> None:
         ResearchPriority.ROUTINE,
         "changed",
     )
-    with pytest.raises(ObservableUniverseError, match="observation slot"):
-        surface_research_candidates(current, (forged,), (rule,))
+    with pytest.raises(ObservableUniverseError, match="bound prior/current"):
+        surface_research_candidates(current, (forged,), (rule,), prior_snapshot=prior)
 
 
 def test_candidate_change_rejects_unbound_current_evidence() -> None:
+    prior = snapshot(1.0)
     current = snapshot(2.0, cutoff=T1, version="2")
-    change = compare_universe_snapshots(snapshot(1.0), current)[0]
+    change = compare_universe_snapshots(prior, current)[0]
     forged = replace(change, current_evidence_refs=("undeclared-evidence",))
     rule = CandidateRule(
         "changed",
@@ -618,16 +678,82 @@ def test_candidate_change_rejects_unbound_current_evidence() -> None:
         ResearchPriority.ROUTINE,
         "changed",
     )
-    with pytest.raises(ObservableUniverseError, match="evidence does not bind"):
-        surface_research_candidates(current, (forged,), (rule,))
+    with pytest.raises(ObservableUniverseError, match="bound prior/current"):
+        surface_research_candidates(current, (forged,), (rule,), prior_snapshot=prior)
+
+
+def test_candidate_change_rejects_forged_prior_lineage() -> None:
+    prior = snapshot(1.0)
+    current = snapshot(2.0, cutoff=T1, version="2")
+    change = compare_universe_snapshots(prior, current)[0]
+    forged = replace(
+        change,
+        prior_value=999.0,
+        prior_evidence_refs=("nonexistent-prior-evidence",),
+    )
+    rule = CandidateRule(
+        "changed",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ROUTINE,
+        "changed",
+    )
+    with pytest.raises(ObservableUniverseError, match="bound prior/current"):
+        surface_research_candidates(current, (forged,), (rule,), prior_snapshot=prior)
+
+
+def test_candidate_carries_distinct_prior_and_current_evidence() -> None:
+    prior = snapshot(obs=(observation(1.0, reference_id="prior-measurement"),))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(observation(2.0, at=T1, reference_id="current-measurement"),),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    rule = CandidateRule(
+        "changed",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ROUTINE,
+        "changed",
+    )
+    candidate = surface_research_candidates(current, (change,), (rule,), prior_snapshot=prior)[0]
+    assert candidate.triggering_evidence_refs == (
+        "current-measurement",
+        "prior-measurement",
+    )
+
+    missing_member = member(available=(), unavailable=("market_return", "consensus"))
+    missing_current = snapshot(
+        cutoff=T1,
+        version="missing",
+        obs=(),
+        members=(missing_member,),
+    )
+    missing_change = compare_universe_snapshots(prior, missing_current)[0]
+    missing_rule = CandidateRule(
+        "newly-missing",
+        "market_return",
+        (ChangeState.NEWLY_MISSING,),
+        ResearchPriority.ELEVATED,
+        "evidence disappeared",
+    )
+    missing_candidate = surface_research_candidates(
+        missing_current,
+        (missing_change,),
+        (missing_rule,),
+        prior_snapshot=prior,
+    )[0]
+    assert missing_candidate.triggering_evidence_refs == ("prior-measurement",)
 
 
 @pytest.mark.parametrize("variant", ["version", "domain", "membership", "missing"])
 def test_change_lineage_binds_snapshot_metadata_even_when_observations_match(
     variant: str,
 ) -> None:
+    prior = snapshot(1.0)
     current = snapshot(2.0, cutoff=T1, version="2")
-    change = compare_universe_snapshots(snapshot(1.0), current)[0]
+    change = compare_universe_snapshots(prior, current)[0]
     base_member = current.members[0]
     if variant == "version":
         alternate = replace(current, version="other")
@@ -664,8 +790,8 @@ def test_change_lineage_binds_snapshot_metadata_even_when_observations_match(
         ResearchPriority.ROUTINE,
         "changed",
     )
-    with pytest.raises(ObservableUniverseError, match="exact current"):
-        surface_research_candidates(alternate, (change,), (rule,))
+    with pytest.raises(ObservableUniverseError, match="bound prior/current"):
+        surface_research_candidates(alternate, (change,), (rule,), prior_snapshot=prior)
 
 
 def test_missing_current_observation_still_binds_exact_snapshot() -> None:
@@ -682,13 +808,14 @@ def test_missing_current_observation_still_binds_exact_snapshot() -> None:
         ResearchPriority.ELEVATED,
         "evidence disappeared",
     )
-    with pytest.raises(ObservableUniverseError, match="exact current"):
-        surface_research_candidates(alternate, (change,), (rule,))
+    with pytest.raises(ObservableUniverseError, match="bound prior/current"):
+        surface_research_candidates(alternate, (change,), (rule,), prior_snapshot=prior)
 
 
 def test_multiple_rules_deduplicate_one_change_and_preserve_distinct_reasons() -> None:
+    prior = snapshot(1.0)
     current = snapshot(3.0, cutoff=T1, version="2")
-    change = compare_universe_snapshots(snapshot(1.0), current)[0]
+    change = compare_universe_snapshots(prior, current)[0]
     rules = (
         CandidateRule(
             "a-routine",
@@ -705,7 +832,7 @@ def test_multiple_rules_deduplicate_one_change_and_preserve_distinct_reasons() -
             "large move requires review",
         ),
     )
-    candidate = surface_research_candidates(current, (change,), rules)[0]
+    candidate = surface_research_candidates(current, (change,), rules, prior_snapshot=prior)[0]
     assert candidate.triggering_change_ids == (change.change_id,)
     assert len(candidate.measured_reasons) == 2
     assert candidate.priority is ResearchPriority.URGENT
@@ -744,7 +871,7 @@ def test_removed_members_do_not_abort_retained_candidates() -> None:
             "member evidence missing",
         ),
     )
-    candidates = surface_research_candidates(current, changes, rules)
+    candidates = surface_research_candidates(current, changes, rules, prior_snapshot=prior)
     assert [item.member_id for item in candidates] == ["000660"]
 
 
@@ -768,7 +895,16 @@ def test_newly_available_but_old_evidence_is_stale_not_fresh() -> None:
         ResearchPriority.ELEVATED,
         "fresh evidence",
     )
-    assert surface_research_candidates(current, (change,), (fresh_rule,)) == ()
+    assert (
+        surface_research_candidates(
+            current,
+            (change,),
+            (fresh_rule,),
+            prior_snapshot=prior,
+            stale_after=timedelta(hours=12),
+        )
+        == ()
+    )
 
 
 def test_negative_staleness_window_is_rejected() -> None:
@@ -813,7 +949,10 @@ def test_candidate_ordering_is_deterministic_across_members() -> None:
         "changed", "market_return", (ChangeState.CHANGED,), ResearchPriority.ROUTINE, "changed"
     )
     candidates = surface_research_candidates(
-        current, compare_universe_snapshots(prior, current), (rule,)
+        current,
+        compare_universe_snapshots(prior, current),
+        (rule,),
+        prior_snapshot=prior,
     )
     assert [item.member_id for item in candidates] == ["000660", "005930"]
 
@@ -882,6 +1021,18 @@ def test_store_rejects_switch_to_an_unrelated_universe(tmp_path: Path) -> None:
         persist_successful_universe_attempt(unrelated, output_root=tmp_path, attempted_at=T1)
     current = load_current_universe_state(tmp_path)
     assert current is not None and current.snapshot == original
+
+
+def test_successful_publication_cannot_regress_current_research_cutoff(
+    tmp_path: Path,
+) -> None:
+    newer = snapshot(2.0, cutoff=T1, version="2")
+    persist_successful_universe_attempt(newer, output_root=tmp_path, attempted_at=T1)
+    older = snapshot(1.0, cutoff=T0, version="1")
+    with pytest.raises(ObservableUniverseError, match="regress.*research cutoff"):
+        persist_successful_universe_attempt(older, output_root=tmp_path, attempted_at=T2)
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.snapshot == newer
 
 
 def test_pointer_replace_fsyncs_publication_directory(

@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, cast
 
@@ -529,11 +530,21 @@ def surface_research_candidates(
     snapshot: ObservableUniverseSnapshot,
     changes: tuple[ObservationChange, ...],
     rules: tuple[CandidateRule, ...],
+    *,
+    prior_snapshot: ObservableUniverseSnapshot,
+    stale_after: timedelta | None = None,
 ) -> tuple[ResearchCandidate, ...]:
     """Apply explicit deterministic rules; no rule means no forced candidate."""
 
     if len({item.rule_id for item in rules}) != len(rules):
         raise ObservableUniverseError("candidate rule_id values cannot repeat")
+    expected_changes = compare_universe_snapshots(prior_snapshot, snapshot, stale_after=stale_after)
+    supplied_by_id = {item.change_id: item for item in changes}
+    expected_by_id = {item.change_id: item for item in expected_changes}
+    if len(supplied_by_id) != len(changes) or supplied_by_id != expected_by_id:
+        raise ObservableUniverseError(
+            "candidate changes must exactly match the bound prior/current snapshots"
+        )
     member_by_id = {item.member_id: item for item in snapshot.members}
     current_observations_by_slot = {item.slot: item for item in snapshot.observations}
     hits: dict[str, list[tuple[CandidateRule, ObservationChange]]] = {}
@@ -625,7 +636,7 @@ def surface_research_candidates(
                 ),
                 triggering_change_ids=tuple(sorted({change.change_id for _, change in selected})),
                 triggering_evidence_refs=tuple(
-                    sorted({ref for _, change in selected for ref in change.current_evidence_refs})
+                    sorted({ref for _, change in selected for ref in change.evidence_refs})
                 ),
                 missing_dimensions=missing,
                 blocked_evidence=blocked,
@@ -662,6 +673,16 @@ def persist_successful_universe_attempt(
             "successful publication attempt cannot precede the research cutoff"
         )
     with _exclusive_universe_write_lock(root):
+        prior_current = load_current_universe_state(root)
+        if (
+            prior_current is not None
+            and prior_current.ready
+            and prior_current.snapshot is not None
+            and snapshot.research_cutoff_at < prior_current.snapshot.research_cutoff_at
+        ):
+            raise ObservableUniverseError(
+                "successful publication cannot regress the current research cutoff"
+            )
         _bind_universe_identity(root, snapshot.universe_id)
         snapshot_bytes = _encoded(snapshot.payload())
         snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot.snapshot_id}.json"
@@ -904,6 +925,12 @@ def _compare_observations(
             )
         return make(ChangeState.UNCHANGED, None, "evidence remains explicitly unavailable")
     assert prior is not None and current is not None
+    if current.available_at < prior.available_at or current.observed_at < prior.observed_at:
+        return make(
+            ChangeState.INCOMPARABLE,
+            None,
+            "current observation chronology regresses the prior observation",
+        )
     differences = [
         name
         for name in ("metric_id", "unit", "basis", "window", "semantics")
@@ -922,37 +949,44 @@ def _compare_observations(
             None,
             "current evidence maturity is lower than the prior observation",
         )
+    prior_authority = tuple(
+        sorted((item.source, item.semantic_authority) for item in prior.evidence)
+    )
+    current_authority = tuple(
+        sorted((item.source, item.semantic_authority) for item in current.evidence)
+    )
+    if current_authority != prior_authority:
+        return make(
+            ChangeState.INCOMPARABLE,
+            None,
+            "current evidence semantic authority differs from the prior observation",
+        )
     if current_is_stale:
         return make(
             ChangeState.STALE,
             None,
             "current evidence exceeds the configured staleness window",
         )
-    if type(prior.value) is int and type(current.value) is int:
-        int_delta = current.value - prior.value
-        state = ChangeState.UNCHANGED if int_delta == 0 else ChangeState.CHANGED
-        reason = (
-            f"{current.metric_id} changed by {int_delta:g} {current.unit}"
-            if int_delta
-            else f"{current.metric_id} is unchanged"
-        )
-        return make(state, int_delta, reason)
     if type(prior.value) in (int, float) and type(current.value) in (int, float):
+        exact_delta = Fraction(cast(float | int, current.value)) - Fraction(
+            cast(float | int, prior.value)
+        )
         try:
-            float_delta = float(cast(float | int, current.value)) - float(
-                cast(float | int, prior.value)
+            delta: float | int = (
+                exact_delta.numerator if exact_delta.denominator == 1 else float(exact_delta)
             )
         except OverflowError:
             return make(ChangeState.INCOMPARABLE, None, "numeric delta exceeds finite range")
-        if not math.isfinite(float_delta):
+        if isinstance(delta, float) and not math.isfinite(delta):
             return make(ChangeState.INCOMPARABLE, None, "numeric delta exceeds finite range")
-        state = ChangeState.UNCHANGED if float_delta == 0 else ChangeState.CHANGED
+        state = ChangeState.UNCHANGED if exact_delta == 0 else ChangeState.CHANGED
+        delta_text = str(delta) if isinstance(delta, int) else f"{delta:g}"
         reason = (
-            f"{current.metric_id} changed by {float_delta:g} {current.unit}"
-            if float_delta
+            f"{current.metric_id} changed by {delta_text} {current.unit}"
+            if exact_delta
             else f"{current.metric_id} is unchanged"
         )
-        return make(state, float_delta, reason)
+        return make(state, delta, reason)
     equal = prior.value == current.value
     return make(
         ChangeState.UNCHANGED if equal else ChangeState.CHANGED,
