@@ -478,6 +478,7 @@ class PlannerCandidateInput:
     candidate_id: str
     member_id: str
     domain_id: str | None
+    priority: ResearchPriority
     measured_reasons: tuple[str, ...]
     evidence_refs: tuple[str, ...]
     missing_dimensions: tuple[str, ...]
@@ -491,6 +492,8 @@ class CurrentUniverseState:
     attempt_id: str
     snapshot: ObservableUniverseSnapshot | None
     failure_code: str | None
+    last_successful_cutoff_at: datetime | None
+    last_successful_snapshot_id: str | None
 
     @property
     def ready(self) -> bool:
@@ -651,6 +654,7 @@ def planner_input(candidate: ResearchCandidate) -> PlannerCandidateInput:
         candidate_id=candidate.candidate_id,
         member_id=candidate.member_id,
         domain_id=candidate.domain_id,
+        priority=candidate.priority,
         measured_reasons=candidate.measured_reasons,
         evidence_refs=candidate.triggering_evidence_refs,
         missing_dimensions=candidate.missing_dimensions,
@@ -676,9 +680,8 @@ def persist_successful_universe_attempt(
         prior_current = load_current_universe_state(root)
         if (
             prior_current is not None
-            and prior_current.ready
-            and prior_current.snapshot is not None
-            and snapshot.research_cutoff_at < prior_current.snapshot.research_cutoff_at
+            and prior_current.last_successful_cutoff_at is not None
+            and snapshot.research_cutoff_at < prior_current.last_successful_cutoff_at
         ):
             raise ObservableUniverseError(
                 "successful publication cannot regress the current research cutoff"
@@ -713,6 +716,8 @@ def persist_successful_universe_attempt(
             "snapshot_id": snapshot.snapshot_id,
             "manifest_id": manifest_id,
             "failure_code": None,
+            "last_successful_cutoff_at": _utc(snapshot.research_cutoff_at).isoformat(),
+            "last_successful_snapshot_id": snapshot.snapshot_id,
         }
         _publish_pointer(root, pointer_without_id)
         return snapshot_path
@@ -732,17 +737,26 @@ def publish_failed_universe_attempt(
             "failure_code": failure_code,
         }
     )
-    pointer_without_id = {
-        "schema_version": SCHEMA_VERSION,
-        "status": AttemptStatus.FAILED.value,
-        "attempted_at": attempted.isoformat(),
-        "attempt_id": attempt_id,
-        "snapshot_id": None,
-        "manifest_id": None,
-        "failure_code": failure_code,
-    }
     root = Path(output_root)
     with _exclusive_universe_write_lock(root):
+        prior_current = load_current_universe_state(root)
+        pointer_without_id = {
+            "schema_version": SCHEMA_VERSION,
+            "status": AttemptStatus.FAILED.value,
+            "attempted_at": attempted.isoformat(),
+            "attempt_id": attempt_id,
+            "snapshot_id": None,
+            "manifest_id": None,
+            "failure_code": failure_code,
+            "last_successful_cutoff_at": (
+                _utc(prior_current.last_successful_cutoff_at).isoformat()
+                if prior_current is not None and prior_current.last_successful_cutoff_at is not None
+                else None
+            ),
+            "last_successful_snapshot_id": (
+                prior_current.last_successful_snapshot_id if prior_current is not None else None
+            ),
+        }
         _publish_pointer(root, pointer_without_id)
         return root / _CURRENT_PATH
 
@@ -761,6 +775,8 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
         "snapshot_id",
         "manifest_id",
         "failure_code",
+        "last_successful_cutoff_at",
+        "last_successful_snapshot_id",
         "pointer_id",
     }
     _exact(pointer, expected, "current pointer")
@@ -775,6 +791,19 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
     attempted_at = _datetime(_required_text(pointer, "attempted_at"), "attempted_at")
     attempt_id = _required_text(pointer, "attempt_id")
     failure_code = _nullable_text(pointer, "failure_code")
+    last_cutoff_text = _nullable_text(pointer, "last_successful_cutoff_at")
+    last_snapshot_id = _nullable_text(pointer, "last_successful_snapshot_id")
+    if (last_cutoff_text is None) != (last_snapshot_id is None):
+        raise ObservableUniverseError(
+            "last successful cutoff and snapshot identity must be present together"
+        )
+    last_cutoff = (
+        _datetime(last_cutoff_text, "last_successful_cutoff_at")
+        if last_cutoff_text is not None
+        else None
+    )
+    if last_snapshot_id is not None:
+        _sha_text(last_snapshot_id, "last_successful_snapshot_id")
     if status is AttemptStatus.FAILED:
         if pointer["snapshot_id"] is not None or pointer["manifest_id"] is not None:
             raise ObservableUniverseError("failed pointer cannot select a snapshot")
@@ -788,7 +817,15 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
         )
         if attempt_id != expected_attempt:
             raise ObservableUniverseError("failed attempt identity mismatch")
-        return CurrentUniverseState(status, attempted_at, attempt_id, None, failure_code)
+        return CurrentUniverseState(
+            status,
+            attempted_at,
+            attempt_id,
+            None,
+            failure_code,
+            last_cutoff,
+            last_snapshot_id,
+        )
 
     if failure_code is not None:
         raise ObservableUniverseError("successful pointer cannot contain failure_code")
@@ -817,6 +854,10 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
     if _digest(snapshot_bytes) != manifest.get("snapshot_bytes_sha256"):
         raise ObservableUniverseError("persisted snapshot bytes do not match manifest")
     snapshot = load_universe_snapshot(snapshot_path)
+    if last_cutoff != snapshot.research_cutoff_at or last_snapshot_id != snapshot.snapshot_id:
+        raise ObservableUniverseError(
+            "successful pointer must preserve its selected snapshot as the high-water mark"
+        )
     if _load_universe_identity(root) != snapshot.universe_id:
         raise ObservableUniverseError(
             "selected snapshot does not match the bound universe identity"
@@ -835,7 +876,15 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
     )
     if attempt_id != expected_attempt:
         raise ObservableUniverseError("successful attempt identity mismatch")
-    return CurrentUniverseState(status, attempted_at, attempt_id, snapshot, None)
+    return CurrentUniverseState(
+        status,
+        attempted_at,
+        attempt_id,
+        snapshot,
+        None,
+        last_cutoff,
+        last_snapshot_id,
+    )
 
 
 def load_universe_snapshot(path: str | Path) -> ObservableUniverseSnapshot:
@@ -987,6 +1036,12 @@ def _compare_observations(
             else f"{current.metric_id} is unchanged"
         )
         return make(state, delta, reason)
+    if type(prior.value) is not type(current.value):
+        return make(
+            ChangeState.INCOMPARABLE,
+            None,
+            "observation scalar encoding changed between snapshots",
+        )
     equal = prior.value == current.value
     return make(
         ChangeState.UNCHANGED if equal else ChangeState.CHANGED,

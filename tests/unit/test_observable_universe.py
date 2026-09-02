@@ -43,6 +43,7 @@ from alpha_cycle.intelligence.observable_universe import (
 T0 = datetime(2026, 8, 1, tzinfo=UTC)
 T1 = datetime(2026, 8, 2, tzinfo=UTC)
 T2 = datetime(2026, 8, 3, tzinfo=UTC)
+T3 = datetime(2026, 8, 4, tzinfo=UTC)
 
 
 def content_id(value: object) -> str:
@@ -68,7 +69,7 @@ def evidence(
 
 
 def observation(
-    value: float | int | None,
+    value: float | int | str | bool | None,
     *,
     member_id: str = "000660",
     dimension: str = "market_return",
@@ -303,6 +304,21 @@ def test_mixed_numeric_encodings_do_not_erase_an_exact_change() -> None:
     assert change.state is ChangeState.CHANGED
     assert change.delta == -1
     assert type(change.delta) is int
+
+
+@pytest.mark.parametrize(("prior_value", "current_value"), [(1, True), (False, 0.0)])
+def test_boolean_numeric_encoding_switch_is_incomparable(
+    prior_value: int | float | bool, current_value: int | float | bool
+) -> None:
+    prior = snapshot(obs=(observation(prior_value),))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(observation(current_value, at=T1, reference_id="encoding-switch"),),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.INCOMPARABLE
+    assert "scalar encoding changed" in change.reason
 
 
 def test_opposing_large_floats_produce_an_exact_integer_delta() -> None:
@@ -569,7 +585,9 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
     assert payload["decision_score"] is None
     assert payload["recommendation"] is None
     assert payload["expected_return"] is None
-    assert planner_input(candidate).candidate_id == candidate.candidate_id
+    planner_candidate = planner_input(candidate)
+    assert planner_candidate.candidate_id == candidate.candidate_id
+    assert planner_candidate.priority is ResearchPriority.ELEVATED
 
 
 def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidate() -> None:
@@ -972,6 +990,8 @@ def test_persistence_replay_and_failed_later_attempt_semantics(tmp_path: Path) -
     assert failed.ready is False
     assert failed.snapshot is None
     assert failed.failure_code == "provider_timeout"
+    assert failed.last_successful_cutoff_at == T0
+    assert failed.last_successful_snapshot_id == state.snapshot_id
     assert path.exists()  # immutable history remains, but is not current readiness
 
 
@@ -1028,11 +1048,19 @@ def test_successful_publication_cannot_regress_current_research_cutoff(
 ) -> None:
     newer = snapshot(2.0, cutoff=T1, version="2")
     persist_successful_universe_attempt(newer, output_root=tmp_path, attempted_at=T1)
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T2,
+        failure_code="provider_timeout",
+    )
     older = snapshot(1.0, cutoff=T0, version="1")
     with pytest.raises(ObservableUniverseError, match="regress.*research cutoff"):
-        persist_successful_universe_attempt(older, output_root=tmp_path, attempted_at=T2)
+        persist_successful_universe_attempt(older, output_root=tmp_path, attempted_at=T3)
     current = load_current_universe_state(tmp_path)
-    assert current is not None and current.snapshot == newer
+    assert current is not None
+    assert current.status is AttemptStatus.FAILED
+    assert current.last_successful_cutoff_at == T1
+    assert current.last_successful_snapshot_id == newer.snapshot_id
 
 
 def test_pointer_replace_fsyncs_publication_directory(
