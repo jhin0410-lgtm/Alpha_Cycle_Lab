@@ -182,6 +182,8 @@ class MeasuredObservation:
         _aware(self.available_at, "available_at")
         if self.available_at < self.observed_at:
             raise ObservableUniverseError("available_at cannot precede observed_at")
+        if type(self.value) not in (float, int, str, bool, type(None)):
+            raise ObservableUniverseError("observation value must be a JSON scalar or null")
         if isinstance(self.value, float) and not math.isfinite(self.value):
             raise ObservableUniverseError("observation numeric values must be finite")
         if self.maturity is EvidenceMaturity.UNAVAILABLE:
@@ -418,6 +420,7 @@ class CandidateRule:
 
 @dataclass(frozen=True)
 class ResearchCandidate:
+    current_snapshot_id: str
     member_id: str
     domain_id: str | None
     evaluated_at: datetime
@@ -432,6 +435,7 @@ class ResearchCandidate:
     investment_authority: bool = False
 
     def __post_init__(self) -> None:
+        _sha_text(self.current_snapshot_id, "current_snapshot_id")
         _text(self.member_id, "member_id")
         _optional_text(self.domain_id, "domain_id")
         _aware(self.evaluated_at, "evaluated_at")
@@ -454,6 +458,7 @@ class ResearchCandidate:
 
     def payload_without_id(self) -> dict[str, object]:
         return {
+            "current_snapshot_id": self.current_snapshot_id,
             "member_id": self.member_id,
             "domain_id": self.domain_id,
             "evaluated_at": _utc(self.evaluated_at).isoformat(),
@@ -476,9 +481,12 @@ class ResearchCandidate:
 @dataclass(frozen=True)
 class PlannerCandidateInput:
     candidate_id: str
+    current_snapshot_id: str
     member_id: str
     domain_id: str | None
     priority: ResearchPriority
+    evaluated_at: datetime
+    triggering_change_ids: tuple[str, ...]
     measured_reasons: tuple[str, ...]
     evidence_refs: tuple[str, ...]
     missing_dimensions: tuple[str, ...]
@@ -526,7 +534,34 @@ def compare_universe_snapshots(
         )
         for slot in sorted(set(prior_by_slot) | set(current_by_slot))
     ]
-    return tuple(changes)
+    prior_members = {item.member_id: item for item in prior.members}
+    for member in current.members:
+        prior_member = prior_members.get(member.member_id)
+        prior_unavailable = (
+            set(prior_member.unavailable_dimensions) if prior_member is not None else set()
+        )
+        for dimension_id in sorted(set(member.unavailable_dimensions) - prior_unavailable):
+            slot = (member.member_id, dimension_id)
+            if slot in prior_by_slot or slot in current_by_slot:
+                continue
+            changes.append(
+                ObservationChange(
+                    current_snapshot_id=current.snapshot_id,
+                    member_id=member.member_id,
+                    dimension_id=dimension_id,
+                    state=ChangeState.NEWLY_MISSING,
+                    evaluated_at=current.research_cutoff_at,
+                    prior_observation_id=None,
+                    current_observation_id=None,
+                    prior_value=None,
+                    current_value=None,
+                    delta=None,
+                    reason="dimension is newly declared unavailable",
+                    prior_evidence_refs=(),
+                    current_evidence_refs=(),
+                )
+            )
+    return tuple(sorted(changes, key=lambda item: (item.member_id, item.dimension_id)))
 
 
 def surface_research_candidates(
@@ -628,6 +663,7 @@ def surface_research_candidates(
         )
         candidates.append(
             ResearchCandidate(
+                current_snapshot_id=snapshot.snapshot_id,
                 member_id=member_id,
                 domain_id=member.domain_id,
                 evaluated_at=snapshot.research_cutoff_at,
@@ -652,9 +688,12 @@ def surface_research_candidates(
 def planner_input(candidate: ResearchCandidate) -> PlannerCandidateInput:
     return PlannerCandidateInput(
         candidate_id=candidate.candidate_id,
+        current_snapshot_id=candidate.current_snapshot_id,
         member_id=candidate.member_id,
         domain_id=candidate.domain_id,
         priority=candidate.priority,
+        evaluated_at=candidate.evaluated_at,
+        triggering_change_ids=candidate.triggering_change_ids,
         measured_reasons=candidate.measured_reasons,
         evidence_refs=candidate.triggering_evidence_refs,
         missing_dimensions=candidate.missing_dimensions,
@@ -676,7 +715,35 @@ def persist_successful_universe_attempt(
         raise ObservableUniverseError(
             "successful publication attempt cannot precede the research cutoff"
         )
+    snapshot_bytes = _encoded(snapshot.payload())
+    snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot.snapshot_id}.json"
+    manifest_without_id = {
+        "schema_version": SCHEMA_VERSION,
+        "snapshot_id": snapshot.snapshot_id,
+        "snapshot_bytes_sha256": _digest(snapshot_bytes),
+    }
+    manifest_id = _sha(manifest_without_id)
+    manifest = {**manifest_without_id, "manifest_id": manifest_id}
+    pointer_without_id = {
+        "schema_version": SCHEMA_VERSION,
+        "status": AttemptStatus.SUCCEEDED.value,
+        "attempted_at": attempted.isoformat(),
+        "attempt_id": _sha(
+            {
+                "status": AttemptStatus.SUCCEEDED.value,
+                "attempted_at": attempted.isoformat(),
+                "snapshot_id": snapshot.snapshot_id,
+                "manifest_id": manifest_id,
+            }
+        ),
+        "snapshot_id": snapshot.snapshot_id,
+        "manifest_id": manifest_id,
+        "failure_code": None,
+        "last_successful_cutoff_at": _utc(snapshot.research_cutoff_at).isoformat(),
+        "last_successful_snapshot_id": snapshot.snapshot_id,
+    }
     with _exclusive_universe_write_lock(root):
+        _validate_pointer_advance(root, pointer_without_id)
         prior_current = load_current_universe_state(root)
         if (
             prior_current is not None
@@ -687,38 +754,11 @@ def persist_successful_universe_attempt(
                 "successful publication cannot regress the current research cutoff"
             )
         _bind_universe_identity(root, snapshot.universe_id)
-        snapshot_bytes = _encoded(snapshot.payload())
-        snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot.snapshot_id}.json"
         _write_immutable(snapshot_path, snapshot_bytes)
-        manifest_without_id = {
-            "schema_version": SCHEMA_VERSION,
-            "snapshot_id": snapshot.snapshot_id,
-            "snapshot_bytes_sha256": _digest(snapshot_bytes),
-        }
-        manifest_id = _sha(manifest_without_id)
-        manifest = {**manifest_without_id, "manifest_id": manifest_id}
         _write_immutable(
             root / _MANIFEST_DIRECTORY / f"{manifest_id}.json",
             _encoded(manifest),
         )
-        pointer_without_id = {
-            "schema_version": SCHEMA_VERSION,
-            "status": AttemptStatus.SUCCEEDED.value,
-            "attempted_at": attempted.isoformat(),
-            "attempt_id": _sha(
-                {
-                    "status": AttemptStatus.SUCCEEDED.value,
-                    "attempted_at": attempted.isoformat(),
-                    "snapshot_id": snapshot.snapshot_id,
-                    "manifest_id": manifest_id,
-                }
-            ),
-            "snapshot_id": snapshot.snapshot_id,
-            "manifest_id": manifest_id,
-            "failure_code": None,
-            "last_successful_cutoff_at": _utc(snapshot.research_cutoff_at).isoformat(),
-            "last_successful_snapshot_id": snapshot.snapshot_id,
-        }
         _publish_pointer(root, pointer_without_id)
         return snapshot_path
 
@@ -817,6 +857,18 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
         )
         if attempt_id != expected_attempt:
             raise ObservableUniverseError("failed attempt identity mismatch")
+        if last_cutoff is not None and last_snapshot_id is not None:
+            last_snapshot = load_universe_snapshot(
+                root / _SNAPSHOT_DIRECTORY / f"{last_snapshot_id}.json"
+            )
+            if last_snapshot.research_cutoff_at != last_cutoff:
+                raise ObservableUniverseError(
+                    "failed pointer success watermark cutoff does not match its snapshot"
+                )
+            if _load_universe_identity(root) != last_snapshot.universe_id:
+                raise ObservableUniverseError(
+                    "failed pointer success watermark has a different universe identity"
+                )
         return CurrentUniverseState(
             status,
             attempted_at,
@@ -972,6 +1024,8 @@ def _compare_observations(
                 None,
                 "previously available evidence is now missing",
             )
+        if prior is None:
+            return make(ChangeState.NEWLY_MISSING, None, "dimension is newly unavailable")
         return make(ChangeState.UNCHANGED, None, "evidence remains explicitly unavailable")
     assert prior is not None and current is not None
     if current.available_at < prior.available_at or current.observed_at < prior.observed_at:
@@ -1153,17 +1207,21 @@ def _exclusive_universe_write_lock(root: Path) -> Iterator[None]:
 
 def _publish_pointer(root: Path, without_id: dict[str, object]) -> None:
     path = root / _CURRENT_PATH
-    if path.exists():
-        prior = load_current_universe_state(root)
-        assert prior is not None
-        prior_at = prior.attempted_at
-        next_at = _datetime(cast(str, without_id["attempted_at"]), "attempted_at")
-        if next_at < prior_at:
-            raise ObservableUniverseError("current attempt time cannot move backward")
-        if next_at == prior_at and prior.attempt_id != without_id["attempt_id"]:
-            raise ObservableUniverseError("one attempt time cannot identify different attempts")
+    _validate_pointer_advance(root, without_id)
     pointer = {**without_id, "pointer_id": _sha(without_id)}
     _atomic_replace(path, _encoded(pointer))
+
+
+def _validate_pointer_advance(root: Path, without_id: dict[str, object]) -> None:
+    if not (root / _CURRENT_PATH).exists():
+        return
+    prior = load_current_universe_state(root)
+    assert prior is not None
+    next_at = _datetime(cast(str, without_id["attempted_at"]), "attempted_at")
+    if next_at < prior.attempted_at:
+        raise ObservableUniverseError("current attempt time cannot move backward")
+    if next_at == prior.attempted_at and prior.attempt_id != without_id["attempt_id"]:
+        raise ObservableUniverseError("one attempt time cannot identify different attempts")
 
 
 def _bind_universe_identity(root: Path, universe_id: str) -> None:

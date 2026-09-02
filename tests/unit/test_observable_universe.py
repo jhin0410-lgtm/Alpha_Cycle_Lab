@@ -188,6 +188,11 @@ def test_future_and_outside_observations_rejected() -> None:
         snapshot(obs=(observation(1.0, member_id="005930"),))
 
 
+def test_non_scalar_observation_value_is_rejected_before_publication() -> None:
+    with pytest.raises(ObservableUniverseError, match="JSON scalar"):
+        replace(observation(1.0), value=["not", "a", "scalar"])
+
+
 def test_duplicate_metric_slot_rejected() -> None:
     with pytest.raises(ObservableUniverseError, match="duplicate metric slots"):
         snapshot(obs=(observation(1.0), observation(2.0, metric="other")))
@@ -588,6 +593,9 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
     planner_candidate = planner_input(candidate)
     assert planner_candidate.candidate_id == candidate.candidate_id
     assert planner_candidate.priority is ResearchPriority.ELEVATED
+    assert planner_candidate.current_snapshot_id == current.snapshot_id
+    assert planner_candidate.evaluated_at == T1
+    assert planner_candidate.triggering_change_ids == candidate.triggering_change_ids
 
 
 def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidate() -> None:
@@ -925,6 +933,29 @@ def test_newly_available_but_old_evidence_is_stale_not_fresh() -> None:
     )
 
 
+def test_newly_declared_unavailable_dimension_emits_a_gap_change() -> None:
+    prior = snapshot(1.0)
+    current_member = replace(
+        member(),
+        required_dimensions=("market_return", "consensus", "guidance"),
+        unavailable_dimensions=("consensus", "guidance"),
+    )
+    current = snapshot(1.0, cutoff=T1, version="2", members=(current_member,))
+    changes = compare_universe_snapshots(prior, current)
+    gap = next(item for item in changes if item.dimension_id == "guidance")
+    assert gap.state is ChangeState.NEWLY_MISSING
+    assert gap.current_observation_id is None
+    rule = CandidateRule(
+        "new-gap",
+        "guidance",
+        (ChangeState.NEWLY_MISSING,),
+        ResearchPriority.ELEVATED,
+        "new evidence gap",
+    )
+    candidate = surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)[0]
+    assert "guidance" in candidate.missing_dimensions
+
+
 def test_negative_staleness_window_is_rejected() -> None:
     with pytest.raises(ObservableUniverseError, match="cannot be negative"):
         compare_universe_snapshots(
@@ -1043,6 +1074,37 @@ def test_store_rejects_switch_to_an_unrelated_universe(tmp_path: Path) -> None:
     assert current is not None and current.snapshot == original
 
 
+def test_rejected_stale_success_cannot_bind_an_unclaimed_store(tmp_path: Path) -> None:
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T2,
+        failure_code="initial_provider_failure",
+    )
+    stale = replace(snapshot(1.0, cutoff=T0), universe_id="stale-universe")
+    with pytest.raises(ObservableUniverseError, match="cannot move backward"):
+        persist_successful_universe_attempt(
+            stale,
+            output_root=tmp_path,
+            attempted_at=T1,
+        )
+    assert not (tmp_path / "observable_universe_v1/universe.json").exists()
+    assert not (
+        tmp_path / "observable_universe_v1/snapshots" / f"{stale.snapshot_id}.json"
+    ).exists()
+
+    legitimate = replace(
+        snapshot(2.0, cutoff=T2, version="2"),
+        universe_id="legitimate-universe",
+    )
+    persist_successful_universe_attempt(
+        legitimate,
+        output_root=tmp_path,
+        attempted_at=T3,
+    )
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.snapshot == legitimate
+
+
 def test_successful_publication_cannot_regress_current_research_cutoff(
     tmp_path: Path,
 ) -> None:
@@ -1061,6 +1123,21 @@ def test_successful_publication_cannot_regress_current_research_cutoff(
     assert current.status is AttemptStatus.FAILED
     assert current.last_successful_cutoff_at == T1
     assert current.last_successful_snapshot_id == newer.snapshot_id
+
+
+def test_failed_pointer_reconstructs_its_success_watermark(tmp_path: Path) -> None:
+    state = snapshot()
+    snapshot_path = persist_successful_universe_attempt(
+        state, output_root=tmp_path, attempted_at=T0
+    )
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T1,
+        failure_code="provider_timeout",
+    )
+    snapshot_path.unlink()
+    with pytest.raises(ObservableUniverseError, match="cannot read snapshot"):
+        load_current_universe_state(tmp_path)
 
 
 def test_pointer_replace_fsyncs_publication_directory(
