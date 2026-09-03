@@ -215,6 +215,12 @@ class MeasuredObservation:
                 )
             if len({item.reference_id for item in self.evidence}) != len(self.evidence):
                 raise ObservableUniverseError("evidence references cannot repeat")
+            if tuple(item.reference_id for item in self.evidence) != tuple(
+                sorted(item.reference_id for item in self.evidence)
+            ):
+                raise ObservableUniverseError(
+                    "evidence references must use canonical reference_id order"
+                )
 
     @property
     def observation_id(self) -> str:
@@ -490,6 +496,7 @@ class PlannerCandidateInput:
     measured_reasons: tuple[str, ...]
     evidence_refs: tuple[str, ...]
     missing_dimensions: tuple[str, ...]
+    blocked_evidence: tuple[str, ...]
     research_model_status: ResearchModelStatus
 
 
@@ -697,6 +704,7 @@ def planner_input(candidate: ResearchCandidate) -> PlannerCandidateInput:
         measured_reasons=candidate.measured_reasons,
         evidence_refs=candidate.triggering_evidence_refs,
         missing_dimensions=candidate.missing_dimensions,
+        blocked_evidence=candidate.blocked_evidence,
         research_model_status=candidate.research_model_status,
     )
 
@@ -1175,6 +1183,7 @@ def _parse_evidence(raw: object) -> EvidenceReference:
 def _exclusive_universe_write_lock(root: Path) -> Iterator[None]:
     """Wait for the repository's trusted cross-process lock, then hold it through commit."""
 
+    _mkdir_durable(root)
     deadline = time.monotonic() + _LOCK_WAIT_SECONDS
     while True:
         lock = exclusive_research_ledger_write_lock(root)
@@ -1250,7 +1259,7 @@ def _load_universe_identity(root: Path) -> str:
 
 
 def _write_immutable(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _mkdir_durable(path.parent)
     if path.exists():
         if path.read_bytes() != content:
             raise ObservableUniverseError(
@@ -1275,7 +1284,7 @@ def _write_immutable(path: Path, content: bytes) -> None:
 
 
 def _atomic_replace(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    _mkdir_durable(path.parent)
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(name)
     try:
@@ -1297,6 +1306,23 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _mkdir_durable(path: Path) -> None:
+    if path.exists():
+        if path.is_symlink() or not path.is_dir():
+            raise ObservableUniverseError("publication directory path is not a directory")
+        return
+    _mkdir_durable(path.parent)
+    try:
+        path.mkdir()
+    except FileExistsError:
+        if path.is_symlink() or not path.is_dir():
+            raise ObservableUniverseError(
+                "publication directory path is not a directory"
+            ) from None
+    else:
+        _fsync_directory(path.parent)
 
 
 def _load_json(path: Path, field: str) -> dict[str, Any]:

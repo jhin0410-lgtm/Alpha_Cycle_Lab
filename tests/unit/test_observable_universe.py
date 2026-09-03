@@ -443,6 +443,14 @@ def test_repeated_identical_evidence_reference_is_unambiguous() -> None:
     assert state.source_evidence_refs == ("shared-reference",)
 
 
+def test_observation_evidence_requires_canonical_reference_order() -> None:
+    with pytest.raises(ObservableUniverseError, match="canonical reference_id order"):
+        replace(
+            observation(1.0),
+            evidence=(evidence("z-reference"), evidence("a-reference")),
+        )
+
+
 def test_macro_and_verified_flow_remain_descriptive_upstream_evidence() -> None:
     flow = observation(
         12500,
@@ -771,6 +779,33 @@ def test_candidate_carries_distinct_prior_and_current_evidence() -> None:
         prior_snapshot=prior,
     )[0]
     assert missing_candidate.triggering_evidence_refs == ("prior-measurement",)
+
+
+def test_planner_input_carries_concrete_evidence_blockers() -> None:
+    prior = snapshot(1.0)
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        members=(member(available=(), unavailable=("market_return", "consensus")),),
+        obs=(
+            observation(
+                None,
+                at=T1,
+                maturity=EvidenceMaturity.UNAVAILABLE,
+                unavailable_reason="provider timeout",
+            ),
+        ),
+    )
+    changes = compare_universe_snapshots(prior, current)
+    rule = CandidateRule(
+        "missing",
+        "market_return",
+        (ChangeState.NEWLY_MISSING,),
+        ResearchPriority.ELEVATED,
+        "evidence disappeared",
+    )
+    candidate = surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)[0]
+    assert planner_input(candidate).blocked_evidence == ("provider timeout",)
 
 
 @pytest.mark.parametrize("variant", ["version", "domain", "membership", "missing"])
@@ -1147,6 +1182,16 @@ def test_pointer_replace_fsyncs_publication_directory(
     monkeypatch.setattr(observable_module, "_fsync_directory", synced.append)
     observable_module._atomic_replace(tmp_path / "current.json", b"{}")
     assert synced == [tmp_path]
+
+
+def test_new_publication_directories_fsync_each_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    synced: list[Path] = []
+    monkeypatch.setattr(observable_module, "_fsync_directory", synced.append)
+    observable_root = tmp_path / "observable_universe_v1"
+    observable_module._mkdir_durable(observable_root / "snapshots")
+    assert synced == [tmp_path, observable_root]
 
 
 def test_replay_rejects_attempt_that_predates_selected_snapshot_cutoff(
