@@ -95,6 +95,12 @@ class UniverseMember:
     research_model_status: ResearchModelStatus = ResearchModelStatus.ABSENT
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "aliases", tuple(sorted(self.aliases, key=_identity)))
+        object.__setattr__(self, "required_dimensions", tuple(sorted(self.required_dimensions)))
+        object.__setattr__(self, "available_dimensions", tuple(sorted(self.available_dimensions)))
+        object.__setattr__(
+            self, "unavailable_dimensions", tuple(sorted(self.unavailable_dimensions))
+        )
         _text(self.member_id, "member_id")
         _optional_text(self.domain_id, "domain_id")
         _unique_text(self.aliases, "aliases", normalized=True)
@@ -261,6 +267,22 @@ class ObservableUniverseSnapshot:
     source_evidence_refs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "members",
+            tuple(sorted(self.members, key=lambda item: _identity(item.member_id))),
+        )
+        object.__setattr__(
+            self,
+            "observations",
+            tuple(
+                sorted(
+                    self.observations,
+                    key=lambda item: (_identity(item.member_id), item.dimension_id),
+                )
+            ),
+        )
+        object.__setattr__(self, "source_evidence_refs", tuple(sorted(self.source_evidence_refs)))
         _text(self.universe_id, "universe_id")
         _text(self.version, "version")
         _aware(self.research_cutoff_at, "research_cutoff_at")
@@ -529,26 +551,51 @@ def compare_universe_snapshots(
         raise ObservableUniverseError("current cutoff must be later than prior cutoff")
     if stale_after is not None and stale_after < timedelta(0):
         raise ObservableUniverseError("stale_after cannot be negative")
-    prior_by_slot = {item.slot: item for item in prior.observations}
-    current_by_slot = {item.slot: item for item in current.observations}
+    prior_by_slot = {
+        (_identity(item.member_id), item.dimension_id): item for item in prior.observations
+    }
+    current_by_slot = {
+        (_identity(item.member_id), item.dimension_id): item for item in current.observations
+    }
+    current_members = {_identity(item.member_id): item for item in current.members}
+    comparable_slots = []
+    for slot in sorted(set(prior_by_slot) | set(current_by_slot)):
+        current_member = current_members.get(slot[0])
+        current_declared_dimensions = (
+            set(current_member.required_dimensions)
+            | set(current_member.available_dimensions)
+            | set(current_member.unavailable_dimensions)
+            if current_member is not None
+            else set()
+        )
+        if (
+            slot in prior_by_slot
+            and slot not in current_by_slot
+            and current_member is not None
+            and slot[1] not in current_declared_dimensions
+        ):
+            continue
+        comparable_slots.append(slot)
     changes = [
         _compare_observations(
             prior_by_slot.get(slot),
             current_by_slot.get(slot),
             current_snapshot_id=current.snapshot_id,
+            prior_cutoff_at=prior.research_cutoff_at,
             evaluated_at=current.research_cutoff_at,
             stale_after=stale_after,
         )
-        for slot in sorted(set(prior_by_slot) | set(current_by_slot))
+        for slot in comparable_slots
     ]
-    prior_members = {item.member_id: item for item in prior.members}
+    prior_members = {_identity(item.member_id): item for item in prior.members}
     for member in current.members:
-        prior_member = prior_members.get(member.member_id)
+        normalized_member_id = _identity(member.member_id)
+        prior_member = prior_members.get(normalized_member_id)
         prior_unavailable = (
             set(prior_member.unavailable_dimensions) if prior_member is not None else set()
         )
         for dimension_id in sorted(set(member.unavailable_dimensions) - prior_unavailable):
-            slot = (member.member_id, dimension_id)
+            slot = (normalized_member_id, dimension_id)
             if slot in prior_by_slot or slot in current_by_slot:
                 continue
             changes.append(
@@ -985,6 +1032,7 @@ def _compare_observations(
     current: MeasuredObservation | None,
     *,
     current_snapshot_id: str,
+    prior_cutoff_at: datetime,
     evaluated_at: datetime,
     stale_after: timedelta | None,
 ) -> ObservationChange:
@@ -1016,6 +1064,17 @@ def _compare_observations(
         and stale_after is not None
         and evaluated_at - current.available_at > stale_after
     )
+    if (
+        current is not None
+        and current.maturity is not EvidenceMaturity.UNAVAILABLE
+        and current.available_at <= prior_cutoff_at
+        and (prior is None or prior.maturity is EvidenceMaturity.UNAVAILABLE)
+    ):
+        return make(
+            ChangeState.INCOMPARABLE,
+            None,
+            "current evidence was already knowable at the prior research cutoff",
+        )
     if prior is None or prior.maturity is EvidenceMaturity.UNAVAILABLE:
         if current is not None and current.maturity is not EvidenceMaturity.UNAVAILABLE:
             if current_is_stale:
@@ -1042,6 +1101,14 @@ def _compare_observations(
             None,
             "current observation chronology regresses the prior observation",
         )
+    if current.available_at <= prior_cutoff_at and (
+        current.value != prior.value or type(current.value) is not type(prior.value)
+    ):
+        return make(
+            ChangeState.INCOMPARABLE,
+            None,
+            "current evidence was already knowable at the prior research cutoff",
+        )
     differences = [
         name
         for name in ("metric_id", "unit", "basis", "window", "semantics")
@@ -1053,12 +1120,11 @@ def _compare_observations(
             None,
             "comparison identity differs: " + ", ".join(differences),
         )
-    maturity_rank = {item: rank for rank, item in enumerate(EvidenceMaturity)}
-    if maturity_rank[current.maturity] < maturity_rank[prior.maturity]:
+    if current.maturity is not prior.maturity:
         return make(
             ChangeState.INCOMPARABLE,
             None,
-            "current evidence maturity is lower than the prior observation",
+            "current evidence maturity differs from the prior observation",
         )
     prior_authority = tuple(
         sorted((item.source, item.semantic_authority) for item in prior.evidence)
@@ -1318,9 +1384,7 @@ def _mkdir_durable(path: Path) -> None:
         path.mkdir()
     except FileExistsError:
         if path.is_symlink() or not path.is_dir():
-            raise ObservableUniverseError(
-                "publication directory path is not a directory"
-            ) from None
+            raise ObservableUniverseError("publication directory path is not a directory") from None
     else:
         _fsync_directory(path.parent)
 

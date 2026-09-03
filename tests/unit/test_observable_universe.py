@@ -165,6 +165,28 @@ def test_valid_universe_is_deterministic_and_generic() -> None:
     assert generic.members[0].domain_id == "defense_aerospace"
 
 
+def test_snapshot_identity_canonicalizes_collection_order() -> None:
+    members = (
+        member("000660", aliases=("Hynix",)),
+        member("005930", aliases=("Samsung",)),
+    )
+    observations = (
+        observation(1.0),
+        observation(2.0, member_id="005930", reference_id="samsung"),
+    )
+    first = snapshot(members=members, obs=observations)
+    second = snapshot(
+        members=tuple(reversed(members)),
+        obs=tuple(reversed(observations)),
+    )
+    second = replace(
+        second,
+        source_evidence_refs=tuple(reversed(second.source_evidence_refs)),
+    )
+    assert first == second
+    assert first.snapshot_id == second.snapshot_id
+
+
 def test_duplicate_member_and_ambiguous_alias_rejected() -> None:
     with pytest.raises(ObservableUniverseError, match="duplicate"):
         snapshot(members=(member(), member(aliases=("Hynix",))))
@@ -250,7 +272,26 @@ def test_evidence_maturity_downgrade_is_not_reported_as_unchanged() -> None:
     )
     change = compare_universe_snapshots(prior, current)[0]
     assert change.state is ChangeState.INCOMPARABLE
-    assert "maturity is lower" in change.reason
+    assert "maturity differs" in change.reason
+
+
+def test_evidence_maturity_upgrade_is_explicit() -> None:
+    prior = snapshot(obs=(observation(1.0, maturity=EvidenceMaturity.CITED_CONTEXT),))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(
+            observation(
+                1.0,
+                at=T1,
+                maturity=EvidenceMaturity.INDEPENDENTLY_VALIDATED_AUTHORITY,
+                reference_id="validated-upgrade",
+            ),
+        ),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.INCOMPARABLE
+    assert "maturity differs" in change.reason
 
 
 def test_semantic_authority_change_is_incomparable() -> None:
@@ -283,6 +324,45 @@ def test_observation_chronology_cannot_regress() -> None:
     change = compare_universe_snapshots(prior, current)[0]
     assert change.state is ChangeState.INCOMPARABLE
     assert "chronology regresses" in change.reason
+
+
+def test_changed_backfill_already_knowable_at_prior_cutoff_is_incomparable() -> None:
+    prior = snapshot(1.0, cutoff=T1)
+    current = snapshot(
+        cutoff=T2,
+        version="2",
+        obs=(observation(2.0, at=T1, reference_id="late-backfill"),),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.INCOMPARABLE
+    assert "already knowable" in change.reason
+
+
+def test_unchanged_carried_forward_observation_remains_unchanged() -> None:
+    prior = snapshot(1.0, cutoff=T1)
+    current = snapshot(
+        cutoff=T2,
+        version="2",
+        obs=(observation(1.0, at=T1, reference_id="carried-forward"),),
+    )
+    assert compare_universe_snapshots(prior, current)[0].state is ChangeState.UNCHANGED
+
+
+def test_member_identity_normalization_pairs_cross_snapshot_slots() -> None:
+    prior = snapshot(
+        members=(member("ABC", aliases=()),),
+        obs=(observation(1.0, member_id="ABC"),),
+    )
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        members=(member(" abc ", aliases=()),),
+        obs=(observation(2.0, member_id=" abc ", at=T1),),
+    )
+    changes = compare_universe_snapshots(prior, current)
+    assert len(changes) == 1
+    assert changes[0].member_id == " abc "
+    assert changes[0].state is ChangeState.CHANGED
 
 
 def test_integer_delta_remains_exact_beyond_binary64_range() -> None:
@@ -946,7 +1026,11 @@ def test_newly_available_but_old_evidence_is_stale_not_fresh() -> None:
         obs=(prior_missing,),
         members=(member(available=(), unavailable=("market_return", "consensus")),),
     )
-    current = snapshot(cutoff=T1, obs=(observation(2.0, at=T0),), version="2")
+    current = snapshot(
+        cutoff=T1,
+        obs=(observation(2.0, at=T0 + timedelta(hours=1)),),
+        version="2",
+    )
     change = compare_universe_snapshots(prior, current, stale_after=timedelta(hours=12))[0]
     assert change.state is ChangeState.STALE
     fresh_rule = CandidateRule(
@@ -989,6 +1073,22 @@ def test_newly_declared_unavailable_dimension_emits_a_gap_change() -> None:
     )
     candidate = surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)[0]
     assert "guidance" in candidate.missing_dimensions
+
+
+def test_removed_dimension_does_not_emit_a_false_missing_change() -> None:
+    prior = snapshot(1.0)
+    current_member = UniverseMember(
+        member_id="000660",
+        kind=MemberKind.SECURITY,
+        domain_id="memory_semiconductor",
+        aliases=("SK hynix",),
+        required_dimensions=("consensus",),
+        available_dimensions=(),
+        unavailable_dimensions=("consensus",),
+        research_model_status=ResearchModelStatus.DRAFT,
+    )
+    current = snapshot(cutoff=T1, version="2", members=(current_member,), obs=())
+    assert compare_universe_snapshots(prior, current) == ()
 
 
 def test_negative_staleness_window_is_rejected() -> None:
