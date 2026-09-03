@@ -551,6 +551,23 @@ def compare_universe_snapshots(
         raise ObservableUniverseError("current cutoff must be later than prior cutoff")
     if stale_after is not None and stale_after < timedelta(0):
         raise ObservableUniverseError("stale_after cannot be negative")
+    prior_evidence = {
+        evidence.reference_id: evidence.payload()
+        for observation in prior.observations
+        for evidence in observation.evidence
+    }
+    current_evidence = {
+        evidence.reference_id: evidence.payload()
+        for observation in current.observations
+        for evidence in observation.evidence
+    }
+    if any(
+        prior_evidence[reference_id] != current_evidence[reference_id]
+        for reference_id in set(prior_evidence) & set(current_evidence)
+    ):
+        raise ObservableUniverseError(
+            "one evidence reference_id cannot change definition across snapshots"
+        )
     prior_by_slot = {
         (_identity(item.member_id), item.dimension_id): item for item in prior.observations
     }
@@ -637,15 +654,19 @@ def surface_research_candidates(
         raise ObservableUniverseError(
             "candidate changes must exactly match the bound prior/current snapshots"
         )
-    member_by_id = {item.member_id: item for item in snapshot.members}
-    current_observations_by_slot = {item.slot: item for item in snapshot.observations}
+    member_by_id = {_identity(item.member_id): item for item in snapshot.members}
+    current_observations_by_slot = {
+        (_identity(item.member_id), item.dimension_id): item for item in snapshot.observations
+    }
     hits: dict[str, list[tuple[CandidateRule, ObservationChange]]] = {}
     for change in changes:
         if change.current_snapshot_id != snapshot.snapshot_id:
             raise ObservableUniverseError(
                 "candidate change does not bind to the exact current universe snapshot"
             )
-        if change.member_id not in member_by_id:
+        normalized_member_id = _identity(change.member_id)
+        member = member_by_id.get(normalized_member_id)
+        if member is None:
             # A prior-only member is an explicit reconstitution/removal change.  It
             # remains in the change history but cannot become a current candidate.
             continue
@@ -654,7 +675,7 @@ def surface_research_candidates(
                 "candidate change evaluation does not match the current universe cutoff"
             )
         current_observation = current_observations_by_slot.get(
-            (change.member_id, change.dimension_id)
+            (normalized_member_id, change.dimension_id)
         )
         if change.current_observation_id is None:
             if current_observation is not None or change.current_evidence_refs:
@@ -681,7 +702,7 @@ def surface_research_candidates(
                 change.delta is None or abs(change.delta) < rule.minimum_absolute_delta
             ):
                 continue
-            hits.setdefault(change.member_id, []).append((rule, change))
+            hits.setdefault(member.member_id, []).append((rule, change))
 
     candidates: list[ResearchCandidate] = []
     priority_rank = {
@@ -693,7 +714,7 @@ def surface_research_candidates(
     for observation in snapshot.observations:
         observations_by_member.setdefault(observation.member_id, []).append(observation)
     for member_id in sorted(hits):
-        member = member_by_id[member_id]
+        member = member_by_id[_identity(member_id)]
         selected = sorted(hits[member_id], key=lambda item: (item[0].rule_id, item[1].change_id))
         missing = tuple(
             sorted(
@@ -1127,16 +1148,20 @@ def _compare_observations(
             "current evidence maturity differs from the prior observation",
         )
     prior_authority = tuple(
-        sorted((item.source, item.semantic_authority) for item in prior.evidence)
+        sorted(
+            (item.source, item.semantic_authority, item.maturity.value) for item in prior.evidence
+        )
     )
     current_authority = tuple(
-        sorted((item.source, item.semantic_authority) for item in current.evidence)
+        sorted(
+            (item.source, item.semantic_authority, item.maturity.value) for item in current.evidence
+        )
     )
     if current_authority != prior_authority:
         return make(
             ChangeState.INCOMPARABLE,
             None,
-            "current evidence semantic authority differs from the prior observation",
+            "current upstream evidence authority or maturity differs from the prior observation",
         )
     if current_is_stale:
         return make(
@@ -1326,7 +1351,11 @@ def _load_universe_identity(root: Path) -> str:
 
 def _write_immutable(path: Path, content: bytes) -> None:
     _mkdir_durable(path.parent)
+    if path.is_symlink():
+        raise ObservableUniverseError("immutable artifact path cannot be a symlink")
     if path.exists():
+        if not path.is_file():
+            raise ObservableUniverseError("immutable artifact path must be a regular file")
         if path.read_bytes() != content:
             raise ObservableUniverseError(
                 "content-addressed artifact conflicts with existing bytes"

@@ -79,15 +79,23 @@ def observation(
     window: str = "20d",
     semantics: str = "trailing_market_return",
     at: datetime = T0,
-    reference_id: str = "market-000660-20260801",
+    reference_id: str | None = None,
     maturity: EvidenceMaturity = EvidenceMaturity.REPLAYABLE_PROVIDER_EVIDENCE,
     unavailable_reason: str | None = None,
     authority: str = "adjusted_close_market_evidence",
 ) -> MeasuredObservation:
+    resolved_reference_id = reference_id or f"market-{member_id}-{at:%Y%m%d}"
     refs = (
         ()
         if maturity is EvidenceMaturity.UNAVAILABLE
-        else (evidence(reference_id, at=at, maturity=maturity, authority=authority),)
+        else (
+            evidence(
+                resolved_reference_id,
+                at=at,
+                maturity=maturity,
+                authority=authority,
+            ),
+        )
     )
     return MeasuredObservation(
         member_id=member_id,
@@ -244,7 +252,10 @@ def test_changed_unchanged_and_exact_lineage() -> None:
     changed = compare_universe_snapshots(snapshot(1.0), snapshot(3.0, cutoff=T1, version="2"))[0]
     assert changed.state is ChangeState.CHANGED
     assert changed.delta == 2.0
-    assert changed.evidence_refs == ("market-000660-20260801",)
+    assert changed.evidence_refs == (
+        "market-000660-20260801",
+        "market-000660-20260802",
+    )
     unchanged = compare_universe_snapshots(snapshot(1.0), snapshot(1.0, cutoff=T1, version="2"))[0]
     assert unchanged.state is ChangeState.UNCHANGED
 
@@ -310,7 +321,51 @@ def test_semantic_authority_change_is_incomparable() -> None:
     )
     change = compare_universe_snapshots(prior, current)[0]
     assert change.state is ChangeState.INCOMPARABLE
-    assert "semantic authority differs" in change.reason
+    assert "authority or maturity differs" in change.reason
+
+
+def test_upstream_reference_maturity_change_is_incomparable() -> None:
+    prior_observation = observation(
+        1.0,
+        maturity=EvidenceMaturity.STRUCTURED_OBSERVATION,
+        reference_id="prior-validated",
+    )
+    prior_observation = replace(
+        prior_observation,
+        evidence=(
+            evidence(
+                "prior-validated",
+                maturity=EvidenceMaturity.INDEPENDENTLY_VALIDATED_AUTHORITY,
+            ),
+        ),
+    )
+    prior = snapshot(obs=(prior_observation,))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(
+            observation(
+                1.0,
+                at=T1,
+                maturity=EvidenceMaturity.STRUCTURED_OBSERVATION,
+                reference_id="current-structured",
+            ),
+        ),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.INCOMPARABLE
+    assert "authority or maturity differs" in change.reason
+
+
+def test_cross_snapshot_evidence_id_redefinition_is_rejected() -> None:
+    prior = snapshot(obs=(observation(1.0, reference_id="shared-reference"),))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=(observation(2.0, at=T1, reference_id="shared-reference"),),
+    )
+    with pytest.raises(ObservableUniverseError, match="change definition"):
+        compare_universe_snapshots(prior, current)
 
 
 def test_observation_chronology_cannot_regress() -> None:
@@ -363,6 +418,36 @@ def test_member_identity_normalization_pairs_cross_snapshot_slots() -> None:
     assert len(changes) == 1
     assert changes[0].member_id == " abc "
     assert changes[0].state is ChangeState.CHANGED
+
+
+def test_normalized_member_identity_surfaces_observationless_missing_candidate() -> None:
+    prior = snapshot(
+        members=(member("ABC", aliases=()),),
+        obs=(observation(1.0, member_id="ABC"),),
+    )
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        members=(
+            member(
+                " abc ",
+                aliases=(),
+                available=(),
+                unavailable=("market_return", "consensus"),
+            ),
+        ),
+        obs=(),
+    )
+    changes = compare_universe_snapshots(prior, current)
+    rule = CandidateRule(
+        "missing",
+        "market_return",
+        (ChangeState.NEWLY_MISSING,),
+        ResearchPriority.ELEVATED,
+        "evidence disappeared",
+    )
+    candidate = surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)[0]
+    assert candidate.member_id == " abc "
 
 
 def test_integer_delta_remains_exact_beyond_binary64_range() -> None:
@@ -1350,6 +1435,21 @@ def test_immutable_install_failure_leaves_no_partial_artifact_and_can_retry(
     )
     current = load_current_universe_state(tmp_path)
     assert current is not None and current.ready and current.snapshot == state
+
+
+def test_immutable_writer_rejects_a_symlink_artifact_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "artifact.json"
+    artifact.write_bytes(b"expected")
+    real_is_symlink = Path.is_symlink
+
+    def report_target_as_symlink(path: Path) -> bool:
+        return path == artifact or real_is_symlink(path)
+
+    monkeypatch.setattr(Path, "is_symlink", report_target_as_symlink)
+    with pytest.raises(ObservableUniverseError, match="cannot be a symlink"):
+        observable_module._write_immutable(artifact, b"expected")
 
 
 def test_later_failure_wins_when_it_races_an_older_success(
