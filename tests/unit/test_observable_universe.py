@@ -777,8 +777,36 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
     assert planner_candidate.candidate_id == candidate.candidate_id
     assert planner_candidate.priority is ResearchPriority.ELEVATED
     assert planner_candidate.current_snapshot_id == current.snapshot_id
+    assert planner_candidate.member_kind is MemberKind.SECURITY
     assert planner_candidate.evaluated_at == T1
     assert planner_candidate.triggering_change_ids == candidate.triggering_change_ids
+
+
+@pytest.mark.parametrize("kind", (MemberKind.ASSET, MemberKind.DOMAIN))
+def test_candidate_preserves_non_security_member_kind_for_planner(kind: MemberKind) -> None:
+    prior = snapshot(1.0, members=(replace(member(), kind=kind),))
+    current = snapshot(
+        2.0,
+        cutoff=T1,
+        version="2",
+        members=(replace(member(), kind=kind),),
+    )
+    rule = CandidateRule(
+        "changed",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ROUTINE,
+        "measured state changed",
+    )
+    candidate = surface_research_candidates(
+        current,
+        compare_universe_snapshots(prior, current),
+        (rule,),
+        prior_snapshot=prior,
+    )[0]
+    assert candidate.member_kind is kind
+    assert candidate.payload_without_id()["member_kind"] == kind.value
+    assert planner_input(candidate).member_kind is kind
 
 
 def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidate() -> None:
@@ -1491,6 +1519,57 @@ def test_immutable_writer_rejects_a_symlink_artifact_path(
     monkeypatch.setattr(Path, "is_symlink", report_target_as_symlink)
     with pytest.raises(ObservableUniverseError, match="cannot be a symlink"):
         observable_module._write_immutable(artifact, b"expected")
+
+
+def test_immutable_retry_resyncs_an_already_installed_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = tmp_path / "artifact.json"
+    sync_calls = 0
+
+    def fail_first_sync(path: Path) -> None:
+        nonlocal sync_calls
+        sync_calls += 1
+        if sync_calls == 1:
+            raise OSError("injected directory fsync failure")
+
+    monkeypatch.setattr(observable_module, "_fsync_directory", fail_first_sync)
+    with pytest.raises(OSError, match="injected directory fsync failure"):
+        observable_module._write_immutable(artifact, b"expected")
+    assert artifact.read_bytes() == b"expected"
+
+    synced: list[Path] = []
+    monkeypatch.setattr(observable_module, "_fsync_directory", synced.append)
+    observable_module._write_immutable(artifact, b"expected")
+    assert synced == [tmp_path]
+
+
+def test_dangling_current_pointer_is_corruption_not_an_empty_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pointer_path = tmp_path / "observable_universe_v1/current.json"
+    real_lexists = observable_module.os.path.lexists
+    real_is_symlink = Path.is_symlink
+
+    monkeypatch.setattr(
+        observable_module.os.path,
+        "lexists",
+        lambda path: Path(path) == pointer_path or real_lexists(path),
+    )
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda path: path == pointer_path or real_is_symlink(path),
+    )
+
+    with pytest.raises(ObservableUniverseError, match="current pointer.*regular file"):
+        load_current_universe_state(tmp_path)
+    with pytest.raises(ObservableUniverseError, match="current pointer.*regular file"):
+        publish_failed_universe_attempt(
+            output_root=tmp_path,
+            attempted_at=T1,
+            failure_code="must_not_replace_corrupt_pointer",
+        )
 
 
 def test_later_failure_wins_when_it_races_an_older_success(

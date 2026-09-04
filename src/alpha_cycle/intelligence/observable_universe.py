@@ -458,6 +458,7 @@ class CandidateRule:
 class ResearchCandidate:
     current_snapshot_id: str
     member_id: str
+    member_kind: MemberKind
     domain_id: str | None
     evaluated_at: datetime
     priority: ResearchPriority
@@ -496,6 +497,7 @@ class ResearchCandidate:
         return {
             "current_snapshot_id": self.current_snapshot_id,
             "member_id": self.member_id,
+            "member_kind": self.member_kind.value,
             "domain_id": self.domain_id,
             "evaluated_at": _utc(self.evaluated_at).isoformat(),
             "priority": self.priority.value,
@@ -519,6 +521,7 @@ class PlannerCandidateInput:
     candidate_id: str
     current_snapshot_id: str
     member_id: str
+    member_kind: MemberKind
     domain_id: str | None
     priority: ResearchPriority
     evaluated_at: datetime
@@ -748,6 +751,7 @@ def surface_research_candidates(
             ResearchCandidate(
                 current_snapshot_id=snapshot.snapshot_id,
                 member_id=member_id,
+                member_kind=member.kind,
                 domain_id=member.domain_id,
                 evaluated_at=snapshot.research_cutoff_at,
                 priority=max(
@@ -773,6 +777,7 @@ def planner_input(candidate: ResearchCandidate) -> PlannerCandidateInput:
         candidate_id=candidate.candidate_id,
         current_snapshot_id=candidate.current_snapshot_id,
         member_id=candidate.member_id,
+        member_kind=candidate.member_kind,
         domain_id=candidate.domain_id,
         priority=candidate.priority,
         evaluated_at=candidate.evaluated_at,
@@ -888,8 +893,10 @@ def publish_failed_universe_attempt(
 def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState | None:
     root = Path(output_root)
     pointer_path = root / _CURRENT_PATH
-    if not pointer_path.exists():
+    if not os.path.lexists(pointer_path):
         return None
+    if pointer_path.is_symlink() or not pointer_path.is_file():
+        raise ObservableUniverseError("current pointer path must be a regular file")
     pointer = _load_json(pointer_path, "current pointer")
     expected = {
         "schema_version",
@@ -1323,7 +1330,7 @@ def _publish_pointer(root: Path, without_id: dict[str, object]) -> None:
 
 
 def _validate_pointer_advance(root: Path, without_id: dict[str, object]) -> None:
-    if not (root / _CURRENT_PATH).exists():
+    if not os.path.lexists(root / _CURRENT_PATH):
         return
     prior = load_current_universe_state(root)
     assert prior is not None
@@ -1370,6 +1377,7 @@ def _write_immutable(path: Path, content: bytes) -> None:
             raise ObservableUniverseError(
                 "content-addressed artifact conflicts with existing bytes"
             )
+        _fsync_directory(path.parent)
         return
     fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     temporary = Path(name)
@@ -1384,6 +1392,7 @@ def _write_immutable(path: Path, content: bytes) -> None:
         except FileExistsError as exc:
             if path.read_bytes() != content:
                 raise ObservableUniverseError("concurrent immutable publication conflict") from exc
+            _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
 
