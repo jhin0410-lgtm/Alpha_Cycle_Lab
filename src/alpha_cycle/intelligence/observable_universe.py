@@ -114,6 +114,14 @@ class UniverseMember:
             raise ObservableUniverseError(
                 "every required dimension must be explicitly available or unavailable"
             )
+        if self.research_model_status in {
+            ResearchModelStatus.OPERATIONAL,
+            ResearchModelStatus.CALIBRATING,
+        } and set(self.required_dimensions) & set(self.unavailable_dimensions):
+            raise ObservableUniverseError(
+                "an operational or calibrating model requires every required dimension "
+                "to be available"
+            )
 
     def payload(self) -> dict[str, object]:
         return {
@@ -934,6 +942,8 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
         if attempt_id != expected_attempt:
             raise ObservableUniverseError("failed attempt identity mismatch")
         if last_cutoff is not None and last_snapshot_id is not None:
+            if attempted_at < last_cutoff:
+                raise ObservableUniverseError("failed attempt predates its last successful cutoff")
             last_snapshot = load_universe_snapshot(
                 root / _SNAPSHOT_DIRECTORY / f"{last_snapshot_id}.json"
             )

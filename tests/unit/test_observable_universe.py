@@ -173,6 +173,16 @@ def test_valid_universe_is_deterministic_and_generic() -> None:
     assert generic.members[0].domain_id == "defense_aerospace"
 
 
+@pytest.mark.parametrize(
+    "status", (ResearchModelStatus.OPERATIONAL, ResearchModelStatus.CALIBRATING)
+)
+def test_active_model_status_requires_all_required_dimensions_available(
+    status: ResearchModelStatus,
+) -> None:
+    with pytest.raises(ObservableUniverseError, match="every required dimension.*available"):
+        replace(member(), research_model_status=status)
+
+
 def test_snapshot_identity_canonicalizes_collection_order() -> None:
     members = (
         member("000660", aliases=("Hynix",)),
@@ -1403,6 +1413,37 @@ def test_replay_rejects_attempt_that_predates_selected_snapshot_cutoff(
     )
 
     with pytest.raises(ObservableUniverseError, match="predates.*research cutoff"):
+        load_current_universe_state(tmp_path)
+
+
+def test_replay_rejects_failed_attempt_that_predates_success_watermark(
+    tmp_path: Path,
+) -> None:
+    persist_successful_universe_attempt(snapshot(cutoff=T1), output_root=tmp_path, attempted_at=T1)
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T2,
+        failure_code="provider_timeout",
+    )
+    current_path = tmp_path / "observable_universe_v1/current.json"
+    pointer = json.loads(current_path.read_text(encoding="utf-8"))
+    pointer["attempted_at"] = T0.isoformat()
+    pointer["attempt_id"] = content_id(
+        {
+            "status": pointer["status"],
+            "attempted_at": pointer["attempted_at"],
+            "failure_code": pointer["failure_code"],
+        }
+    )
+    pointer_without_id = dict(pointer)
+    del pointer_without_id["pointer_id"]
+    pointer["pointer_id"] = content_id(pointer_without_id)
+    current_path.write_text(
+        json.dumps(pointer, allow_nan=False, separators=(",", ":"), sort_keys=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ObservableUniverseError, match="predates.*successful cutoff"):
         load_current_universe_state(tmp_path)
 
 
