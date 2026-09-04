@@ -1632,6 +1632,30 @@ def test_immutable_writer_rejects_a_symlink_artifact_path(
         observable_module._write_immutable(artifact, b"expected")
 
 
+def test_existing_symlinked_universe_identity_fails_replay_and_republication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = snapshot()
+    persist_successful_universe_attempt(state, output_root=tmp_path, attempted_at=T0)
+    identity_path = tmp_path / "observable_universe_v1/universe.json"
+    real_is_symlink = Path.is_symlink
+
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda path: path == identity_path or real_is_symlink(path),
+    )
+
+    with pytest.raises(ObservableUniverseError, match="identity path.*regular file"):
+        load_current_universe_state(tmp_path)
+    with pytest.raises(ObservableUniverseError, match="identity path.*regular file"):
+        persist_successful_universe_attempt(
+            replace(state, version="2"),
+            output_root=tmp_path,
+            attempted_at=T1,
+        )
+
+
 def test_immutable_retry_resyncs_an_already_installed_artifact(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

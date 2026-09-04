@@ -1419,7 +1419,10 @@ def _bind_universe_identity(root: Path, universe_id: str) -> None:
 
 
 def _load_universe_identity(root: Path) -> str:
-    value = _load_json(root / _IDENTITY_PATH, "universe identity")
+    path = root / _IDENTITY_PATH
+    if path.is_symlink() or not path.is_file():
+        raise ObservableUniverseError("universe identity path must be a regular file")
+    value = _load_json(path, "universe identity")
     _exact(value, {"schema_version", "universe_id", "identity_id"}, "universe identity")
     if _required_int(value, "schema_version") != SCHEMA_VERSION:
         raise ObservableUniverseError("unsupported universe identity schema")
