@@ -893,12 +893,17 @@ def persist_successful_universe_attempt(
             raise ObservableUniverseError(
                 "successful publication cannot regress the current research cutoff"
             )
-        _bind_universe_identity(root, snapshot.universe_id)
+        identity_path = root / _IDENTITY_PATH
+        identity_already_bound = os.path.lexists(identity_path)
+        if identity_already_bound:
+            _bind_universe_identity(root, snapshot.universe_id)
         _write_immutable(snapshot_path, snapshot_bytes)
         _write_immutable(
             root / _MANIFEST_DIRECTORY / f"{manifest_id}.json",
             _encoded(manifest),
         )
+        if not identity_already_bound:
+            _bind_universe_identity(root, snapshot.universe_id)
         _publish_pointer(root, pointer_without_id)
         return snapshot_path
 
@@ -1029,6 +1034,7 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
     manifest_id = _required_text(pointer, "manifest_id")
     snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot_id}.json"
     manifest_path = root / _MANIFEST_DIRECTORY / f"{manifest_id}.json"
+    _require_regular_file(manifest_path, "selected manifest")
     manifest = _load_json(manifest_path, "manifest")
     _exact(
         manifest,
@@ -1047,6 +1053,7 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
         raise ObservableUniverseError("manifest content identity mismatch")
     if manifest.get("snapshot_id") != snapshot_id:
         raise ObservableUniverseError("manifest selects a different snapshot")
+    _require_regular_file(snapshot_path, "selected snapshot")
     try:
         snapshot_bytes = snapshot_path.read_bytes()
     except OSError as exc:
@@ -1089,6 +1096,7 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
 
 def load_universe_snapshot(path: str | Path) -> ObservableUniverseSnapshot:
     source = Path(path)
+    _require_regular_file(source, "snapshot")
     payload = _load_json(source, "snapshot")
     declared = _required_text(payload, "snapshot_id")
     without_id = dict(payload)
@@ -1420,8 +1428,7 @@ def _bind_universe_identity(root: Path, universe_id: str) -> None:
 
 def _load_universe_identity(root: Path) -> str:
     path = root / _IDENTITY_PATH
-    if path.is_symlink() or not path.is_file():
-        raise ObservableUniverseError("universe identity path must be a regular file")
+    _require_regular_file(path, "universe identity")
     value = _load_json(path, "universe identity")
     _exact(value, {"schema_version", "universe_id", "identity_id"}, "universe identity")
     if _required_int(value, "schema_version") != SCHEMA_VERSION:
@@ -1511,6 +1518,11 @@ def _load_json(path: Path, field: str) -> dict[str, Any]:
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ObservableUniverseError(f"cannot read {field}") from exc
     return _object(raw, field)
+
+
+def _require_regular_file(path: Path, field: str) -> None:
+    if path.is_symlink() or not path.is_file():
+        raise ObservableUniverseError(f"{field} path must be a regular file")
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

@@ -1505,7 +1505,7 @@ def test_failed_pointer_reconstructs_its_success_watermark(tmp_path: Path) -> No
         failure_code="provider_timeout",
     )
     snapshot_path.unlink()
-    with pytest.raises(ObservableUniverseError, match="cannot read snapshot"):
+    with pytest.raises(ObservableUniverseError, match="snapshot path.*regular file"):
         load_current_universe_state(tmp_path)
 
 
@@ -1592,12 +1592,9 @@ def test_immutable_install_failure_leaves_no_partial_artifact_and_can_retry(
     state = snapshot()
     snapshot_path = tmp_path / "observable_universe_v1/snapshots" / f"{state.snapshot_id}.json"
     real_link = observable_module.os.link
-    calls = 0
 
     def fail_snapshot_link(source: str | bytes, destination: str | bytes) -> None:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
+        if Path(destination) == snapshot_path:
             raise OSError("injected immutable install failure")
         real_link(source, destination)
 
@@ -1606,6 +1603,7 @@ def test_immutable_install_failure_leaves_no_partial_artifact_and_can_retry(
         persist_successful_universe_attempt(state, output_root=tmp_path, attempted_at=T0)
 
     assert not snapshot_path.exists()
+    assert not (tmp_path / "observable_universe_v1/universe.json").exists()
     assert load_current_universe_state(tmp_path) is None
 
     monkeypatch.setattr(observable_module.os, "link", real_link)
@@ -1615,6 +1613,56 @@ def test_immutable_install_failure_leaves_no_partial_artifact_and_can_retry(
     )
     current = load_current_universe_state(tmp_path)
     assert current is not None and current.ready and current.snapshot == state
+
+
+def test_failed_initial_manifest_write_does_not_bind_the_universe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = snapshot()
+    real_write = observable_module._write_immutable
+
+    def fail_manifest(path: Path, content: bytes) -> None:
+        if path.parent.name == "manifests":
+            raise OSError("injected manifest write failure")
+        real_write(path, content)
+
+    monkeypatch.setattr(observable_module, "_write_immutable", fail_manifest)
+    with pytest.raises(OSError, match="injected manifest write failure"):
+        persist_successful_universe_attempt(first, output_root=tmp_path, attempted_at=T0)
+    assert not (tmp_path / "observable_universe_v1/universe.json").exists()
+    assert load_current_universe_state(tmp_path) is None
+
+    monkeypatch.setattr(observable_module, "_write_immutable", real_write)
+    replacement = replace(
+        snapshot(2.0, cutoff=T1, version="2"),
+        universe_id="replacement-universe",
+    )
+    persist_successful_universe_attempt(replacement, output_root=tmp_path, attempted_at=T1)
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.snapshot == replacement
+
+
+@pytest.mark.parametrize("target", ("snapshot", "manifest"))
+def test_replay_rejects_symlinked_selected_immutable_artifacts(
+    target: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot_path = persist_successful_universe_attempt(
+        snapshot(), output_root=tmp_path, attempted_at=T0
+    )
+    pointer = json.loads(
+        (tmp_path / "observable_universe_v1/current.json").read_text(encoding="utf-8")
+    )
+    manifest_path = tmp_path / "observable_universe_v1/manifests" / f"{pointer['manifest_id']}.json"
+    selected = snapshot_path if target == "snapshot" else manifest_path
+    real_is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda path: path == selected or real_is_symlink(path),
+    )
+
+    with pytest.raises(ObservableUniverseError, match=f"selected {target} path.*regular file"):
+        load_current_universe_state(tmp_path)
 
 
 def test_immutable_writer_rejects_a_symlink_artifact_path(
