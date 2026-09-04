@@ -32,6 +32,7 @@ _MANIFEST_DIRECTORY = "observable_universe_v1/manifests"
 _CURRENT_PATH = "observable_universe_v1/current.json"
 _IDENTITY_PATH = "observable_universe_v1/universe.json"
 _LOCK_WAIT_SECONDS = 30.0
+_MEMBERSHIP_DIMENSION = "__membership__"
 
 
 class ObservableUniverseError(ValueError):
@@ -110,6 +111,8 @@ class UniverseMember:
         if set(self.available_dimensions) & set(self.unavailable_dimensions):
             raise ObservableUniverseError("a dimension cannot be both available and unavailable")
         declared = set(self.available_dimensions) | set(self.unavailable_dimensions)
+        if _MEMBERSHIP_DIMENSION in declared:
+            raise ObservableUniverseError("__membership__ is reserved for member lifecycle changes")
         if not set(self.required_dimensions) <= declared:
             raise ObservableUniverseError(
                 "every required dimension must be explicitly available or unavailable"
@@ -192,6 +195,8 @@ class MeasuredObservation:
             (self.semantics, "semantics"),
         ):
             _text(value, field)
+        if self.dimension_id == _MEMBERSHIP_DIMENSION:
+            raise ObservableUniverseError("__membership__ is reserved for member lifecycle changes")
         _aware(self.observed_at, "observed_at")
         _aware(self.available_at, "available_at")
         if self.available_at < self.observed_at:
@@ -585,6 +590,7 @@ def compare_universe_snapshots(
     current_by_slot = {
         (_identity(item.member_id), item.dimension_id): item for item in current.observations
     }
+    prior_members = {_identity(item.member_id): item for item in prior.members}
     current_members = {_identity(item.member_id): item for item in current.members}
     comparable_slots = []
     for slot in sorted(set(prior_by_slot) | set(current_by_slot)):
@@ -612,10 +618,36 @@ def compare_universe_snapshots(
             prior_cutoff_at=prior.research_cutoff_at,
             evaluated_at=current.research_cutoff_at,
             stale_after=stale_after,
+            prior_declared_unavailable=(
+                slot[0] in prior_members
+                and slot[1] in prior_members[slot[0]].unavailable_dimensions
+            ),
+            current_declared_unavailable=(
+                slot[0] in current_members
+                and slot[1] in current_members[slot[0]].unavailable_dimensions
+            ),
         )
         for slot in comparable_slots
     ]
-    prior_members = {_identity(item.member_id): item for item in prior.members}
+    for normalized_member_id in sorted(set(prior_members) - set(current_members)):
+        removed = prior_members[normalized_member_id]
+        changes.append(
+            ObservationChange(
+                current_snapshot_id=current.snapshot_id,
+                member_id=removed.member_id,
+                dimension_id=_MEMBERSHIP_DIMENSION,
+                state=ChangeState.NEWLY_MISSING,
+                evaluated_at=current.research_cutoff_at,
+                prior_observation_id=None,
+                current_observation_id=None,
+                prior_value=None,
+                current_value=None,
+                delta=None,
+                reason="member was removed from the observable universe",
+                prior_evidence_refs=(),
+                current_evidence_refs=(),
+            )
+        )
     for member in current.members:
         normalized_member_id = _identity(member.member_id)
         prior_member = prior_members.get(normalized_member_id)
@@ -988,7 +1020,11 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
     del manifest_without_id["manifest_id"]
     if _required_int(manifest, "schema_version") != SCHEMA_VERSION:
         raise ObservableUniverseError("unsupported manifest schema")
-    if _sha(manifest_without_id) != manifest_id or manifest_path.stem != manifest_id:
+    if (
+        _required_text(manifest, "manifest_id") != manifest_id
+        or _sha(manifest_without_id) != manifest_id
+        or manifest_path.stem != manifest_id
+    ):
         raise ObservableUniverseError("manifest content identity mismatch")
     if manifest.get("snapshot_id") != snapshot_id:
         raise ObservableUniverseError("manifest selects a different snapshot")
@@ -1073,6 +1109,8 @@ def _compare_observations(
     prior_cutoff_at: datetime,
     evaluated_at: datetime,
     stale_after: timedelta | None,
+    prior_declared_unavailable: bool,
+    current_declared_unavailable: bool,
 ) -> ObservationChange:
     template = current or prior
     assert template is not None
@@ -1122,6 +1160,14 @@ def _compare_observations(
                     "newly available evidence exceeds the configured staleness window",
                 )
             return make(ChangeState.NEWLY_AVAILABLE, None, "evidence became available")
+    if (
+        prior is None
+        and current is not None
+        and current.maturity is EvidenceMaturity.UNAVAILABLE
+        and prior_declared_unavailable
+        and current_declared_unavailable
+    ):
+        return make(ChangeState.UNCHANGED, None, "dimension remains explicitly unavailable")
     if current is None or current.maturity is EvidenceMaturity.UNAVAILABLE:
         if prior is not None and prior.maturity is not EvidenceMaturity.UNAVAILABLE:
             return make(

@@ -1139,6 +1139,66 @@ def test_removed_members_do_not_abort_retained_candidates() -> None:
     assert [item.member_id for item in candidates] == ["000660"]
 
 
+def test_observationless_removed_member_emits_explicit_membership_change() -> None:
+    removed_member = UniverseMember(
+        "POLICY_DOMAIN",
+        MemberKind.DOMAIN,
+        unavailable_dimensions=("policy_signal",),
+    )
+    prior = snapshot(members=(member(), removed_member))
+    current = snapshot(2.0, cutoff=T1, version="2")
+    changes = compare_universe_snapshots(prior, current)
+    removal = next(item for item in changes if item.dimension_id == "__membership__")
+    assert removal.member_id == "POLICY_DOMAIN"
+    assert removal.state is ChangeState.NEWLY_MISSING
+    assert "removed" in removal.reason
+
+
+def test_membership_change_dimension_is_reserved_from_observation_data() -> None:
+    with pytest.raises(ObservableUniverseError, match="reserved for member lifecycle"):
+        member(available=("__membership__",), unavailable=("consensus",))
+    with pytest.raises(ObservableUniverseError, match="reserved for member lifecycle"):
+        observation(1.0, dimension="__membership__")
+
+
+def test_added_blocker_detail_does_not_fake_an_availability_change() -> None:
+    prior = snapshot(
+        obs=(),
+        members=(member(available=(), unavailable=("market_return", "consensus")),),
+    )
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        members=(member(available=(), unavailable=("market_return", "consensus")),),
+        obs=(
+            observation(
+                None,
+                at=T1,
+                maturity=EvidenceMaturity.UNAVAILABLE,
+                unavailable_reason="provider timeout",
+            ),
+        ),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.UNCHANGED
+    missing_rule = CandidateRule(
+        "new-gap",
+        "market_return",
+        (ChangeState.NEWLY_MISSING,),
+        ResearchPriority.ELEVATED,
+        "new evidence gap",
+    )
+    assert (
+        surface_research_candidates(
+            current,
+            (change,),
+            (missing_rule,),
+            prior_snapshot=prior,
+        )
+        == ()
+    )
+
+
 def test_newly_available_but_old_evidence_is_stale_not_fresh() -> None:
     prior_missing = observation(
         None,
@@ -1304,6 +1364,22 @@ def test_persisted_tampering_fails_closed(tmp_path: Path, target: str) -> None:
     payload["tampered"] = True
     path.write_text(json.dumps(payload), encoding="utf-8")
     with pytest.raises(ObservableUniverseError):
+        load_current_universe_state(tmp_path)
+
+
+def test_manifest_embedded_identity_must_match_selected_manifest(tmp_path: Path) -> None:
+    persist_successful_universe_attempt(snapshot(), output_root=tmp_path, attempted_at=T0)
+    current_path = tmp_path / "observable_universe_v1/current.json"
+    pointer = json.loads(current_path.read_text(encoding="utf-8"))
+    manifest_path = tmp_path / "observable_universe_v1/manifests" / f"{pointer['manifest_id']}.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["manifest_id"] = "0" * 64
+    manifest_path.write_text(
+        json.dumps(manifest, allow_nan=False, separators=(",", ":"), sort_keys=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ObservableUniverseError, match="manifest content identity mismatch"):
         load_current_universe_state(tmp_path)
 
 
