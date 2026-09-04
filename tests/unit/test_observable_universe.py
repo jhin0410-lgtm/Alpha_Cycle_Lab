@@ -1154,6 +1154,41 @@ def test_observationless_removed_member_emits_explicit_membership_change() -> No
     assert "removed" in removal.reason
 
 
+def test_observationless_added_member_can_surface_a_research_candidate() -> None:
+    added_member = UniverseMember(
+        "NEW_POLICY_DOMAIN",
+        MemberKind.DOMAIN,
+        domain_id="policy",
+    )
+    prior = snapshot()
+    current = snapshot(
+        2.0,
+        cutoff=T1,
+        version="2",
+        members=(member(), added_member),
+    )
+    changes = compare_universe_snapshots(prior, current)
+    addition = next(item for item in changes if item.dimension_id == "__membership__")
+    assert addition.member_id == "NEW_POLICY_DOMAIN"
+    assert addition.state is ChangeState.NEWLY_AVAILABLE
+    rule = CandidateRule(
+        "new-member",
+        "__membership__",
+        (ChangeState.NEWLY_AVAILABLE,),
+        ResearchPriority.ELEVATED,
+        "new observable-universe member",
+    )
+    candidate = surface_research_candidates(
+        current,
+        changes,
+        (rule,),
+        prior_snapshot=prior,
+    )[0]
+    assert candidate.member_id == "NEW_POLICY_DOMAIN"
+    assert candidate.member_kind is MemberKind.DOMAIN
+    assert candidate.domain_id == "policy"
+
+
 def test_membership_change_dimension_is_reserved_from_observation_data() -> None:
     with pytest.raises(ObservableUniverseError, match="reserved for member lifecycle"):
         member(available=("__membership__",), unavailable=("consensus",))

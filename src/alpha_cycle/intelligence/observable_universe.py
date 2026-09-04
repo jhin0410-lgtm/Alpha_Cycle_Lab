@@ -629,6 +629,25 @@ def compare_universe_snapshots(
         )
         for slot in comparable_slots
     ]
+    for normalized_member_id in sorted(set(current_members) - set(prior_members)):
+        added = current_members[normalized_member_id]
+        changes.append(
+            ObservationChange(
+                current_snapshot_id=current.snapshot_id,
+                member_id=added.member_id,
+                dimension_id=_MEMBERSHIP_DIMENSION,
+                state=ChangeState.NEWLY_AVAILABLE,
+                evaluated_at=current.research_cutoff_at,
+                prior_observation_id=None,
+                current_observation_id=None,
+                prior_value=None,
+                current_value=None,
+                delta=None,
+                reason="member was added to the observable universe",
+                prior_evidence_refs=(),
+                current_evidence_refs=(),
+            )
+        )
     for normalized_member_id in sorted(set(prior_members) - set(current_members)):
         removed = prior_members[normalized_member_id]
         changes.append(
