@@ -382,6 +382,7 @@ class ObservableUniverseSnapshot:
 
 @dataclass(frozen=True)
 class ObservationChange:
+    prior_snapshot_id: str
     current_snapshot_id: str
     member_id: str
     dimension_id: str
@@ -398,6 +399,7 @@ class ObservationChange:
     causal_claim: bool = False
 
     def __post_init__(self) -> None:
+        _sha_text(self.prior_snapshot_id, "prior_snapshot_id")
         _sha_text(self.current_snapshot_id, "current_snapshot_id")
         _text(self.member_id, "member_id")
         _text(self.dimension_id, "dimension_id")
@@ -418,6 +420,7 @@ class ObservationChange:
 
     def payload_without_id(self) -> dict[str, object]:
         return {
+            "prior_snapshot_id": self.prior_snapshot_id,
             "current_snapshot_id": self.current_snapshot_id,
             "member_id": self.member_id,
             "dimension_id": self.dimension_id,
@@ -461,6 +464,7 @@ class CandidateRule:
 
 @dataclass(frozen=True)
 class ResearchCandidate:
+    prior_snapshot_id: str
     current_snapshot_id: str
     member_id: str
     member_kind: MemberKind
@@ -477,6 +481,7 @@ class ResearchCandidate:
     investment_authority: bool = False
 
     def __post_init__(self) -> None:
+        _sha_text(self.prior_snapshot_id, "prior_snapshot_id")
         _sha_text(self.current_snapshot_id, "current_snapshot_id")
         _text(self.member_id, "member_id")
         _optional_text(self.domain_id, "domain_id")
@@ -500,6 +505,7 @@ class ResearchCandidate:
 
     def payload_without_id(self) -> dict[str, object]:
         return {
+            "prior_snapshot_id": self.prior_snapshot_id,
             "current_snapshot_id": self.current_snapshot_id,
             "member_id": self.member_id,
             "member_kind": self.member_kind.value,
@@ -524,6 +530,7 @@ class ResearchCandidate:
 @dataclass(frozen=True)
 class PlannerCandidateInput:
     candidate_id: str
+    prior_snapshot_id: str
     current_snapshot_id: str
     member_id: str
     member_kind: MemberKind
@@ -614,6 +621,7 @@ def compare_universe_snapshots(
         _compare_observations(
             prior_by_slot.get(slot),
             current_by_slot.get(slot),
+            prior_snapshot_id=prior.snapshot_id,
             current_snapshot_id=current.snapshot_id,
             prior_cutoff_at=prior.research_cutoff_at,
             evaluated_at=current.research_cutoff_at,
@@ -633,6 +641,7 @@ def compare_universe_snapshots(
         added = current_members[normalized_member_id]
         changes.append(
             ObservationChange(
+                prior_snapshot_id=prior.snapshot_id,
                 current_snapshot_id=current.snapshot_id,
                 member_id=added.member_id,
                 dimension_id=_MEMBERSHIP_DIMENSION,
@@ -652,6 +661,7 @@ def compare_universe_snapshots(
         removed = prior_members[normalized_member_id]
         changes.append(
             ObservationChange(
+                prior_snapshot_id=prior.snapshot_id,
                 current_snapshot_id=current.snapshot_id,
                 member_id=removed.member_id,
                 dimension_id=_MEMBERSHIP_DIMENSION,
@@ -679,6 +689,7 @@ def compare_universe_snapshots(
                 continue
             changes.append(
                 ObservationChange(
+                    prior_snapshot_id=prior.snapshot_id,
                     current_snapshot_id=current.snapshot_id,
                     member_id=member.member_id,
                     dimension_id=dimension_id,
@@ -722,6 +733,10 @@ def surface_research_candidates(
     }
     hits: dict[str, list[tuple[CandidateRule, ObservationChange]]] = {}
     for change in changes:
+        if change.prior_snapshot_id != prior_snapshot.snapshot_id:
+            raise ObservableUniverseError(
+                "candidate change does not bind to the exact prior universe snapshot"
+            )
         if change.current_snapshot_id != snapshot.snapshot_id:
             raise ObservableUniverseError(
                 "candidate change does not bind to the exact current universe snapshot"
@@ -800,6 +815,7 @@ def surface_research_candidates(
         )
         candidates.append(
             ResearchCandidate(
+                prior_snapshot_id=prior_snapshot.snapshot_id,
                 current_snapshot_id=snapshot.snapshot_id,
                 member_id=member_id,
                 member_kind=member.kind,
@@ -826,6 +842,7 @@ def surface_research_candidates(
 def planner_input(candidate: ResearchCandidate) -> PlannerCandidateInput:
     return PlannerCandidateInput(
         candidate_id=candidate.candidate_id,
+        prior_snapshot_id=candidate.prior_snapshot_id,
         current_snapshot_id=candidate.current_snapshot_id,
         member_id=candidate.member_id,
         member_kind=candidate.member_kind,
@@ -1132,6 +1149,7 @@ def _compare_observations(
     prior: MeasuredObservation | None,
     current: MeasuredObservation | None,
     *,
+    prior_snapshot_id: str,
     current_snapshot_id: str,
     prior_cutoff_at: datetime,
     evaluated_at: datetime,
@@ -1146,6 +1164,7 @@ def _compare_observations(
 
     def make(state: ChangeState, delta: float | int | None, reason: str) -> ObservationChange:
         return ObservationChange(
+            prior_snapshot_id=prior_snapshot_id,
             current_snapshot_id=current_snapshot_id,
             member_id=template.member_id,
             dimension_id=template.dimension_id,

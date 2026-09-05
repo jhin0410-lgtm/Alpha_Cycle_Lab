@@ -776,6 +776,7 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
     planner_candidate = planner_input(candidate)
     assert planner_candidate.candidate_id == candidate.candidate_id
     assert planner_candidate.priority is ResearchPriority.ELEVATED
+    assert planner_candidate.prior_snapshot_id == prior.snapshot_id
     assert planner_candidate.current_snapshot_id == current.snapshot_id
     assert planner_candidate.member_kind is MemberKind.SECURITY
     assert planner_candidate.evaluated_at == T1
@@ -807,6 +808,40 @@ def test_candidate_preserves_non_security_member_kind_for_planner(kind: MemberKi
     assert candidate.member_kind is kind
     assert candidate.payload_without_id()["member_kind"] == kind.value
     assert planner_input(candidate).member_kind is kind
+
+
+def test_change_and_planner_bind_the_exact_prior_snapshot() -> None:
+    shared_observation = (observation(1.0, at=T0),)
+    first_prior = snapshot(obs=shared_observation)
+    second_prior = snapshot(
+        cutoff=T0 + timedelta(hours=1),
+        version="alternate-prior",
+        obs=shared_observation,
+    )
+    current = snapshot(2.0, cutoff=T1, version="current")
+    first_change = compare_universe_snapshots(first_prior, current)[0]
+    second_change = compare_universe_snapshots(second_prior, current)[0]
+    assert first_change.prior_observation_id == second_change.prior_observation_id
+    assert first_change.prior_snapshot_id == first_prior.snapshot_id
+    assert second_change.prior_snapshot_id == second_prior.snapshot_id
+    assert first_change.change_id != second_change.change_id
+
+    rule = CandidateRule(
+        "changed",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ROUTINE,
+        "measured state changed",
+    )
+    candidate = surface_research_candidates(
+        current,
+        (first_change,),
+        (rule,),
+        prior_snapshot=first_prior,
+    )[0]
+    assert candidate.prior_snapshot_id == first_prior.snapshot_id
+    assert candidate.payload_without_id()["prior_snapshot_id"] == first_prior.snapshot_id
+    assert planner_input(candidate).prior_snapshot_id == first_prior.snapshot_id
 
 
 def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidate() -> None:
