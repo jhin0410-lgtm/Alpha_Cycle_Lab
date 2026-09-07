@@ -468,6 +468,20 @@ class CandidateRule:
         ):
             raise ObservableUniverseError("minimum_absolute_delta must be finite and non-negative")
 
+    @property
+    def policy_id(self) -> str:
+        return _sha(self.payload())
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "rule_id": self.rule_id,
+            "dimension_id": self.dimension_id,
+            "states": [item.value for item in self.states],
+            "priority": self.priority.value,
+            "reason": self.reason,
+            "minimum_absolute_delta": self.minimum_absolute_delta,
+        }
+
 
 @dataclass(frozen=True, order=True)
 class EvidenceBlocker:
@@ -492,6 +506,7 @@ class ResearchCandidate:
     evaluated_at: datetime
     priority: ResearchPriority
     measured_reasons: tuple[str, ...]
+    triggering_rule_policy_ids: tuple[str, ...]
     triggering_change_ids: tuple[str, ...]
     triggering_evidence_refs: tuple[str, ...]
     missing_dimensions: tuple[str, ...]
@@ -509,11 +524,14 @@ class ResearchCandidate:
         _aware(self.evaluated_at, "evaluated_at")
         for values, field in (
             (self.measured_reasons, "measured_reasons"),
+            (self.triggering_rule_policy_ids, "triggering_rule_policy_ids"),
             (self.triggering_change_ids, "triggering_change_ids"),
             (self.triggering_evidence_refs, "triggering_evidence_refs"),
             (self.missing_dimensions, "missing_dimensions"),
         ):
             _unique_text(values, field)
+        for policy_id in self.triggering_rule_policy_ids:
+            _sha_text(policy_id, "triggering_rule_policy_ids")
         if tuple(sorted(self.blocked_evidence)) != self.blocked_evidence or len(
             {item.dimension_id for item in self.blocked_evidence}
         ) != len(self.blocked_evidence):
@@ -525,7 +543,11 @@ class ResearchCandidate:
             and self.comparison_stale_after_microseconds < 0
         ):
             raise ObservableUniverseError("candidate staleness policy cannot be negative")
-        if not self.measured_reasons or not self.triggering_change_ids:
+        if (
+            not self.measured_reasons
+            or not self.triggering_rule_policy_ids
+            or not self.triggering_change_ids
+        ):
             raise ObservableUniverseError("candidate requires measured triggering changes")
         if self.candidate_semantics != "research_this" or self.investment_authority:
             raise ObservableUniverseError("candidate must remain non-investment-authoritative")
@@ -544,6 +566,7 @@ class ResearchCandidate:
             "evaluated_at": _utc(self.evaluated_at).isoformat(),
             "priority": self.priority.value,
             "measured_reasons": list(self.measured_reasons),
+            "triggering_rule_policy_ids": list(self.triggering_rule_policy_ids),
             "triggering_change_ids": list(self.triggering_change_ids),
             "triggering_evidence_refs": list(self.triggering_evidence_refs),
             "missing_dimensions": list(self.missing_dimensions),
@@ -570,6 +593,7 @@ class PlannerCandidateInput:
     priority: ResearchPriority
     evaluated_at: datetime
     triggering_change_ids: tuple[str, ...]
+    triggering_rule_policy_ids: tuple[str, ...]
     measured_reasons: tuple[str, ...]
     evidence_refs: tuple[str, ...]
     missing_dimensions: tuple[str, ...]
@@ -890,6 +914,7 @@ def surface_research_candidates(
                 measured_reasons=tuple(
                     dict.fromkeys(f"{rule.reason}: {change.reason}" for rule, change in selected)
                 ),
+                triggering_rule_policy_ids=tuple(sorted({rule.policy_id for rule, _ in selected})),
                 triggering_change_ids=tuple(sorted({change.change_id for _, change in selected})),
                 triggering_evidence_refs=tuple(
                     sorted({ref for _, change in selected for ref in change.evidence_refs})
@@ -916,6 +941,7 @@ def planner_input(candidate: ResearchCandidate) -> PlannerCandidateInput:
         priority=candidate.priority,
         evaluated_at=candidate.evaluated_at,
         triggering_change_ids=candidate.triggering_change_ids,
+        triggering_rule_policy_ids=candidate.triggering_rule_policy_ids,
         measured_reasons=candidate.measured_reasons,
         evidence_refs=candidate.triggering_evidence_refs,
         missing_dimensions=candidate.missing_dimensions,
@@ -987,9 +1013,14 @@ def persist_successful_universe_attempt(
             root / _MANIFEST_DIRECTORY / f"{manifest_id}.json",
             _encoded(manifest),
         )
-        if not identity_already_bound:
-            _bind_universe_identity(root, snapshot.universe_id)
-        _publish_pointer(root, pointer_without_id)
+        try:
+            if not identity_already_bound:
+                _bind_universe_identity(root, snapshot.universe_id)
+            _publish_pointer(root, pointer_without_id, validate_advance=False)
+        except Exception:
+            if not identity_already_bound:
+                _rollback_unclaimed_universe_identity(root, snapshot.universe_id)
+            raise
         return snapshot_path
 
 
@@ -1092,6 +1123,10 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
         _sha_text(last_snapshot_id, "last_successful_snapshot_id")
     if last_manifest_id is not None:
         _sha_text(last_manifest_id, "last_successful_manifest_id")
+    if last_cutoff is None and os.path.lexists(root / _IDENTITY_PATH):
+        raise ObservableUniverseError(
+            "a bound universe store cannot have a null successful watermark"
+        )
     if status is AttemptStatus.FAILED:
         if pointer["snapshot_id"] is not None or pointer["manifest_id"] is not None:
             raise ObservableUniverseError("failed pointer cannot select a snapshot")
@@ -1529,9 +1564,12 @@ def _exclusive_universe_write_lock(root: Path) -> Iterator[None]:
         return
 
 
-def _publish_pointer(root: Path, without_id: dict[str, object]) -> None:
+def _publish_pointer(
+    root: Path, without_id: dict[str, object], *, validate_advance: bool = True
+) -> None:
     path = root / _CURRENT_PATH
-    _validate_pointer_advance(root, without_id)
+    if validate_advance:
+        _validate_pointer_advance(root, without_id)
     pointer = {**without_id, "pointer_id": _sha(without_id)}
     _atomic_replace(path, _encoded(pointer))
 
@@ -1558,6 +1596,18 @@ def _bind_universe_identity(root: Path, universe_id: str) -> None:
         return
     without_id = {"schema_version": SCHEMA_VERSION, "universe_id": universe_id}
     _write_immutable(path, _encoded({**without_id, "identity_id": _sha(without_id)}))
+
+
+def _rollback_unclaimed_universe_identity(root: Path, universe_id: str) -> None:
+    if os.path.lexists(root / _CURRENT_PATH):
+        return
+    path = root / _IDENTITY_PATH
+    without_id = {"schema_version": SCHEMA_VERSION, "universe_id": universe_id}
+    expected = _encoded({**without_id, "identity_id": _sha(without_id)})
+    if path.is_symlink() or not path.is_file() or path.read_bytes() != expected:
+        return
+    path.unlink()
+    _fsync_directory(path.parent)
 
 
 def _load_universe_identity(root: Path) -> str:

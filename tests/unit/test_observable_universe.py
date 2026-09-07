@@ -766,6 +766,7 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
     candidate = first[0]
     assert candidate.candidate_id == second[0].candidate_id
     assert candidate.triggering_change_ids == (changes[0].change_id,)
+    assert candidate.triggering_rule_policy_ids == (rule.policy_id,)
     assert candidate.triggering_evidence_refs == changes[0].evidence_refs
     assert candidate.missing_dimensions == ("consensus",)
     assert candidate.investment_authority is False
@@ -782,6 +783,32 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
     assert planner_candidate.member_kind is MemberKind.SECURITY
     assert planner_candidate.evaluated_at == T1
     assert planner_candidate.triggering_change_ids == candidate.triggering_change_ids
+    assert planner_candidate.triggering_rule_policy_ids == candidate.triggering_rule_policy_ids
+
+
+def test_candidate_identity_binds_the_complete_triggering_rule_policy() -> None:
+    prior = snapshot(1.0)
+    current = snapshot(3.0, cutoff=T1, version="2")
+    changes = compare_universe_snapshots(prior, current)
+    first_rule = CandidateRule(
+        "first-policy",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ELEVATED,
+        "same rendered reason",
+        minimum_absolute_delta=1.0,
+    )
+    second_rule = replace(
+        first_rule,
+        rule_id="second-policy",
+        minimum_absolute_delta=2.0,
+    )
+    first = surface_research_candidates(current, changes, (first_rule,), prior_snapshot=prior)[0]
+    second = surface_research_candidates(current, changes, (second_rule,), prior_snapshot=prior)[0]
+    assert first.measured_reasons == second.measured_reasons
+    assert first.triggering_rule_policy_ids == (first_rule.policy_id,)
+    assert second.triggering_rule_policy_ids == (second_rule.policy_id,)
+    assert first.candidate_id != second.candidate_id
 
 
 @pytest.mark.parametrize("kind", (MemberKind.ASSET, MemberKind.DOMAIN))
@@ -1701,6 +1728,36 @@ def test_failed_pointer_requires_its_success_watermark_manifest(tmp_path: Path) 
         load_current_universe_state(tmp_path)
 
 
+def test_bound_store_rejects_a_failed_pointer_with_cleared_watermark(tmp_path: Path) -> None:
+    persist_successful_universe_attempt(snapshot(), output_root=tmp_path, attempted_at=T0)
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T1,
+        failure_code="provider_timeout",
+    )
+    pointer_path = tmp_path / "observable_universe_v1/current.json"
+    pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+    pointer["last_successful_cutoff_at"] = None
+    pointer["last_successful_snapshot_id"] = None
+    pointer["last_successful_manifest_id"] = None
+    pointer_without_id = dict(pointer)
+    del pointer_without_id["pointer_id"]
+    pointer["pointer_id"] = content_id(pointer_without_id)
+    pointer_path.write_text(
+        json.dumps(pointer, allow_nan=False, separators=(",", ":"), sort_keys=True),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ObservableUniverseError, match="bound universe.*null.*watermark"):
+        load_current_universe_state(tmp_path)
+    with pytest.raises(ObservableUniverseError, match="bound universe.*null.*watermark"):
+        persist_successful_universe_attempt(
+            snapshot(-1.0, cutoff=T1, version="forged-regression"),
+            output_root=tmp_path,
+            attempted_at=T2,
+        )
+
+
 def test_failed_pointer_validates_watermark_snapshot_exact_bytes(tmp_path: Path) -> None:
     snapshot_path = persist_successful_universe_attempt(
         snapshot(), output_root=tmp_path, attempted_at=T0
@@ -1844,6 +1901,36 @@ def test_failed_initial_manifest_write_does_not_bind_the_universe(
     replacement = replace(
         snapshot(2.0, cutoff=T1, version="2"),
         universe_id="replacement-universe",
+    )
+    persist_successful_universe_attempt(replacement, output_root=tmp_path, attempted_at=T1)
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.snapshot == replacement
+
+
+def test_failed_initial_pointer_publication_rolls_back_unclaimed_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = snapshot()
+    real_publish = observable_module._publish_pointer
+
+    def fail_pointer(
+        root: Path,
+        without_id: dict[str, object],
+        *,
+        validate_advance: bool = True,
+    ) -> None:
+        raise OSError("injected pointer publication failure")
+
+    monkeypatch.setattr(observable_module, "_publish_pointer", fail_pointer)
+    with pytest.raises(OSError, match="injected pointer publication failure"):
+        persist_successful_universe_attempt(first, output_root=tmp_path, attempted_at=T0)
+    assert not (tmp_path / "observable_universe_v1/universe.json").exists()
+    assert load_current_universe_state(tmp_path) is None
+
+    monkeypatch.setattr(observable_module, "_publish_pointer", real_publish)
+    replacement = replace(
+        snapshot(2.0, cutoff=T1, version="2"),
+        universe_id="replacement-after-pointer-failure",
     )
     persist_successful_universe_attempt(replacement, output_root=tmp_path, attempted_at=T1)
     current = load_current_universe_state(tmp_path)
