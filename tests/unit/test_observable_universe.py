@@ -811,6 +811,19 @@ def test_candidate_identity_binds_the_complete_triggering_rule_policy() -> None:
     assert first.candidate_id != second.candidate_id
 
 
+def test_rule_policy_identity_canonicalizes_state_order() -> None:
+    first = CandidateRule(
+        "policy",
+        "market_return",
+        (ChangeState.CHANGED, ChangeState.STALE),
+        ResearchPriority.ELEVATED,
+        "changed or stale",
+    )
+    second = replace(first, states=tuple(reversed(first.states)))
+    assert first.policy_id == second.policy_id
+    assert first.payload() == second.payload()
+
+
 @pytest.mark.parametrize("kind", (MemberKind.ASSET, MemberKind.DOMAIN))
 def test_candidate_preserves_non_security_member_kind_for_planner(kind: MemberKind) -> None:
     prior = snapshot(1.0, members=(replace(member(), kind=kind),))
@@ -1933,6 +1946,45 @@ def test_failed_initial_pointer_publication_rolls_back_unclaimed_identity(
         universe_id="replacement-after-pointer-failure",
     )
     persist_successful_universe_attempt(replacement, output_root=tmp_path, attempted_at=T1)
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.snapshot == replacement
+
+
+def test_failed_first_success_after_an_initial_failure_rolls_back_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T0,
+        failure_code="initial_provider_failure",
+    )
+    pointer_path = tmp_path / "observable_universe_v1/current.json"
+    prior_pointer_bytes = pointer_path.read_bytes()
+    real_publish = observable_module._publish_pointer
+
+    def fail_pointer(
+        root: Path,
+        without_id: dict[str, object],
+        *,
+        validate_advance: bool = True,
+    ) -> None:
+        raise OSError("injected first-success pointer failure")
+
+    monkeypatch.setattr(observable_module, "_publish_pointer", fail_pointer)
+    first = replace(snapshot(2.0, cutoff=T1, version="2"), universe_id="first-universe")
+    with pytest.raises(OSError, match="first-success pointer failure"):
+        persist_successful_universe_attempt(first, output_root=tmp_path, attempted_at=T1)
+    assert pointer_path.read_bytes() == prior_pointer_bytes
+    assert not (tmp_path / "observable_universe_v1/universe.json").exists()
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.status is AttemptStatus.FAILED
+
+    monkeypatch.setattr(observable_module, "_publish_pointer", real_publish)
+    replacement = replace(
+        snapshot(3.0, cutoff=T2, version="3"),
+        universe_id="replacement-universe",
+    )
+    persist_successful_universe_attempt(replacement, output_root=tmp_path, attempted_at=T2)
     current = load_current_universe_state(tmp_path)
     assert current is not None and current.snapshot == replacement
 

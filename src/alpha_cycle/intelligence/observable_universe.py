@@ -476,7 +476,7 @@ class CandidateRule:
         return {
             "rule_id": self.rule_id,
             "dimension_id": self.dimension_id,
-            "states": [item.value for item in self.states],
+            "states": sorted(item.value for item in self.states),
             "priority": self.priority.value,
             "reason": self.reason,
             "minimum_absolute_delta": self.minimum_absolute_delta,
@@ -996,6 +996,10 @@ def persist_successful_universe_attempt(
     with _exclusive_universe_write_lock(root):
         _validate_pointer_advance(root, pointer_without_id)
         prior_current = load_current_universe_state(root)
+        prior_pointer_path = root / _CURRENT_PATH
+        prior_pointer_bytes = (
+            prior_pointer_path.read_bytes() if os.path.lexists(prior_pointer_path) else None
+        )
         if (
             prior_current is not None
             and prior_current.last_successful_cutoff_at is not None
@@ -1019,7 +1023,11 @@ def persist_successful_universe_attempt(
             _publish_pointer(root, pointer_without_id, validate_advance=False)
         except Exception:
             if not identity_already_bound:
-                _rollback_unclaimed_universe_identity(root, snapshot.universe_id)
+                _rollback_unclaimed_universe_identity(
+                    root,
+                    snapshot.universe_id,
+                    prior_pointer_bytes=prior_pointer_bytes,
+                )
             raise
         return snapshot_path
 
@@ -1598,8 +1606,18 @@ def _bind_universe_identity(root: Path, universe_id: str) -> None:
     _write_immutable(path, _encoded({**without_id, "identity_id": _sha(without_id)}))
 
 
-def _rollback_unclaimed_universe_identity(root: Path, universe_id: str) -> None:
-    if os.path.lexists(root / _CURRENT_PATH):
+def _rollback_unclaimed_universe_identity(
+    root: Path, universe_id: str, *, prior_pointer_bytes: bytes | None
+) -> None:
+    current_path = root / _CURRENT_PATH
+    if prior_pointer_bytes is None:
+        if os.path.lexists(current_path):
+            return
+    elif (
+        current_path.is_symlink()
+        or not current_path.is_file()
+        or current_path.read_bytes() != prior_pointer_bytes
+    ):
         return
     path = root / _IDENTITY_PATH
     without_id = {"schema_version": SCHEMA_VERSION, "universe_id": universe_id}
