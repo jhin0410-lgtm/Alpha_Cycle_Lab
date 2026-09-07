@@ -396,6 +396,7 @@ class ObservationChange:
     reason: str
     prior_evidence_refs: tuple[str, ...]
     current_evidence_refs: tuple[str, ...]
+    comparison_stale_after_microseconds: int | None
     causal_claim: bool = False
 
     def __post_init__(self) -> None:
@@ -407,6 +408,11 @@ class ObservationChange:
         _text(self.reason, "reason")
         _unique_text(self.prior_evidence_refs, "prior_evidence_refs")
         _unique_text(self.current_evidence_refs, "current_evidence_refs")
+        if (
+            self.comparison_stale_after_microseconds is not None
+            and self.comparison_stale_after_microseconds < 0
+        ):
+            raise ObservableUniverseError("comparison staleness policy cannot be negative")
         if self.causal_claim:
             raise ObservableUniverseError("change detection cannot make a causal claim")
 
@@ -434,6 +440,7 @@ class ObservationChange:
             "reason": self.reason,
             "prior_evidence_refs": list(self.prior_evidence_refs),
             "current_evidence_refs": list(self.current_evidence_refs),
+            "comparison_stale_after_microseconds": self.comparison_stale_after_microseconds,
             "causal_claim": False,
         }
 
@@ -462,6 +469,19 @@ class CandidateRule:
             raise ObservableUniverseError("minimum_absolute_delta must be finite and non-negative")
 
 
+@dataclass(frozen=True, order=True)
+class EvidenceBlocker:
+    dimension_id: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        _text(self.dimension_id, "dimension_id")
+        _text(self.reason, "reason")
+
+    def payload(self) -> dict[str, str]:
+        return {"dimension_id": self.dimension_id, "reason": self.reason}
+
+
 @dataclass(frozen=True)
 class ResearchCandidate:
     prior_snapshot_id: str
@@ -475,8 +495,9 @@ class ResearchCandidate:
     triggering_change_ids: tuple[str, ...]
     triggering_evidence_refs: tuple[str, ...]
     missing_dimensions: tuple[str, ...]
-    blocked_evidence: tuple[str, ...]
+    blocked_evidence: tuple[EvidenceBlocker, ...]
     research_model_status: ResearchModelStatus
+    comparison_stale_after_microseconds: int | None
     candidate_semantics: str = "research_this"
     investment_authority: bool = False
 
@@ -491,9 +512,19 @@ class ResearchCandidate:
             (self.triggering_change_ids, "triggering_change_ids"),
             (self.triggering_evidence_refs, "triggering_evidence_refs"),
             (self.missing_dimensions, "missing_dimensions"),
-            (self.blocked_evidence, "blocked_evidence"),
         ):
             _unique_text(values, field)
+        if tuple(sorted(self.blocked_evidence)) != self.blocked_evidence or len(
+            {item.dimension_id for item in self.blocked_evidence}
+        ) != len(self.blocked_evidence):
+            raise ObservableUniverseError(
+                "blocked evidence must use canonical unique dimension/reason pairs"
+            )
+        if (
+            self.comparison_stale_after_microseconds is not None
+            and self.comparison_stale_after_microseconds < 0
+        ):
+            raise ObservableUniverseError("candidate staleness policy cannot be negative")
         if not self.measured_reasons or not self.triggering_change_ids:
             raise ObservableUniverseError("candidate requires measured triggering changes")
         if self.candidate_semantics != "research_this" or self.investment_authority:
@@ -516,8 +547,9 @@ class ResearchCandidate:
             "triggering_change_ids": list(self.triggering_change_ids),
             "triggering_evidence_refs": list(self.triggering_evidence_refs),
             "missing_dimensions": list(self.missing_dimensions),
-            "blocked_evidence": list(self.blocked_evidence),
+            "blocked_evidence": [item.payload() for item in self.blocked_evidence],
             "research_model_status": self.research_model_status.value,
+            "comparison_stale_after_microseconds": self.comparison_stale_after_microseconds,
             "candidate_semantics": "research_this",
             "investment_authority": False,
             "decision_score": None,
@@ -541,8 +573,9 @@ class PlannerCandidateInput:
     measured_reasons: tuple[str, ...]
     evidence_refs: tuple[str, ...]
     missing_dimensions: tuple[str, ...]
-    blocked_evidence: tuple[str, ...]
+    blocked_evidence: tuple[EvidenceBlocker, ...]
     research_model_status: ResearchModelStatus
+    comparison_stale_after_microseconds: int | None
 
 
 @dataclass(frozen=True)
@@ -554,6 +587,7 @@ class CurrentUniverseState:
     failure_code: str | None
     last_successful_cutoff_at: datetime | None
     last_successful_snapshot_id: str | None
+    last_successful_manifest_id: str | None
 
     @property
     def ready(self) -> bool:
@@ -574,6 +608,9 @@ def compare_universe_snapshots(
         raise ObservableUniverseError("current cutoff must be later than prior cutoff")
     if stale_after is not None and stale_after < timedelta(0):
         raise ObservableUniverseError("stale_after cannot be negative")
+    stale_after_microseconds = (
+        None if stale_after is None else stale_after // timedelta(microseconds=1)
+    )
     prior_evidence = {
         evidence.reference_id: evidence.payload()
         for observation in prior.observations
@@ -626,6 +663,7 @@ def compare_universe_snapshots(
             prior_cutoff_at=prior.research_cutoff_at,
             evaluated_at=current.research_cutoff_at,
             stale_after=stale_after,
+            stale_after_microseconds=stale_after_microseconds,
             prior_declared_unavailable=(
                 slot[0] in prior_members
                 and slot[1] in prior_members[slot[0]].unavailable_dimensions
@@ -655,6 +693,7 @@ def compare_universe_snapshots(
                 reason="member was added to the observable universe",
                 prior_evidence_refs=(),
                 current_evidence_refs=(),
+                comparison_stale_after_microseconds=stale_after_microseconds,
             )
         )
     for normalized_member_id in sorted(set(prior_members) - set(current_members)):
@@ -675,6 +714,31 @@ def compare_universe_snapshots(
                 reason="member was removed from the observable universe",
                 prior_evidence_refs=(),
                 current_evidence_refs=(),
+                comparison_stale_after_microseconds=stale_after_microseconds,
+            )
+        )
+    for normalized_member_id in sorted(set(prior_members) & set(current_members)):
+        old = prior_members[normalized_member_id]
+        new = current_members[normalized_member_id]
+        if (old.kind, old.domain_id) == (new.kind, new.domain_id):
+            continue
+        changes.append(
+            ObservationChange(
+                prior_snapshot_id=prior.snapshot_id,
+                current_snapshot_id=current.snapshot_id,
+                member_id=new.member_id,
+                dimension_id=_MEMBERSHIP_DIMENSION,
+                state=ChangeState.CHANGED,
+                evaluated_at=current.research_cutoff_at,
+                prior_observation_id=None,
+                current_observation_id=None,
+                prior_value=f"{old.kind.value}:{old.domain_id or ''}",
+                current_value=f"{new.kind.value}:{new.domain_id or ''}",
+                delta=None,
+                reason="member research kind or domain classification changed",
+                prior_evidence_refs=(),
+                current_evidence_refs=(),
+                comparison_stale_after_microseconds=stale_after_microseconds,
             )
         )
     for member in current.members:
@@ -703,6 +767,7 @@ def compare_universe_snapshots(
                     reason="dimension is newly declared unavailable",
                     prior_evidence_refs=(),
                     current_evidence_refs=(),
+                    comparison_stale_after_microseconds=stale_after_microseconds,
                 )
             )
     return tuple(sorted(changes, key=lambda item: (item.member_id, item.dimension_id)))
@@ -805,12 +870,10 @@ def surface_research_candidates(
         )
         blocked = tuple(
             sorted(
-                {
-                    item.unavailable_reason
-                    for item in observations_by_member.get(member_id, [])
-                    if item.maturity is EvidenceMaturity.UNAVAILABLE
-                    and item.unavailable_reason is not None
-                }
+                EvidenceBlocker(item.dimension_id, item.unavailable_reason)
+                for item in observations_by_member.get(member_id, [])
+                if item.maturity is EvidenceMaturity.UNAVAILABLE
+                and item.unavailable_reason is not None
             )
         )
         candidates.append(
@@ -834,6 +897,9 @@ def surface_research_candidates(
                 missing_dimensions=missing,
                 blocked_evidence=blocked,
                 research_model_status=member.research_model_status,
+                comparison_stale_after_microseconds=(
+                    None if stale_after is None else stale_after // timedelta(microseconds=1)
+                ),
             )
         )
     return tuple(candidates)
@@ -855,6 +921,7 @@ def planner_input(candidate: ResearchCandidate) -> PlannerCandidateInput:
         missing_dimensions=candidate.missing_dimensions,
         blocked_evidence=candidate.blocked_evidence,
         research_model_status=candidate.research_model_status,
+        comparison_stale_after_microseconds=candidate.comparison_stale_after_microseconds,
     )
 
 
@@ -898,6 +965,7 @@ def persist_successful_universe_attempt(
         "failure_code": None,
         "last_successful_cutoff_at": _utc(snapshot.research_cutoff_at).isoformat(),
         "last_successful_snapshot_id": snapshot.snapshot_id,
+        "last_successful_manifest_id": manifest_id,
     }
     with _exclusive_universe_write_lock(root):
         _validate_pointer_advance(root, pointer_without_id)
@@ -958,6 +1026,9 @@ def publish_failed_universe_attempt(
             "last_successful_snapshot_id": (
                 prior_current.last_successful_snapshot_id if prior_current is not None else None
             ),
+            "last_successful_manifest_id": (
+                prior_current.last_successful_manifest_id if prior_current is not None else None
+            ),
         }
         _publish_pointer(root, pointer_without_id)
         return root / _CURRENT_PATH
@@ -981,6 +1052,7 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
         "failure_code",
         "last_successful_cutoff_at",
         "last_successful_snapshot_id",
+        "last_successful_manifest_id",
         "pointer_id",
     }
     _exact(pointer, expected, "current pointer")
@@ -997,9 +1069,19 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
     failure_code = _nullable_text(pointer, "failure_code")
     last_cutoff_text = _nullable_text(pointer, "last_successful_cutoff_at")
     last_snapshot_id = _nullable_text(pointer, "last_successful_snapshot_id")
-    if (last_cutoff_text is None) != (last_snapshot_id is None):
+    last_manifest_id = _nullable_text(pointer, "last_successful_manifest_id")
+    if (
+        len(
+            {
+                last_cutoff_text is None,
+                last_snapshot_id is None,
+                last_manifest_id is None,
+            }
+        )
+        != 1
+    ):
         raise ObservableUniverseError(
-            "last successful cutoff and snapshot identity must be present together"
+            "last successful cutoff, snapshot, and manifest identities must be present together"
         )
     last_cutoff = (
         _datetime(last_cutoff_text, "last_successful_cutoff_at")
@@ -1008,6 +1090,8 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
     )
     if last_snapshot_id is not None:
         _sha_text(last_snapshot_id, "last_successful_snapshot_id")
+    if last_manifest_id is not None:
+        _sha_text(last_manifest_id, "last_successful_manifest_id")
     if status is AttemptStatus.FAILED:
         if pointer["snapshot_id"] is not None or pointer["manifest_id"] is not None:
             raise ObservableUniverseError("failed pointer cannot select a snapshot")
@@ -1021,11 +1105,18 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
         )
         if attempt_id != expected_attempt:
             raise ObservableUniverseError("failed attempt identity mismatch")
-        if last_cutoff is not None and last_snapshot_id is not None:
+        if (
+            last_cutoff is not None
+            and last_snapshot_id is not None
+            and last_manifest_id is not None
+        ):
             if attempted_at < last_cutoff:
                 raise ObservableUniverseError("failed attempt predates its last successful cutoff")
-            last_snapshot = load_universe_snapshot(
-                root / _SNAPSHOT_DIRECTORY / f"{last_snapshot_id}.json"
+            last_snapshot = _load_manifest_bound_snapshot(
+                root,
+                last_snapshot_id,
+                last_manifest_id,
+                label="last successful",
             )
             if last_snapshot.research_cutoff_at != last_cutoff:
                 raise ObservableUniverseError(
@@ -1043,44 +1134,22 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
             failure_code,
             last_cutoff,
             last_snapshot_id,
+            last_manifest_id,
         )
 
     if failure_code is not None:
         raise ObservableUniverseError("successful pointer cannot contain failure_code")
     snapshot_id = _required_text(pointer, "snapshot_id")
     manifest_id = _required_text(pointer, "manifest_id")
-    snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot_id}.json"
-    manifest_path = root / _MANIFEST_DIRECTORY / f"{manifest_id}.json"
-    _require_regular_file(manifest_path, "selected manifest")
-    manifest = _load_json(manifest_path, "manifest")
-    _exact(
-        manifest,
-        {"schema_version", "snapshot_id", "snapshot_bytes_sha256", "manifest_id"},
-        "manifest",
-    )
-    manifest_without_id = dict(manifest)
-    del manifest_without_id["manifest_id"]
-    if _required_int(manifest, "schema_version") != SCHEMA_VERSION:
-        raise ObservableUniverseError("unsupported manifest schema")
+    snapshot = _load_manifest_bound_snapshot(root, snapshot_id, manifest_id, label="selected")
     if (
-        _required_text(manifest, "manifest_id") != manifest_id
-        or _sha(manifest_without_id) != manifest_id
-        or manifest_path.stem != manifest_id
+        last_cutoff != snapshot.research_cutoff_at
+        or last_snapshot_id != snapshot.snapshot_id
+        or last_manifest_id != manifest_id
     ):
-        raise ObservableUniverseError("manifest content identity mismatch")
-    if manifest.get("snapshot_id") != snapshot_id:
-        raise ObservableUniverseError("manifest selects a different snapshot")
-    _require_regular_file(snapshot_path, "selected snapshot")
-    try:
-        snapshot_bytes = snapshot_path.read_bytes()
-    except OSError as exc:
-        raise ObservableUniverseError("cannot read selected snapshot") from exc
-    if _digest(snapshot_bytes) != manifest.get("snapshot_bytes_sha256"):
-        raise ObservableUniverseError("persisted snapshot bytes do not match manifest")
-    snapshot = load_universe_snapshot(snapshot_path)
-    if last_cutoff != snapshot.research_cutoff_at or last_snapshot_id != snapshot.snapshot_id:
         raise ObservableUniverseError(
-            "successful pointer must preserve its selected snapshot as the high-water mark"
+            "successful pointer must preserve its selected snapshot and manifest "
+            "as the high-water mark"
         )
     if _load_universe_identity(root) != snapshot.universe_id:
         raise ObservableUniverseError(
@@ -1108,6 +1177,7 @@ def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState
         None,
         last_cutoff,
         last_snapshot_id,
+        last_manifest_id,
     )
 
 
@@ -1145,6 +1215,44 @@ def load_universe_snapshot(path: str | Path) -> ObservableUniverseSnapshot:
     return value
 
 
+def _load_manifest_bound_snapshot(
+    root: Path,
+    snapshot_id: str,
+    manifest_id: str,
+    *,
+    label: str,
+) -> ObservableUniverseSnapshot:
+    snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot_id}.json"
+    manifest_path = root / _MANIFEST_DIRECTORY / f"{manifest_id}.json"
+    _require_regular_file(manifest_path, f"{label} manifest")
+    manifest = _load_json(manifest_path, f"{label} manifest")
+    _exact(
+        manifest,
+        {"schema_version", "snapshot_id", "snapshot_bytes_sha256", "manifest_id"},
+        f"{label} manifest",
+    )
+    manifest_without_id = dict(manifest)
+    del manifest_without_id["manifest_id"]
+    if _required_int(manifest, "schema_version") != SCHEMA_VERSION:
+        raise ObservableUniverseError("unsupported manifest schema")
+    if (
+        _required_text(manifest, "manifest_id") != manifest_id
+        or _sha(manifest_without_id) != manifest_id
+        or manifest_path.stem != manifest_id
+    ):
+        raise ObservableUniverseError("manifest content identity mismatch")
+    if manifest.get("snapshot_id") != snapshot_id:
+        raise ObservableUniverseError("manifest selects a different snapshot")
+    _require_regular_file(snapshot_path, f"{label} snapshot")
+    try:
+        snapshot_bytes = snapshot_path.read_bytes()
+    except OSError as exc:
+        raise ObservableUniverseError(f"cannot read {label} snapshot") from exc
+    if _digest(snapshot_bytes) != manifest.get("snapshot_bytes_sha256"):
+        raise ObservableUniverseError("persisted snapshot bytes do not match manifest")
+    return load_universe_snapshot(snapshot_path)
+
+
 def _compare_observations(
     prior: MeasuredObservation | None,
     current: MeasuredObservation | None,
@@ -1154,6 +1262,7 @@ def _compare_observations(
     prior_cutoff_at: datetime,
     evaluated_at: datetime,
     stale_after: timedelta | None,
+    stale_after_microseconds: int | None,
     prior_declared_unavailable: bool,
     current_declared_unavailable: bool,
 ) -> ObservationChange:
@@ -1178,6 +1287,7 @@ def _compare_observations(
             reason=reason,
             prior_evidence_refs=prior_refs,
             current_evidence_refs=current_refs,
+            comparison_stale_after_microseconds=stale_after_microseconds,
         )
 
     current_is_stale = (
@@ -1186,10 +1296,15 @@ def _compare_observations(
         and stale_after is not None
         and evaluated_at - current.available_at > stale_after
     )
+    current_upstream_was_knowable = (
+        current is not None
+        and current.maturity is not EvidenceMaturity.UNAVAILABLE
+        and all(item.available_at <= prior_cutoff_at for item in current.evidence)
+    )
     if (
         current is not None
         and current.maturity is not EvidenceMaturity.UNAVAILABLE
-        and current.available_at <= prior_cutoff_at
+        and (current.available_at <= prior_cutoff_at or current_upstream_was_knowable)
         and (prior is None or prior.maturity is EvidenceMaturity.UNAVAILABLE)
     ):
         return make(
@@ -1231,7 +1346,7 @@ def _compare_observations(
             None,
             "current observation chronology regresses the prior observation",
         )
-    if current.available_at <= prior_cutoff_at and (
+    if (current.available_at <= prior_cutoff_at or current_upstream_was_knowable) and (
         current.value != prior.value or type(current.value) is not type(prior.value)
     ):
         return make(
@@ -1686,6 +1801,7 @@ __all__ = [
     "CandidateRule",
     "ChangeState",
     "CurrentUniverseState",
+    "EvidenceBlocker",
     "EvidenceMaturity",
     "EvidenceReference",
     "MeasuredObservation",

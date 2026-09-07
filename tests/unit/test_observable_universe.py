@@ -22,6 +22,7 @@ from alpha_cycle.intelligence.observable_universe import (
     AttemptStatus,
     CandidateRule,
     ChangeState,
+    EvidenceBlocker,
     EvidenceMaturity,
     EvidenceReference,
     MeasuredObservation,
@@ -844,6 +845,18 @@ def test_change_and_planner_bind_the_exact_prior_snapshot() -> None:
     assert planner_input(candidate).prior_snapshot_id == first_prior.snapshot_id
 
 
+def test_delayed_transformation_of_old_upstream_evidence_is_not_a_fresh_change() -> None:
+    prior = snapshot(1.0)
+    delayed = replace(
+        observation(2.0, at=T1),
+        evidence=(evidence("old-upstream", at=T0),),
+    )
+    current = snapshot(cutoff=T1, version="2", obs=(delayed,))
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.INCOMPARABLE
+    assert "already knowable" in change.reason
+
+
 def test_missing_evidence_never_improves_candidate_and_no_rule_means_no_candidate() -> None:
     prior = snapshot(1.0)
     current = snapshot(2.0, cutoff=T1, version="2")
@@ -1043,7 +1056,51 @@ def test_planner_input_carries_concrete_evidence_blockers() -> None:
         "evidence disappeared",
     )
     candidate = surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)[0]
-    assert planner_input(candidate).blocked_evidence == ("provider timeout",)
+    assert planner_input(candidate).blocked_evidence == (
+        EvidenceBlocker("market_return", "provider timeout"),
+    )
+
+
+def test_planner_blockers_remain_associated_with_their_dimensions() -> None:
+    prior = snapshot(1.0)
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        members=(member(available=(), unavailable=("market_return", "consensus")),),
+        obs=(
+            observation(
+                None,
+                at=T1,
+                maturity=EvidenceMaturity.UNAVAILABLE,
+                unavailable_reason="market provider timeout",
+            ),
+            observation(
+                None,
+                dimension="consensus",
+                metric="consensus",
+                at=T1,
+                maturity=EvidenceMaturity.UNAVAILABLE,
+                unavailable_reason="consensus license unavailable",
+            ),
+        ),
+    )
+    changes = compare_universe_snapshots(prior, current)
+    rule = CandidateRule(
+        "missing-market",
+        "market_return",
+        (ChangeState.NEWLY_MISSING,),
+        ResearchPriority.ELEVATED,
+        "market evidence disappeared",
+    )
+    candidate = surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)[0]
+    assert candidate.blocked_evidence == (
+        EvidenceBlocker("consensus", "consensus license unavailable"),
+        EvidenceBlocker("market_return", "market provider timeout"),
+    )
+    assert candidate.payload_without_id()["blocked_evidence"] == [
+        {"dimension_id": "consensus", "reason": "consensus license unavailable"},
+        {"dimension_id": "market_return", "reason": "market provider timeout"},
+    ]
 
 
 @pytest.mark.parametrize("variant", ["version", "domain", "membership", "missing"])
@@ -1224,6 +1281,42 @@ def test_observationless_added_member_can_surface_a_research_candidate() -> None
     assert candidate.domain_id == "policy"
 
 
+def test_retained_member_reclassification_emits_a_membership_change() -> None:
+    shared_observation = (observation(1.0, at=T0),)
+    prior = snapshot(obs=shared_observation)
+    reclassified = replace(
+        member(),
+        kind=MemberKind.ASSET,
+        domain_id="cross_asset_liquidity",
+    )
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        obs=shared_observation,
+        members=(reclassified,),
+    )
+    changes = compare_universe_snapshots(prior, current)
+    lifecycle = next(item for item in changes if item.dimension_id == "__membership__")
+    assert lifecycle.state is ChangeState.CHANGED
+    assert lifecycle.prior_value == "security:memory_semiconductor"
+    assert lifecycle.current_value == "asset:cross_asset_liquidity"
+    rule = CandidateRule(
+        "reclassified",
+        "__membership__",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ELEVATED,
+        "research route changed",
+    )
+    candidate = surface_research_candidates(
+        current,
+        changes,
+        (rule,),
+        prior_snapshot=prior,
+    )[0]
+    assert candidate.member_kind is MemberKind.ASSET
+    assert candidate.domain_id == "cross_asset_liquidity"
+
+
 def test_membership_change_dimension_is_reserved_from_observation_data() -> None:
     with pytest.raises(ObservableUniverseError, match="reserved for member lifecycle"):
         member(available=("__membership__",), unavailable=("consensus",))
@@ -1353,6 +1446,48 @@ def test_negative_staleness_window_is_rejected() -> None:
         )
 
 
+def test_staleness_policy_is_bound_into_change_and_candidate_identity() -> None:
+    prior = snapshot(
+        obs=(
+            observation(
+                None,
+                maturity=EvidenceMaturity.UNAVAILABLE,
+                unavailable_reason="not yet available",
+            ),
+        ),
+        members=(member(available=(), unavailable=("market_return", "consensus")),),
+    )
+    current = snapshot(
+        cutoff=T2,
+        version="2",
+        obs=(observation(2.0, at=T0 + timedelta(hours=1)),),
+    )
+    first = compare_universe_snapshots(prior, current, stale_after=timedelta(hours=12))[0]
+    second = compare_universe_snapshots(prior, current, stale_after=timedelta(hours=24))[0]
+    assert first.state is second.state is ChangeState.STALE
+    assert first.comparison_stale_after_microseconds == 12 * 60 * 60 * 1_000_000
+    assert second.comparison_stale_after_microseconds == 24 * 60 * 60 * 1_000_000
+    assert first.change_id != second.change_id
+    rule = CandidateRule(
+        "stale",
+        "market_return",
+        (ChangeState.STALE,),
+        ResearchPriority.ROUTINE,
+        "stale evidence",
+    )
+    candidate = surface_research_candidates(
+        current,
+        (first,),
+        (rule,),
+        prior_snapshot=prior,
+        stale_after=timedelta(hours=12),
+    )[0]
+    assert candidate.comparison_stale_after_microseconds == 12 * 60 * 60 * 1_000_000
+    assert planner_input(candidate).comparison_stale_after_microseconds == (
+        12 * 60 * 60 * 1_000_000
+    )
+
+
 def test_public_change_states_only_advertise_emitted_r1a_semantics() -> None:
     assert set(ChangeState) == {
         ChangeState.CHANGED,
@@ -1411,6 +1546,7 @@ def test_persistence_replay_and_failed_later_attempt_semantics(tmp_path: Path) -
     assert failed.failure_code == "provider_timeout"
     assert failed.last_successful_cutoff_at == T0
     assert failed.last_successful_snapshot_id == state.snapshot_id
+    assert failed.last_successful_manifest_id is not None
     assert path.exists()  # immutable history remains, but is not current readiness
 
 
@@ -1541,6 +1677,43 @@ def test_failed_pointer_reconstructs_its_success_watermark(tmp_path: Path) -> No
     )
     snapshot_path.unlink()
     with pytest.raises(ObservableUniverseError, match="snapshot path.*regular file"):
+        load_current_universe_state(tmp_path)
+
+
+def test_failed_pointer_requires_its_success_watermark_manifest(tmp_path: Path) -> None:
+    persist_successful_universe_attempt(snapshot(), output_root=tmp_path, attempted_at=T0)
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T1,
+        failure_code="provider_timeout",
+    )
+    pointer = json.loads(
+        (tmp_path / "observable_universe_v1/current.json").read_text(encoding="utf-8")
+    )
+    manifest_path = (
+        tmp_path
+        / "observable_universe_v1/manifests"
+        / f"{pointer['last_successful_manifest_id']}.json"
+    )
+    manifest_path.unlink()
+
+    with pytest.raises(ObservableUniverseError, match="last successful manifest path"):
+        load_current_universe_state(tmp_path)
+
+
+def test_failed_pointer_validates_watermark_snapshot_exact_bytes(tmp_path: Path) -> None:
+    snapshot_path = persist_successful_universe_attempt(
+        snapshot(), output_root=tmp_path, attempted_at=T0
+    )
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T1,
+        failure_code="provider_timeout",
+    )
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    snapshot_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    with pytest.raises(ObservableUniverseError, match="bytes do not match manifest"):
         load_current_universe_state(tmp_path)
 
 
