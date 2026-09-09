@@ -31,6 +31,7 @@ _SNAPSHOT_DIRECTORY = "observable_universe_v1/snapshots"
 _MANIFEST_DIRECTORY = "observable_universe_v1/manifests"
 _CURRENT_PATH = "observable_universe_v1/current.json"
 _IDENTITY_PATH = "observable_universe_v1/universe.json"
+_PENDING_IDENTITY_PATH = "observable_universe_v1/pending_identity.json"
 _LOCK_WAIT_SECONDS = 30.0
 _MEMBERSHIP_DIMENSION = "__membership__"
 
@@ -455,7 +456,7 @@ class CandidateRule:
     states: tuple[ChangeState, ...]
     priority: ResearchPriority
     reason: str
-    minimum_absolute_delta: float | None = None
+    minimum_absolute_delta: float | int | None = None
 
     def __post_init__(self) -> None:
         _text(self.rule_id, "rule_id")
@@ -463,10 +464,14 @@ class CandidateRule:
         _text(self.reason, "reason")
         if not self.states or len(set(self.states)) != len(self.states):
             raise ObservableUniverseError("candidate rule states must be unique and non-empty")
-        if self.minimum_absolute_delta is not None and (
-            not math.isfinite(self.minimum_absolute_delta) or self.minimum_absolute_delta < 0
-        ):
-            raise ObservableUniverseError("minimum_absolute_delta must be finite and non-negative")
+        if self.minimum_absolute_delta is not None:
+            if isinstance(self.minimum_absolute_delta, bool) or (
+                not math.isfinite(self.minimum_absolute_delta)
+                or self.minimum_absolute_delta < 0
+            ):
+                raise ObservableUniverseError(
+                    "minimum_absolute_delta must be a finite non-negative number"
+                )
 
     @property
     def policy_id(self) -> str:
@@ -474,10 +479,8 @@ class CandidateRule:
 
     def payload(self) -> dict[str, object]:
         minimum_absolute_delta = self.minimum_absolute_delta
-        if minimum_absolute_delta is not None:
-            minimum_absolute_delta = float(minimum_absolute_delta)
-            if minimum_absolute_delta == 0:
-                minimum_absolute_delta = 0.0
+        if isinstance(minimum_absolute_delta, float) and minimum_absolute_delta.is_integer():
+            minimum_absolute_delta = int(minimum_absolute_delta)
         return {
             "rule_id": self.rule_id,
             "dimension_id": self.dimension_id,
@@ -1005,6 +1008,7 @@ def persist_successful_universe_attempt(
         "last_successful_manifest_id": manifest_id,
     }
     with _exclusive_universe_write_lock(root):
+        _recover_interrupted_identity_binding(root)
         _validate_pointer_advance(root, pointer_without_id)
         prior_current = load_current_universe_state(root)
         prior_pointer_path = root / _CURRENT_PATH
@@ -1030,6 +1034,11 @@ def persist_successful_universe_attempt(
         )
         try:
             if not identity_already_bound:
+                _begin_universe_identity_binding(
+                    root,
+                    snapshot.universe_id,
+                    prior_pointer_bytes=prior_pointer_bytes,
+                )
                 _bind_universe_identity(root, snapshot.universe_id)
             _publish_pointer(root, pointer_without_id, validate_advance=False)
         except BaseException:
@@ -1039,7 +1048,10 @@ def persist_successful_universe_attempt(
                     snapshot.universe_id,
                     prior_pointer_bytes=prior_pointer_bytes,
                 )
+                _clear_pending_identity_binding(root)
             raise
+        if not identity_already_bound:
+            _clear_pending_identity_binding(root)
         return snapshot_path
 
 
@@ -1059,6 +1071,7 @@ def publish_failed_universe_attempt(
     )
     root = Path(output_root)
     with _exclusive_universe_write_lock(root):
+        _recover_interrupted_identity_binding(root)
         prior_current = load_current_universe_state(root)
         pointer_without_id = {
             "schema_version": SCHEMA_VERSION,
@@ -1392,6 +1405,13 @@ def _compare_observations(
             )
         if prior is None:
             return make(ChangeState.NEWLY_MISSING, None, "dimension is newly unavailable")
+        if (
+            current is not None
+            and prior.maturity is EvidenceMaturity.UNAVAILABLE
+            and current.maturity is EvidenceMaturity.UNAVAILABLE
+            and prior.unavailable_reason != current.unavailable_reason
+        ):
+            return make(ChangeState.CHANGED, None, "unavailable evidence blocker changed")
         return make(ChangeState.UNCHANGED, None, "evidence remains explicitly unavailable")
     assert prior is not None and current is not None
     if current.available_at < prior.available_at or current.observed_at < prior.observed_at:
@@ -1615,6 +1635,67 @@ def _bind_universe_identity(root: Path, universe_id: str) -> None:
         return
     without_id = {"schema_version": SCHEMA_VERSION, "universe_id": universe_id}
     _write_immutable(path, _encoded({**without_id, "identity_id": _sha(without_id)}))
+
+
+def _begin_universe_identity_binding(
+    root: Path, universe_id: str, *, prior_pointer_bytes: bytes | None
+) -> None:
+    without_id = {
+        "schema_version": SCHEMA_VERSION,
+        "universe_id": universe_id,
+        "prior_pointer_sha256": (
+            _digest(prior_pointer_bytes) if prior_pointer_bytes is not None else None
+        ),
+    }
+    marker = {**without_id, "marker_id": _sha(without_id)}
+    _atomic_replace(root / _PENDING_IDENTITY_PATH, _encoded(marker))
+
+
+def _clear_pending_identity_binding(root: Path) -> None:
+    path = root / _PENDING_IDENTITY_PATH
+    if not os.path.lexists(path):
+        return
+    if path.is_symlink() or not path.is_file():
+        raise ObservableUniverseError("pending universe identity path must be a regular file")
+    path.unlink()
+    _fsync_directory(path.parent)
+
+
+def _recover_interrupted_identity_binding(root: Path) -> None:
+    marker_path = root / _PENDING_IDENTITY_PATH
+    if not os.path.lexists(marker_path):
+        return
+    _require_regular_file(marker_path, "pending universe identity")
+    marker = _load_json(marker_path, "pending universe identity")
+    _exact(
+        marker,
+        {"schema_version", "universe_id", "prior_pointer_sha256", "marker_id"},
+        "pending universe identity",
+    )
+    if _required_int(marker, "schema_version") != SCHEMA_VERSION:
+        raise ObservableUniverseError("unsupported pending universe identity schema")
+    universe_id = _required_text(marker, "universe_id")
+    prior_pointer_sha256 = _nullable_text(marker, "prior_pointer_sha256")
+    if prior_pointer_sha256 is not None:
+        _sha_text(prior_pointer_sha256, "prior_pointer_sha256")
+    marker_id = _required_text(marker, "marker_id")
+    without_id = dict(marker)
+    del without_id["marker_id"]
+    if _sha(without_id) != marker_id:
+        raise ObservableUniverseError("pending universe identity content mismatch")
+
+    pointer_path = root / _CURRENT_PATH
+    pointer_is_unchanged = not os.path.lexists(pointer_path)
+    if prior_pointer_sha256 is not None:
+        _require_regular_file(pointer_path, "current pointer")
+        pointer_is_unchanged = _digest(pointer_path.read_bytes()) == prior_pointer_sha256
+    if pointer_is_unchanged and os.path.lexists(root / _IDENTITY_PATH):
+        _rollback_unclaimed_universe_identity(
+            root,
+            universe_id,
+            prior_pointer_bytes=(pointer_path.read_bytes() if prior_pointer_sha256 else None),
+        )
+    _clear_pending_identity_binding(root)
 
 
 def _rollback_unclaimed_universe_identity(

@@ -843,6 +843,30 @@ def test_rule_policy_identity_canonicalizes_numeric_threshold(
     assert rule.payload() == canonical.payload()
 
 
+def test_rule_policy_identity_preserves_exact_large_integer_thresholds() -> None:
+    exact = CandidateRule(
+        "policy",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ELEVATED,
+        "changed",
+        minimum_absolute_delta=2**53,
+    )
+    distinct = replace(exact, minimum_absolute_delta=2**53 + 1)
+    assert exact.policy_id != distinct.policy_id
+    assert exact.payload()["minimum_absolute_delta"] == 2**53
+    assert distinct.payload()["minimum_absolute_delta"] == 2**53 + 1
+    prior = snapshot(0)
+    current = snapshot(2**53, cutoff=T1, version="2")
+    changes = compare_universe_snapshots(prior, current)
+    assert surface_research_candidates(
+        current, changes, (exact,), prior_snapshot=prior
+    )
+    assert not surface_research_candidates(
+        current, changes, (distinct,), prior_snapshot=prior
+    )
+
+
 @pytest.mark.parametrize("kind", (MemberKind.ASSET, MemberKind.DOMAIN))
 def test_candidate_preserves_non_security_member_kind_for_planner(kind: MemberKind) -> None:
     prior = snapshot(1.0, members=(replace(member(), kind=kind),))
@@ -1419,6 +1443,39 @@ def test_added_blocker_detail_does_not_fake_an_availability_change() -> None:
         )
         == ()
     )
+
+
+def test_changed_unavailable_blocker_reason_is_an_explicit_change() -> None:
+    unavailable_member = replace(
+        member(),
+        available_dimensions=(),
+        unavailable_dimensions=("consensus", "market_return"),
+    )
+    unavailable = observation(
+        None,
+        maturity=EvidenceMaturity.UNAVAILABLE,
+        unavailable_reason="licensed source unavailable",
+    )
+    prior = snapshot(members=(unavailable_member,), obs=(unavailable,))
+    current = snapshot(
+        cutoff=T1,
+        version="2",
+        members=(unavailable_member,),
+        obs=(replace(unavailable, observed_at=T1, available_at=T1, unavailable_reason="timeout"),),
+    )
+    change = compare_universe_snapshots(prior, current)[0]
+    assert change.state is ChangeState.CHANGED
+    assert change.reason == "unavailable evidence blocker changed"
+
+    rule = CandidateRule(
+        "changed-blocker",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ELEVATED,
+        "re-evaluate the evidence blocker",
+    )
+    candidate = surface_research_candidates(current, (change,), (rule,), prior_snapshot=prior)[0]
+    assert candidate.blocked_evidence == (EvidenceBlocker("market_return", "timeout"),)
 
 
 def test_newly_available_but_old_evidence_is_stale_not_fresh() -> None:
@@ -2027,6 +2084,65 @@ def test_failed_first_success_after_an_initial_failure_rolls_back_identity(
     persist_successful_universe_attempt(replacement, output_root=tmp_path, attempted_at=T2)
     current = load_current_universe_state(tmp_path)
     assert current is not None and current.snapshot == replacement
+
+
+@pytest.mark.parametrize("existing_failed_pointer", (False, True))
+def test_next_writer_recovers_identity_orphaned_by_abrupt_first_publish(
+    existing_failed_pointer: bool, tmp_path: Path
+) -> None:
+    if existing_failed_pointer:
+        publish_failed_universe_attempt(
+            output_root=tmp_path,
+            attempted_at=T0,
+            failure_code="initial_provider_failure",
+        )
+    pointer_path = tmp_path / "observable_universe_v1/current.json"
+    prior_pointer_bytes = pointer_path.read_bytes() if existing_failed_pointer else None
+    state = snapshot()
+    observable_module._begin_universe_identity_binding(
+        tmp_path,
+        state.universe_id,
+        prior_pointer_bytes=prior_pointer_bytes,
+    )
+    observable_module._bind_universe_identity(tmp_path, state.universe_id)
+
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T1,
+        failure_code="restart_after_process_termination",
+    )
+    assert not (tmp_path / "observable_universe_v1/universe.json").exists()
+    assert not (tmp_path / "observable_universe_v1/pending_identity.json").exists()
+    current = load_current_universe_state(tmp_path)
+    assert current is not None
+    assert current.status is AttemptStatus.FAILED
+    assert current.failure_code == "restart_after_process_termination"
+
+
+def test_next_writer_keeps_committed_identity_when_marker_cleanup_was_interrupted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_clear = observable_module._clear_pending_identity_binding
+    monkeypatch.setattr(observable_module, "_clear_pending_identity_binding", lambda root: None)
+    state = snapshot()
+    persist_successful_universe_attempt(state, output_root=tmp_path, attempted_at=T0)
+    marker_path = tmp_path / "observable_universe_v1/pending_identity.json"
+    identity_path = tmp_path / "observable_universe_v1/universe.json"
+    assert marker_path.exists()
+    assert identity_path.exists()
+
+    monkeypatch.setattr(observable_module, "_clear_pending_identity_binding", real_clear)
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T1,
+        failure_code="later_provider_failure",
+    )
+    assert not marker_path.exists()
+    assert identity_path.exists()
+    current = load_current_universe_state(tmp_path)
+    assert current is not None
+    assert current.status is AttemptStatus.FAILED
+    assert current.last_successful_snapshot_id == state.snapshot_id
 
 
 @pytest.mark.parametrize("target", ("snapshot", "manifest"))
