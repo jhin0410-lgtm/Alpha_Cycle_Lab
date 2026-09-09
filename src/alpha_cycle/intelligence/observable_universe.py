@@ -1614,7 +1614,8 @@ def _try_acquire_universe_write_lock(fd: int) -> None:
         import msvcrt
 
         os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        locking = cast(Callable[[int, int, int], None], vars(msvcrt)["locking"])
+        locking(fd, cast(int, vars(msvcrt)["LK_NBLCK"]), 1)
         return
     import fcntl
 
@@ -1627,7 +1628,8 @@ def _release_universe_write_lock(fd: int) -> None:
         import msvcrt
 
         os.lseek(fd, 0, os.SEEK_SET)
-        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        locking = cast(Callable[[int, int, int], None], vars(msvcrt)["locking"])
+        locking(fd, cast(int, vars(msvcrt)["LK_UNLCK"]), 1)
         return
     import fcntl
 
