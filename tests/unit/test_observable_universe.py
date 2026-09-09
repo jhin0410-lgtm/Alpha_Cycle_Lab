@@ -4,7 +4,6 @@ import hashlib
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1781,6 +1780,32 @@ def test_successful_publication_cannot_regress_current_research_cutoff(
     assert current.last_successful_snapshot_id == newer.snapshot_id
 
 
+@pytest.mark.parametrize("after_failed_attempt", (False, True))
+def test_same_cutoff_rejects_conflicting_snapshot_but_allows_idempotent_replay(
+    after_failed_attempt: bool, tmp_path: Path
+) -> None:
+    original = snapshot(1.0)
+    persist_successful_universe_attempt(original, output_root=tmp_path, attempted_at=T0)
+    if after_failed_attempt:
+        publish_failed_universe_attempt(
+            output_root=tmp_path,
+            attempted_at=T1,
+            failure_code="provider_timeout",
+        )
+    attempted_at = T2 if after_failed_attempt else T1
+    conflicting = snapshot(2.0, version="conflicting-same-cutoff")
+    with pytest.raises(ObservableUniverseError, match="cutoff.*conflicting"):
+        persist_successful_universe_attempt(
+            conflicting,
+            output_root=tmp_path,
+            attempted_at=attempted_at,
+        )
+    replay_at = T3 if after_failed_attempt else T2
+    persist_successful_universe_attempt(original, output_root=tmp_path, attempted_at=replay_at)
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.snapshot == original
+
+
 def test_failed_pointer_reconstructs_its_success_watermark(tmp_path: Path) -> None:
     state = snapshot()
     snapshot_path = persist_successful_universe_attempt(
@@ -2183,6 +2208,29 @@ def test_immutable_writer_rejects_a_symlink_artifact_path(
         observable_module._write_immutable(artifact, b"expected")
 
 
+def test_immutable_install_race_rejects_a_symlinked_destination(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = snapshot()
+    snapshot_path = tmp_path / "observable_universe_v1/snapshots" / f"{state.snapshot_id}.json"
+    external = tmp_path / "external.json"
+    external.write_bytes(observable_module._encoded(state.payload()))
+    real_link = observable_module.os.link
+
+    def install_symlink_then_report_race(source: str | bytes, destination: str | bytes) -> None:
+        if Path(destination) == snapshot_path:
+            try:
+                snapshot_path.symlink_to(external)
+            except OSError as exc:
+                pytest.skip(f"symlink creation unavailable: {exc}")
+            raise FileExistsError
+        real_link(source, destination)
+
+    monkeypatch.setattr(observable_module.os, "link", install_symlink_then_report_race)
+    with pytest.raises(ObservableUniverseError, match="regular file"):
+        persist_successful_universe_attempt(state, output_root=tmp_path, attempted_at=T0)
+
+
 def test_existing_symlinked_universe_identity_fails_replay_and_republication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2265,20 +2313,20 @@ def test_later_failure_wins_when_it_races_an_older_success(
     attempted_failure_publish = threading.Event()
     release_success_write = threading.Event()
     real_write_immutable = observable_module._write_immutable
-    real_lock = observable_module.exclusive_research_ledger_write_lock
+    real_lock = observable_module._try_acquire_universe_write_lock
     blocked_once = False
     lock_attempts = 0
 
-    def note_lock_attempt(root: str | Path) -> AbstractContextManager[None]:
+    def note_lock_attempt(fd: int) -> None:
         nonlocal lock_attempts
         lock_attempts += 1
         if lock_attempts >= 2:
             attempted_failure_publish.set()
-        return real_lock(root)
+        real_lock(fd)
 
     def block_first_immutable_write(path: Path, content: bytes) -> None:
         nonlocal blocked_once
-        if not blocked_once:
+        if path.parent.name == "snapshots" and not blocked_once:
             blocked_once = True
             entered_success_write.set()
             assert release_success_write.wait(timeout=5)
@@ -2287,7 +2335,7 @@ def test_later_failure_wins_when_it_races_an_older_success(
     monkeypatch.setattr(observable_module, "_write_immutable", block_first_immutable_write)
     monkeypatch.setattr(
         observable_module,
-        "exclusive_research_ledger_write_lock",
+        "_try_acquire_universe_write_lock",
         note_lock_attempt,
     )
     with ThreadPoolExecutor(max_workers=2) as pool:
@@ -2314,3 +2362,16 @@ def test_later_failure_wins_when_it_races_an_older_success(
     assert current.status is AttemptStatus.FAILED
     assert current.attempted_at == T1
     assert current.snapshot is None
+
+
+def test_stale_lock_file_does_not_block_a_restarted_writer(tmp_path: Path) -> None:
+    lock_path = tmp_path / "observable_universe_v1/.write.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_bytes(b"observable-universe-write-lock-v1\n")
+    legacy_lock = tmp_path / ".research_request_intake.lock"
+    legacy_lock.write_text("pid=999999999\n", encoding="ascii")
+
+    state = snapshot()
+    persist_successful_universe_attempt(state, output_root=tmp_path, attempted_at=T0)
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.snapshot == state

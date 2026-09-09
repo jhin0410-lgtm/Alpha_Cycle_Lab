@@ -7,13 +7,15 @@ investment recommendation, expected return, causal claim, or universal score.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import math
 import os
+import stat
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -22,16 +24,13 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any, cast
 
-from alpha_cycle.research_ledger_write_lock_v2_1 import (
-    exclusive_research_ledger_write_lock,
-)
-
 SCHEMA_VERSION = 1
 _SNAPSHOT_DIRECTORY = "observable_universe_v1/snapshots"
 _MANIFEST_DIRECTORY = "observable_universe_v1/manifests"
 _CURRENT_PATH = "observable_universe_v1/current.json"
 _IDENTITY_PATH = "observable_universe_v1/universe.json"
 _PENDING_IDENTITY_PATH = "observable_universe_v1/pending_identity.json"
+_WRITE_LOCK_PATH = "observable_universe_v1/.write.lock"
 _LOCK_WAIT_SECONDS = 30.0
 _MEMBERSHIP_DIMENSION = "__membership__"
 
@@ -1023,6 +1022,14 @@ def persist_successful_universe_attempt(
             raise ObservableUniverseError(
                 "successful publication cannot regress the current research cutoff"
             )
+        if (
+            prior_current is not None
+            and prior_current.last_successful_cutoff_at == snapshot.research_cutoff_at
+            and prior_current.last_successful_snapshot_id != snapshot.snapshot_id
+        ):
+            raise ObservableUniverseError(
+                "one research cutoff cannot identify conflicting universe snapshots"
+            )
         identity_path = root / _IDENTITY_PATH
         identity_already_bound = os.path.lexists(identity_path)
         if identity_already_bound:
@@ -1570,37 +1577,62 @@ def _parse_evidence(raw: object) -> EvidenceReference:
 
 @contextmanager
 def _exclusive_universe_write_lock(root: Path) -> Iterator[None]:
-    """Wait for the repository's trusted cross-process lock, then hold it through commit."""
+    """Hold an automatically released cross-process advisory lock through commit."""
 
     _mkdir_durable(root)
+    lock_path = root / _WRITE_LOCK_PATH
+    if not os.path.lexists(lock_path):
+        _write_immutable(lock_path, b"observable-universe-write-lock-v1\n")
+    lock_fd = _open_regular_file(lock_path, "observable-universe write lock", os.O_RDWR)
     deadline = time.monotonic() + _LOCK_WAIT_SECONDS
-    while True:
-        lock = exclusive_research_ledger_write_lock(root)
-        try:
-            lock.__enter__()
-        except FileExistsError as exc:
-            if time.monotonic() >= deadline:
-                raise ObservableUniverseError(
-                    "timed out waiting for observable-universe publication lock"
-                ) from exc
-            time.sleep(0.01)
-            continue
-        except RuntimeError as exc:
-            # The shared contextmanager's fail-closed acquisition path currently
-            # surfaces an O_EXCL collision as contextlib's no-yield RuntimeError.
-            if str(exc) != "generator didn't yield":
-                raise
-            if time.monotonic() >= deadline:
-                raise ObservableUniverseError(
-                    "timed out waiting for observable-universe publication lock"
-                ) from exc
-            time.sleep(0.01)
-            continue
+    acquired = False
+    try:
+        while True:
+            try:
+                _try_acquire_universe_write_lock(lock_fd)
+                acquired = True
+                break
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise ObservableUniverseError(
+                        "timed out waiting for observable-universe publication lock"
+                    ) from exc
+                time.sleep(0.01)
         try:
             yield
         finally:
-            lock.__exit__(None, None, None)
+            if acquired:
+                _release_universe_write_lock(lock_fd)
+    finally:
+        os.close(lock_fd)
+
+
+def _try_acquire_universe_write_lock(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
         return
+    import fcntl
+
+    flock = cast(Callable[[int, int], None], vars(fcntl)["flock"])
+    flock(fd, cast(int, vars(fcntl)["LOCK_EX"]) | cast(int, vars(fcntl)["LOCK_NB"]))
+
+
+def _release_universe_write_lock(fd: int) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        os.lseek(fd, 0, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    flock = cast(Callable[[int, int], None], vars(fcntl)["flock"])
+    flock(fd, cast(int, vars(fcntl)["LOCK_UN"]))
 
 
 def _publish_pointer(
@@ -1740,9 +1772,7 @@ def _write_immutable(path: Path, content: bytes) -> None:
     if path.is_symlink():
         raise ObservableUniverseError("immutable artifact path cannot be a symlink")
     if path.exists():
-        if not path.is_file():
-            raise ObservableUniverseError("immutable artifact path must be a regular file")
-        if path.read_bytes() != content:
+        if _read_regular_file(path, "immutable artifact") != content:
             raise ObservableUniverseError(
                 "content-addressed artifact conflicts with existing bytes"
             )
@@ -1759,11 +1789,41 @@ def _write_immutable(path: Path, content: bytes) -> None:
             os.link(temporary, path)
             _fsync_directory(path.parent)
         except FileExistsError as exc:
-            if path.read_bytes() != content:
+            if _read_regular_file(path, "concurrent immutable artifact") != content:
                 raise ObservableUniverseError("concurrent immutable publication conflict") from exc
             _fsync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _open_regular_file(path: Path, label: str, flags: int) -> int:
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags | no_follow)
+    except OSError as exc:
+        raise ObservableUniverseError(f"{label} must be a regular file") from exc
+    try:
+        opened = os.fstat(fd)
+        selected = os.stat(path, follow_symlinks=False)
+        if not stat.S_ISREG(opened.st_mode) or not os.path.samestat(opened, selected):
+            raise ObservableUniverseError(f"{label} must be a regular file")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _read_regular_file(path: Path, label: str) -> bytes:
+    fd = _open_regular_file(path, label, os.O_RDONLY)
+    try:
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            content = handle.read()
+        selected_after = os.stat(path, follow_symlinks=False)
+        if not os.path.samestat(os.fstat(fd), selected_after):
+            raise ObservableUniverseError(f"{label} changed while it was read")
+        return content
+    finally:
+        os.close(fd)
 
 
 def _atomic_replace(path: Path, content: bytes) -> None:
