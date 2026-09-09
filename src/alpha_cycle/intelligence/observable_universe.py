@@ -473,13 +473,18 @@ class CandidateRule:
         return _sha(self.payload())
 
     def payload(self) -> dict[str, object]:
+        minimum_absolute_delta = self.minimum_absolute_delta
+        if minimum_absolute_delta is not None:
+            minimum_absolute_delta = float(minimum_absolute_delta)
+            if minimum_absolute_delta == 0:
+                minimum_absolute_delta = 0.0
         return {
             "rule_id": self.rule_id,
             "dimension_id": self.dimension_id,
             "states": sorted(item.value for item in self.states),
             "priority": self.priority.value,
             "reason": self.reason,
-            "minimum_absolute_delta": self.minimum_absolute_delta,
+            "minimum_absolute_delta": minimum_absolute_delta,
         }
 
 
@@ -509,6 +514,7 @@ class ResearchCandidate:
     triggering_rule_policy_ids: tuple[str, ...]
     triggering_change_ids: tuple[str, ...]
     triggering_evidence_refs: tuple[str, ...]
+    required_dimensions: tuple[str, ...]
     missing_dimensions: tuple[str, ...]
     blocked_evidence: tuple[EvidenceBlocker, ...]
     research_model_status: ResearchModelStatus
@@ -527,6 +533,7 @@ class ResearchCandidate:
             (self.triggering_rule_policy_ids, "triggering_rule_policy_ids"),
             (self.triggering_change_ids, "triggering_change_ids"),
             (self.triggering_evidence_refs, "triggering_evidence_refs"),
+            (self.required_dimensions, "required_dimensions"),
             (self.missing_dimensions, "missing_dimensions"),
         ):
             _unique_text(values, field)
@@ -569,6 +576,7 @@ class ResearchCandidate:
             "triggering_rule_policy_ids": list(self.triggering_rule_policy_ids),
             "triggering_change_ids": list(self.triggering_change_ids),
             "triggering_evidence_refs": list(self.triggering_evidence_refs),
+            "required_dimensions": list(self.required_dimensions),
             "missing_dimensions": list(self.missing_dimensions),
             "blocked_evidence": [item.payload() for item in self.blocked_evidence],
             "research_model_status": self.research_model_status.value,
@@ -596,6 +604,7 @@ class PlannerCandidateInput:
     triggering_rule_policy_ids: tuple[str, ...]
     measured_reasons: tuple[str, ...]
     evidence_refs: tuple[str, ...]
+    required_dimensions: tuple[str, ...]
     missing_dimensions: tuple[str, ...]
     blocked_evidence: tuple[EvidenceBlocker, ...]
     research_model_status: ResearchModelStatus
@@ -919,6 +928,7 @@ def surface_research_candidates(
                 triggering_evidence_refs=tuple(
                     sorted({ref for _, change in selected for ref in change.evidence_refs})
                 ),
+                required_dimensions=member.required_dimensions,
                 missing_dimensions=missing,
                 blocked_evidence=blocked,
                 research_model_status=member.research_model_status,
@@ -944,6 +954,7 @@ def planner_input(candidate: ResearchCandidate) -> PlannerCandidateInput:
         triggering_rule_policy_ids=candidate.triggering_rule_policy_ids,
         measured_reasons=candidate.measured_reasons,
         evidence_refs=candidate.triggering_evidence_refs,
+        required_dimensions=candidate.required_dimensions,
         missing_dimensions=candidate.missing_dimensions,
         blocked_evidence=candidate.blocked_evidence,
         research_model_status=candidate.research_model_status,
@@ -1021,7 +1032,7 @@ def persist_successful_universe_attempt(
             if not identity_already_bound:
                 _bind_universe_identity(root, snapshot.universe_id)
             _publish_pointer(root, pointer_without_id, validate_advance=False)
-        except Exception:
+        except BaseException:
             if not identity_already_bound:
                 _rollback_unclaimed_universe_identity(
                     root,

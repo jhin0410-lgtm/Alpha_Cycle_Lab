@@ -768,6 +768,7 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
     assert candidate.triggering_change_ids == (changes[0].change_id,)
     assert candidate.triggering_rule_policy_ids == (rule.policy_id,)
     assert candidate.triggering_evidence_refs == changes[0].evidence_refs
+    assert candidate.required_dimensions == ("consensus", "market_return")
     assert candidate.missing_dimensions == ("consensus",)
     assert candidate.investment_authority is False
     payload = candidate.payload_without_id()
@@ -784,6 +785,7 @@ def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:
     assert planner_candidate.evaluated_at == T1
     assert planner_candidate.triggering_change_ids == candidate.triggering_change_ids
     assert planner_candidate.triggering_rule_policy_ids == candidate.triggering_rule_policy_ids
+    assert planner_candidate.required_dimensions == candidate.required_dimensions
 
 
 def test_candidate_identity_binds_the_complete_triggering_rule_policy() -> None:
@@ -822,6 +824,23 @@ def test_rule_policy_identity_canonicalizes_state_order() -> None:
     second = replace(first, states=tuple(reversed(first.states)))
     assert first.policy_id == second.policy_id
     assert first.payload() == second.payload()
+
+
+@pytest.mark.parametrize("equivalent_zero", (0, 0.0, -0.0))
+def test_rule_policy_identity_canonicalizes_numeric_threshold(
+    equivalent_zero: float,
+) -> None:
+    rule = CandidateRule(
+        "policy",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ELEVATED,
+        "changed",
+        minimum_absolute_delta=equivalent_zero,
+    )
+    canonical = replace(rule, minimum_absolute_delta=0.0)
+    assert rule.policy_id == canonical.policy_id
+    assert rule.payload() == canonical.payload()
 
 
 @pytest.mark.parametrize("kind", (MemberKind.ASSET, MemberKind.DOMAIN))
@@ -1948,6 +1967,27 @@ def test_failed_initial_pointer_publication_rolls_back_unclaimed_identity(
     persist_successful_universe_attempt(replacement, output_root=tmp_path, attempted_at=T1)
     current = load_current_universe_state(tmp_path)
     assert current is not None and current.snapshot == replacement
+
+
+@pytest.mark.parametrize("cancellation", (KeyboardInterrupt, SystemExit))
+def test_cancelled_initial_pointer_publication_rolls_back_unclaimed_identity(
+    cancellation: type[BaseException], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = snapshot()
+
+    def cancel_pointer(
+        root: Path,
+        without_id: dict[str, object],
+        *,
+        validate_advance: bool = True,
+    ) -> None:
+        raise cancellation()
+
+    monkeypatch.setattr(observable_module, "_publish_pointer", cancel_pointer)
+    with pytest.raises(cancellation):
+        persist_successful_universe_attempt(first, output_root=tmp_path, attempted_at=T0)
+    assert not (tmp_path / "observable_universe_v1/universe.json").exists()
+    assert load_current_universe_state(tmp_path) is None
 
 
 def test_failed_first_success_after_an_initial_failure_rolls_back_identity(
