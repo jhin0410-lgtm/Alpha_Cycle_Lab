@@ -211,6 +211,63 @@ def test_stale_missing_record_is_incomparable(field: str) -> None:
     assert changes[0].state is ChangeState.INCOMPARABLE
 
 
+def test_reference_definition_survives_an_absent_intermediate_snapshot(tmp_path: Path) -> None:
+    first = snapshot()
+    persist_successful_universe_attempt(first, output_root=tmp_path, attempted_at=T0)
+    middle = snapshot(2.0, cutoff=T1)
+    persist_successful_universe_attempt(middle, output_root=tmp_path, attempted_at=T1)
+    pointer = tmp_path / "observable_universe_v1/current.json"
+    before = pointer.read_bytes()
+    reused = observation(3.0, at=T2, reference_id=first.source_evidence_refs[0])
+    with pytest.raises(ObservableUniverseError, match="reference_id cannot change"):
+        persist_successful_universe_attempt(
+            snapshot(cutoff=T2, obs=(reused,)), output_root=tmp_path, attempted_at=T2
+        )
+    assert pointer.read_bytes() == before
+
+
+@pytest.mark.parametrize("with_observation", (False, True))
+def test_optional_missing_dimension_becoming_required_opens_candidate(
+    with_observation: bool,
+) -> None:
+    optional = replace(member(), required_dimensions=("market_return",))
+    observations = (
+        ()
+        if not with_observation
+        else (
+            observation(
+                None,
+                dimension="consensus",
+                maturity=EvidenceMaturity.UNAVAILABLE,
+                unavailable_reason="no licensed source",
+            ),
+        )
+    )
+    observations = (observation(1.0),) + observations
+    prior = snapshot(members=(optional,), obs=observations)
+    current = snapshot(cutoff=T1, members=(member(),), obs=observations)
+    changes = compare_universe_snapshots(prior, current)
+    gap = next(item for item in changes if item.dimension_id == "consensus")
+    assert gap.state is ChangeState.NEWLY_MISSING
+    rule = CandidateRule(
+        "required-gap",
+        "consensus",
+        (ChangeState.NEWLY_MISSING,),
+        ResearchPriority.URGENT,
+        "resolve required evidence",
+    )
+    candidate = surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)[0]
+    assert "consensus" in planner_input(candidate).required_dimensions
+
+
+def test_transformation_timestamp_cannot_refresh_old_evidence() -> None:
+    prior = snapshot()
+    refreshed = replace(prior.observations[0], available_at=T2)
+    current = snapshot(cutoff=T2, obs=(refreshed,))
+    changes = compare_universe_snapshots(prior, current, stale_after=timedelta(days=1))
+    assert changes[0].state is ChangeState.STALE
+
+
 def test_valid_universe_is_deterministic_and_generic() -> None:
     first = snapshot()
     second = snapshot()

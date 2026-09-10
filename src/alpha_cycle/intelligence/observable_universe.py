@@ -17,7 +17,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from fractions import Fraction
@@ -465,8 +465,7 @@ class CandidateRule:
             raise ObservableUniverseError("candidate rule states must be unique and non-empty")
         if self.minimum_absolute_delta is not None:
             if isinstance(self.minimum_absolute_delta, bool) or (
-                not math.isfinite(self.minimum_absolute_delta)
-                or self.minimum_absolute_delta < 0
+                not math.isfinite(self.minimum_absolute_delta) or self.minimum_absolute_delta < 0
             ):
                 raise ObservableUniverseError(
                     "minimum_absolute_delta must be a finite non-negative number"
@@ -782,7 +781,25 @@ def compare_universe_snapshots(
         prior_unavailable = (
             set(prior_member.unavailable_dimensions) if prior_member is not None else set()
         )
-        for dimension_id in sorted(set(member.unavailable_dimensions) - prior_unavailable):
+        newly_required = set(member.required_dimensions) - (
+            set(prior_member.required_dimensions) if prior_member is not None else set()
+        )
+        promoted_gaps = newly_required & prior_unavailable & set(member.unavailable_dimensions)
+        changes = [
+            replace(
+                item,
+                state=ChangeState.NEWLY_MISSING,
+                reason="unavailable dimension became required",
+            )
+            if _identity(item.member_id) == normalized_member_id
+            and item.dimension_id in promoted_gaps
+            and item.state is not ChangeState.INCOMPARABLE
+            else item
+            for item in changes
+        ]
+        for dimension_id in sorted(
+            (set(member.unavailable_dimensions) - prior_unavailable) | promoted_gaps
+        ):
             slot = (normalized_member_id, dimension_id)
             if slot in prior_by_slot or slot in current_by_slot:
                 continue
@@ -799,7 +816,11 @@ def compare_universe_snapshots(
                     prior_value=None,
                     current_value=None,
                     delta=None,
-                    reason="dimension is newly declared unavailable",
+                    reason=(
+                        "unavailable dimension became required"
+                        if dimension_id in promoted_gaps
+                        else "dimension is newly declared unavailable"
+                    ),
                     prior_evidence_refs=(),
                     current_evidence_refs=(),
                     comparison_stale_after_microseconds=stale_after_microseconds,
@@ -1038,6 +1059,7 @@ def persist_successful_universe_attempt(
         identity_already_bound = os.path.lexists(identity_path)
         if identity_already_bound:
             _bind_universe_identity(root, snapshot.universe_id)
+        _validate_persisted_evidence_identities(root, snapshot)
         if prior_current is not None and prior_current.last_successful_snapshot_id is not None:
             assert prior_current.last_successful_manifest_id is not None
             prior_snapshot = _load_manifest_bound_snapshot(
@@ -1074,6 +1096,30 @@ def persist_successful_universe_attempt(
         if not identity_already_bound:
             _clear_pending_identity_binding(root)
         return snapshot_path
+
+
+def _validate_persisted_evidence_identities(
+    root: Path, snapshot: ObservableUniverseSnapshot
+) -> None:
+    """Evidence IDs remain canonical across all captures in a universe, even unselected ones."""
+    current_refs = {
+        ref.reference_id: ref.payload()
+        for observation in snapshot.observations
+        for ref in observation.evidence
+    }
+    for path in sorted((root / _SNAPSHOT_DIRECTORY).glob("*.json")):
+        previous = load_universe_snapshot(path)
+        if previous.universe_id != snapshot.universe_id:
+            continue
+        for observation in previous.observations:
+            for ref in observation.evidence:
+                if (
+                    ref.reference_id in current_refs
+                    and current_refs[ref.reference_id] != ref.payload()
+                ):
+                    raise ObservableUniverseError(
+                        "one evidence reference_id cannot change definition across stored snapshots"
+                    )
 
 
 def publish_failed_universe_attempt(
@@ -1378,8 +1424,10 @@ def _compare_observations(
             comparison_stale_after_microseconds=stale_after_microseconds,
         )
 
-    if prior is not None and current is not None and (
-        current.available_at < prior.available_at or current.observed_at < prior.observed_at
+    if (
+        prior is not None
+        and current is not None
+        and (current.available_at < prior.available_at or current.observed_at < prior.observed_at)
     ):
         return make(
             ChangeState.INCOMPARABLE,
@@ -1390,7 +1438,12 @@ def _compare_observations(
         current is not None
         and current.maturity is not EvidenceMaturity.UNAVAILABLE
         and stale_after is not None
-        and evaluated_at - current.available_at > stale_after
+        and evaluated_at
+        - min(
+            current.observed_at,
+            max(ref.available_at for ref in current.evidence),
+        )
+        > stale_after
     )
     current_upstream_was_knowable = (
         current is not None
