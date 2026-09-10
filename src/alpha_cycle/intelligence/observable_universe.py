@@ -875,10 +875,14 @@ def surface_research_candidates(
         for rule in rules:
             if rule.dimension_id != change.dimension_id or change.state not in rule.states:
                 continue
-            if rule.minimum_absolute_delta is not None and (
-                change.delta is None or abs(change.delta) < rule.minimum_absolute_delta
-            ):
-                continue
+            if rule.minimum_absolute_delta is not None:
+                if change.delta is None:
+                    continue
+                assert isinstance(change.prior_value, (int, float))
+                assert isinstance(change.current_value, (int, float))
+                exact_delta = Fraction(change.current_value) - Fraction(change.prior_value)
+                if abs(exact_delta) < Fraction(rule.minimum_absolute_delta):
+                    continue
             hits.setdefault(member.member_id, []).append((rule, change))
 
     candidates: list[ResearchCandidate] = []
@@ -1034,6 +1038,16 @@ def persist_successful_universe_attempt(
         identity_already_bound = os.path.lexists(identity_path)
         if identity_already_bound:
             _bind_universe_identity(root, snapshot.universe_id)
+        if prior_current is not None and prior_current.last_successful_snapshot_id is not None:
+            assert prior_current.last_successful_manifest_id is not None
+            prior_snapshot = _load_manifest_bound_snapshot(
+                root,
+                prior_current.last_successful_snapshot_id,
+                prior_current.last_successful_manifest_id,
+                label="last successful",
+            )
+            if snapshot.research_cutoff_at > prior_snapshot.research_cutoff_at:
+                compare_universe_snapshots(prior_snapshot, snapshot)
         _write_immutable(snapshot_path, snapshot_bytes)
         _write_immutable(
             root / _MANIFEST_DIRECTORY / f"{manifest_id}.json",
@@ -1364,6 +1378,14 @@ def _compare_observations(
             comparison_stale_after_microseconds=stale_after_microseconds,
         )
 
+    if prior is not None and current is not None and (
+        current.available_at < prior.available_at or current.observed_at < prior.observed_at
+    ):
+        return make(
+            ChangeState.INCOMPARABLE,
+            None,
+            "current observation chronology regresses the prior observation",
+        )
     current_is_stale = (
         current is not None
         and current.maturity is not EvidenceMaturity.UNAVAILABLE
@@ -1421,12 +1443,6 @@ def _compare_observations(
             return make(ChangeState.CHANGED, None, "unavailable evidence blocker changed")
         return make(ChangeState.UNCHANGED, None, "evidence remains explicitly unavailable")
     assert prior is not None and current is not None
-    if current.available_at < prior.available_at or current.observed_at < prior.observed_at:
-        return make(
-            ChangeState.INCOMPARABLE,
-            None,
-            "current observation chronology regresses the prior observation",
-        )
     if (current.available_at <= prior_cutoff_at or current_upstream_was_knowable) and (
         current.value != prior.value or type(current.value) is not type(prior.value)
     ):

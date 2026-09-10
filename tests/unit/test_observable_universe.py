@@ -153,6 +153,64 @@ def snapshot(
     )
 
 
+@pytest.mark.parametrize("after_failure", (False, True))
+def test_publication_rejects_redefined_prior_evidence_before_pointer_advance(
+    tmp_path: Path, after_failure: bool
+) -> None:
+    prior = snapshot()
+    persist_successful_universe_attempt(prior, output_root=tmp_path, attempted_at=T0)
+    if after_failure:
+        publish_failed_universe_attempt(
+            output_root=tmp_path, attempted_at=T1, failure_code="timeout"
+        )
+    pointer = tmp_path / "observable_universe_v1/current.json"
+    original_bytes = pointer.read_bytes()
+    redefined = observation(
+        2.0, at=T2, reference_id=prior.source_evidence_refs[0], authority="different authority"
+    )
+    current = snapshot(cutoff=T2, obs=(redefined,))
+    with pytest.raises(ObservableUniverseError, match="reference_id cannot change"):
+        persist_successful_universe_attempt(current, output_root=tmp_path, attempted_at=T2)
+    assert pointer.read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize("start,end", ((0.5, float(2**53)), (float(2**53), 0.5)))
+def test_threshold_matching_uses_exact_fractional_delta(start: float, end: float) -> None:
+    prior = snapshot(start)
+    current = snapshot(end, cutoff=T1)
+    changes = compare_universe_snapshots(prior, current)
+    rule = CandidateRule(
+        "boundary",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ELEVATED,
+        "large change",
+        minimum_absolute_delta=2**53,
+    )
+    assert surface_research_candidates(current, changes, (rule,), prior_snapshot=prior) == ()
+    lower = replace(rule, minimum_absolute_delta=2**53 - 1)
+    assert surface_research_candidates(current, changes, (lower,), prior_snapshot=prior)
+
+
+@pytest.mark.parametrize("field", ("observed_at", "available_at"))
+def test_stale_missing_record_is_incomparable(field: str) -> None:
+    prior = snapshot(cutoff=T1)
+    missing = observation(
+        None, at=T2, maturity=EvidenceMaturity.UNAVAILABLE, unavailable_reason="timeout"
+    )
+    if field == "available_at":
+        missing = replace(missing, observed_at=T0, available_at=T0)
+    else:
+        missing = replace(missing, observed_at=T0)
+    current = snapshot(
+        cutoff=T2,
+        obs=(missing,),
+        members=(member(available=(), unavailable=("market_return", "consensus")),),
+    )
+    changes = compare_universe_snapshots(prior, current)
+    assert changes[0].state is ChangeState.INCOMPARABLE
+
+
 def test_valid_universe_is_deterministic_and_generic() -> None:
     first = snapshot()
     second = snapshot()
@@ -858,12 +916,8 @@ def test_rule_policy_identity_preserves_exact_large_integer_thresholds() -> None
     prior = snapshot(0)
     current = snapshot(2**53, cutoff=T1, version="2")
     changes = compare_universe_snapshots(prior, current)
-    assert surface_research_candidates(
-        current, changes, (exact,), prior_snapshot=prior
-    )
-    assert not surface_research_candidates(
-        current, changes, (distinct,), prior_snapshot=prior
-    )
+    assert surface_research_candidates(current, changes, (exact,), prior_snapshot=prior)
+    assert not surface_research_candidates(current, changes, (distinct,), prior_snapshot=prior)
 
 
 @pytest.mark.parametrize("kind", (MemberKind.ASSET, MemberKind.DOMAIN))
