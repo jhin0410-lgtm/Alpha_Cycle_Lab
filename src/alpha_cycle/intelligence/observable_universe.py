@@ -1005,10 +1005,37 @@ def persist_successful_universe_attempt(
         )
     snapshot_bytes = _encoded(snapshot.payload())
     snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot.snapshot_id}.json"
+    with _exclusive_universe_write_lock(root):
+        _recover_interrupted_identity_binding(root)
+        return _persist_successful_universe_attempt_locked(
+            root, snapshot, attempted, snapshot_path, snapshot_bytes
+        )
+
+
+def _persist_successful_universe_attempt_locked(
+    root: Path,
+    snapshot: ObservableUniverseSnapshot,
+    attempted: datetime,
+    snapshot_path: Path,
+    snapshot_bytes: bytes,
+) -> Path:
+    prior_current = _load_current_universe_state_locked(root)
+    parent_manifest_id = (
+        prior_current.last_successful_manifest_id if prior_current is not None else None
+    )
+    if (
+        prior_current is not None
+        and prior_current.last_successful_snapshot_id == snapshot.snapshot_id
+    ):
+        prior_manifest = _load_json(
+            root / _MANIFEST_DIRECTORY / f"{parent_manifest_id}.json", "last successful manifest"
+        )
+        parent_manifest_id = _nullable_text(prior_manifest, "previous_successful_manifest_id")
     manifest_without_id = {
         "schema_version": SCHEMA_VERSION,
         "snapshot_id": snapshot.snapshot_id,
         "snapshot_bytes_sha256": _digest(snapshot_bytes),
+        "previous_successful_manifest_id": parent_manifest_id,
     }
     manifest_id = _sha(manifest_without_id)
     manifest = {**manifest_without_id, "manifest_id": manifest_id}
@@ -1031,71 +1058,69 @@ def persist_successful_universe_attempt(
         "last_successful_snapshot_id": snapshot.snapshot_id,
         "last_successful_manifest_id": manifest_id,
     }
-    with _exclusive_universe_write_lock(root):
-        _recover_interrupted_identity_binding(root)
-        _validate_pointer_advance(root, pointer_without_id)
-        prior_current = load_current_universe_state(root)
-        prior_pointer_path = root / _CURRENT_PATH
-        prior_pointer_bytes = (
-            prior_pointer_path.read_bytes() if os.path.lexists(prior_pointer_path) else None
+    _validate_pointer_advance(root, pointer_without_id)
+    prior_current = _load_current_universe_state_locked(root)
+    prior_pointer_path = root / _CURRENT_PATH
+    prior_pointer_bytes = (
+        prior_pointer_path.read_bytes() if os.path.lexists(prior_pointer_path) else None
+    )
+    if (
+        prior_current is not None
+        and prior_current.last_successful_cutoff_at is not None
+        and snapshot.research_cutoff_at < prior_current.last_successful_cutoff_at
+    ):
+        raise ObservableUniverseError(
+            "successful publication cannot regress the current research cutoff"
         )
-        if (
-            prior_current is not None
-            and prior_current.last_successful_cutoff_at is not None
-            and snapshot.research_cutoff_at < prior_current.last_successful_cutoff_at
-        ):
-            raise ObservableUniverseError(
-                "successful publication cannot regress the current research cutoff"
-            )
-        if (
-            prior_current is not None
-            and prior_current.last_successful_cutoff_at == snapshot.research_cutoff_at
-            and prior_current.last_successful_snapshot_id != snapshot.snapshot_id
-        ):
-            raise ObservableUniverseError(
-                "one research cutoff cannot identify conflicting universe snapshots"
-            )
-        identity_path = root / _IDENTITY_PATH
-        identity_already_bound = os.path.lexists(identity_path)
-        if identity_already_bound:
-            _bind_universe_identity(root, snapshot.universe_id)
-        _validate_persisted_evidence_identities(root, snapshot)
-        if prior_current is not None and prior_current.last_successful_snapshot_id is not None:
-            assert prior_current.last_successful_manifest_id is not None
-            prior_snapshot = _load_manifest_bound_snapshot(
-                root,
-                prior_current.last_successful_snapshot_id,
-                prior_current.last_successful_manifest_id,
-                label="last successful",
-            )
-            if snapshot.research_cutoff_at > prior_snapshot.research_cutoff_at:
-                compare_universe_snapshots(prior_snapshot, snapshot)
-        _write_immutable(snapshot_path, snapshot_bytes)
-        _write_immutable(
-            root / _MANIFEST_DIRECTORY / f"{manifest_id}.json",
-            _encoded(manifest),
+    if (
+        prior_current is not None
+        and prior_current.last_successful_cutoff_at == snapshot.research_cutoff_at
+        and prior_current.last_successful_snapshot_id != snapshot.snapshot_id
+    ):
+        raise ObservableUniverseError(
+            "one research cutoff cannot identify conflicting universe snapshots"
         )
-        try:
-            if not identity_already_bound:
-                _begin_universe_identity_binding(
-                    root,
-                    snapshot.universe_id,
-                    prior_pointer_bytes=prior_pointer_bytes,
-                )
-                _bind_universe_identity(root, snapshot.universe_id)
-            _publish_pointer(root, pointer_without_id, validate_advance=False)
-        except BaseException:
-            if not identity_already_bound:
-                _rollback_unclaimed_universe_identity(
-                    root,
-                    snapshot.universe_id,
-                    prior_pointer_bytes=prior_pointer_bytes,
-                )
-                _clear_pending_identity_binding(root)
-            raise
+    identity_path = root / _IDENTITY_PATH
+    identity_already_bound = os.path.lexists(identity_path)
+    if identity_already_bound:
+        _bind_universe_identity(root, snapshot.universe_id)
+    _validate_persisted_evidence_identities(root, snapshot)
+    if prior_current is not None and prior_current.last_successful_snapshot_id is not None:
+        assert prior_current.last_successful_manifest_id is not None
+        prior_snapshot = _load_manifest_bound_snapshot(
+            root,
+            prior_current.last_successful_snapshot_id,
+            prior_current.last_successful_manifest_id,
+            label="last successful",
+        )
+        if snapshot.research_cutoff_at > prior_snapshot.research_cutoff_at:
+            compare_universe_snapshots(prior_snapshot, snapshot)
+    _write_immutable(snapshot_path, snapshot_bytes)
+    _write_immutable(
+        root / _MANIFEST_DIRECTORY / f"{manifest_id}.json",
+        _encoded(manifest),
+    )
+    try:
         if not identity_already_bound:
+            _begin_universe_identity_binding(
+                root,
+                snapshot.universe_id,
+                prior_pointer_bytes=prior_pointer_bytes,
+            )
+            _bind_universe_identity(root, snapshot.universe_id)
+        _publish_pointer(root, pointer_without_id, validate_advance=False)
+    except BaseException:
+        if not identity_already_bound:
+            _rollback_unclaimed_universe_identity(
+                root,
+                snapshot.universe_id,
+                prior_pointer_bytes=prior_pointer_bytes,
+            )
             _clear_pending_identity_binding(root)
-        return snapshot_path
+        raise
+    if not identity_already_bound:
+        _clear_pending_identity_binding(root)
+    return snapshot_path
 
 
 def _validate_persisted_evidence_identities(
@@ -1139,7 +1164,7 @@ def publish_failed_universe_attempt(
     root = Path(output_root)
     with _exclusive_universe_write_lock(root):
         _recover_interrupted_identity_binding(root)
-        prior_current = load_current_universe_state(root)
+        prior_current = _load_current_universe_state_locked(root)
         pointer_without_id = {
             "schema_version": SCHEMA_VERSION,
             "status": AttemptStatus.FAILED.value,
@@ -1165,6 +1190,14 @@ def publish_failed_universe_attempt(
 
 
 def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState | None:
+    """Read one committed generation, recovering an interrupted first binding under lock."""
+    root = Path(output_root)
+    with _exclusive_universe_write_lock(root):
+        _recover_interrupted_identity_binding(root)
+        return _load_current_universe_state_locked(root)
+
+
+def _load_current_universe_state_locked(output_root: str | Path) -> CurrentUniverseState | None:
     root = Path(output_root)
     pointer_path = root / _CURRENT_PATH
     if not os.path.lexists(pointer_path):
@@ -1356,13 +1389,61 @@ def _load_manifest_bound_snapshot(
     *,
     label: str,
 ) -> ObservableUniverseSnapshot:
+    """Validate the selected success and its complete immutable manifest ancestry."""
+    selected: ObservableUniverseSnapshot | None = None
+    later: ObservableUniverseSnapshot | None = None
+    seen: set[str] = set()
+    references: dict[str, dict[str, object]] = {}
+    while True:
+        if manifest_id in seen:
+            raise ObservableUniverseError("successful manifest ancestry contains a cycle")
+        seen.add(manifest_id)
+        current = _load_single_manifest_bound_snapshot(root, snapshot_id, manifest_id, label=label)
+        if selected is None:
+            selected = current
+        if later is not None:
+            compare_universe_snapshots(current, later)
+        for observation in current.observations:
+            for ref in observation.evidence:
+                if references.setdefault(ref.reference_id, ref.payload()) != ref.payload():
+                    raise ObservableUniverseError(
+                        "one evidence reference_id cannot change across successful history"
+                    )
+        manifest = _load_json(root / _MANIFEST_DIRECTORY / f"{manifest_id}.json", label)
+        parent = _nullable_text(manifest, "previous_successful_manifest_id")
+        if parent is None:
+            return selected
+        _sha_text(parent, "previous_successful_manifest_id")
+        parent_path = root / _MANIFEST_DIRECTORY / f"{parent}.json"
+        _require_regular_file(parent_path, "historical manifest")
+        parent_payload = _load_json(parent_path, label)
+        snapshot_id = _required_text(parent_payload, "snapshot_id")
+        manifest_id = parent
+        later = current
+
+
+def _load_single_manifest_bound_snapshot(
+    root: Path,
+    snapshot_id: str,
+    manifest_id: str,
+    *,
+    label: str,
+) -> ObservableUniverseSnapshot:
+    _sha_text(snapshot_id, "snapshot_id")
+    _sha_text(manifest_id, "manifest_id")
     snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot_id}.json"
     manifest_path = root / _MANIFEST_DIRECTORY / f"{manifest_id}.json"
     _require_regular_file(manifest_path, f"{label} manifest")
     manifest = _load_json(manifest_path, f"{label} manifest")
     _exact(
         manifest,
-        {"schema_version", "snapshot_id", "snapshot_bytes_sha256", "manifest_id"},
+        {
+            "schema_version",
+            "snapshot_id",
+            "snapshot_bytes_sha256",
+            "manifest_id",
+            "previous_successful_manifest_id",
+        },
         f"{label} manifest",
     )
     manifest_without_id = dict(manifest)
@@ -1719,7 +1800,7 @@ def _publish_pointer(
 def _validate_pointer_advance(root: Path, without_id: dict[str, object]) -> None:
     if not os.path.lexists(root / _CURRENT_PATH):
         return
-    prior = load_current_universe_state(root)
+    prior = _load_current_universe_state_locked(root)
     assert prior is not None
     next_at = _datetime(cast(str, without_id["attempted_at"]), "attempted_at")
     if next_at < prior.attempted_at:

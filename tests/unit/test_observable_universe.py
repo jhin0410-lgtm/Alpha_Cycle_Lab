@@ -46,6 +46,155 @@ T2 = datetime(2026, 8, 3, tzinfo=UTC)
 T3 = datetime(2026, 8, 4, tzinfo=UTC)
 
 
+@pytest.mark.parametrize("after_failure", (False, True))
+@pytest.mark.parametrize("damage", ("snapshot_bytes", "missing_manifest", "missing_snapshot"))
+def test_entire_successful_history_is_manifest_bound(
+    tmp_path: Path,
+    after_failure: bool,
+    damage: str,
+) -> None:
+    pointers = []
+    for index, cutoff in enumerate((T0, T1, T2)):
+        persist_successful_universe_attempt(
+            snapshot(index, cutoff=cutoff), output_root=tmp_path, attempted_at=cutoff
+        )
+        pointers.append(json.loads((tmp_path / "observable_universe_v1/current.json").read_bytes()))
+    if after_failure:
+        publish_failed_universe_attempt(
+            output_root=tmp_path, attempted_at=T3, failure_code="offline"
+        )
+    # Damage an intermediate success, not just the immediately preceding watermark.
+    historical = pointers[1]
+    snapshot_path = tmp_path / f"observable_universe_v1/snapshots/{historical['snapshot_id']}.json"
+    manifest_path = tmp_path / f"observable_universe_v1/manifests/{historical['manifest_id']}.json"
+    if damage == "snapshot_bytes":
+        snapshot_path.write_bytes(snapshot_path.read_bytes() + b"\n")
+    elif damage == "missing_manifest":
+        manifest_path.unlink()
+    else:
+        snapshot_path.unlink()
+    pointer_path = tmp_path / "observable_universe_v1/current.json"
+    before = pointer_path.read_bytes()
+    with pytest.raises(ObservableUniverseError):
+        load_current_universe_state(tmp_path)
+    with pytest.raises(ObservableUniverseError):
+        persist_successful_universe_attempt(
+            snapshot(4, cutoff=T3), output_root=tmp_path, attempted_at=T3 + timedelta(days=1)
+        )
+    with pytest.raises(ObservableUniverseError):
+        publish_failed_universe_attempt(
+            output_root=tmp_path, attempted_at=T3 + timedelta(days=1), failure_code="offline"
+        )
+    assert pointer_path.read_bytes() == before
+
+
+def test_same_cutoff_retry_preserves_successful_manifest_ancestry(tmp_path: Path) -> None:
+    first, second = snapshot(), snapshot(2, cutoff=T1)
+    persist_successful_universe_attempt(first, output_root=tmp_path, attempted_at=T0)
+    prior = load_current_universe_state(tmp_path)
+    persist_successful_universe_attempt(second, output_root=tmp_path, attempted_at=T1)
+    selected = load_current_universe_state(tmp_path)
+    publish_failed_universe_attempt(output_root=tmp_path, attempted_at=T2, failure_code="offline")
+    persist_successful_universe_attempt(second, output_root=tmp_path, attempted_at=T3)
+    retried = load_current_universe_state(tmp_path)
+    assert prior is not None and selected is not None and retried is not None
+    assert retried.last_successful_manifest_id == selected.last_successful_manifest_id
+    manifest = json.loads(
+        (
+            tmp_path
+            / "observable_universe_v1/manifests"
+            / f"{retried.last_successful_manifest_id}.json"
+        ).read_bytes()
+    )
+    assert manifest["previous_successful_manifest_id"] == prior.last_successful_manifest_id
+
+
+@pytest.mark.parametrize("failure_first", (False, True))
+@pytest.mark.parametrize("abort", (False, True))
+def test_reader_cannot_observe_partial_first_identity_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_first: bool,
+    abort: bool,
+) -> None:
+    if failure_first:
+        publish_failed_universe_attempt(
+            output_root=tmp_path, attempted_at=T0, failure_code="offline"
+        )
+    bound, release, reading = threading.Event(), threading.Event(), threading.Event()
+    original_bind = observable_module._bind_universe_identity
+
+    def paused_bind(root: Path, universe_id: str) -> None:
+        original_bind(root, universe_id)
+        bound.set()
+        assert release.wait(5)
+        if abort:
+            raise RuntimeError("interrupted first publication")
+
+    def read() -> observable_module.CurrentUniverseState | None:
+        reading.set()
+        return load_current_universe_state(tmp_path)
+
+    monkeypatch.setattr(observable_module, "_bind_universe_identity", paused_bind)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        writer = executor.submit(
+            persist_successful_universe_attempt,
+            snapshot(cutoff=T1),
+            output_root=tmp_path,
+            attempted_at=T1,
+        )
+        assert bound.wait(5)
+        reader = executor.submit(read)
+        assert reading.wait(5)
+        try:
+            assert not reader.done()
+        finally:
+            release.set()
+        if abort:
+            with pytest.raises(RuntimeError, match="interrupted first publication"):
+                writer.result(timeout=5)
+        else:
+            writer.result(timeout=5)
+        result = reader.result(timeout=5)
+    if not abort:
+        assert result is not None and result.status is AttemptStatus.SUCCEEDED
+    elif failure_first:
+        assert result is not None and result.status is AttemptStatus.FAILED
+    else:
+        assert result is None
+
+
+@pytest.mark.parametrize("failure_first", (False, True))
+@pytest.mark.parametrize("installed_identity", (False, True))
+def test_reader_recovers_abandoned_first_publication(
+    tmp_path: Path,
+    failure_first: bool,
+    installed_identity: bool,
+) -> None:
+    if failure_first:
+        publish_failed_universe_attempt(
+            output_root=tmp_path, attempted_at=T0, failure_code="offline"
+        )
+    pointer_path = tmp_path / "observable_universe_v1/current.json"
+    previous = pointer_path.read_bytes() if failure_first else None
+    observable_module._begin_universe_identity_binding(
+        tmp_path, "krx-research", prior_pointer_bytes=previous
+    )
+    if installed_identity:
+        observable_module._bind_universe_identity(tmp_path, "krx-research")
+    state = load_current_universe_state(tmp_path)
+    if failure_first:
+        assert state is not None and state.status is AttemptStatus.FAILED
+        assert pointer_path.read_bytes() == previous
+    else:
+        assert state is None
+    assert not (tmp_path / "observable_universe_v1/universe.json").exists()
+    assert not (tmp_path / "observable_universe_v1/pending_identity.json").exists()
+    persist_successful_universe_attempt(snapshot(cutoff=T1), output_root=tmp_path, attempted_at=T1)
+    recovered = load_current_universe_state(tmp_path)
+    assert recovered is not None and recovered.status is AttemptStatus.SUCCEEDED
+
+
 def content_id(value: object) -> str:
     return hashlib.sha256(
         json.dumps(
