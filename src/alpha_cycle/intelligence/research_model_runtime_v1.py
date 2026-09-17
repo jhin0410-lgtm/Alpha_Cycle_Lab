@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 
@@ -55,6 +55,16 @@ class ResearchDriver:
     gap_kind: GapKind = GapKind.REQUIRED
     source_requirements: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        _text(self.driver_id, "driver_id")
+        _text(self.meaning, "meaning")
+        if not isinstance(self.required_maturity, EvidenceMaturity):
+            raise ValueError("driver maturity must be an EvidenceMaturity")
+        if self.required_maturity is EvidenceMaturity.UNAVAILABLE:
+            raise ValueError("driver cannot require unavailable evidence")
+        if not isinstance(self.gap_kind, GapKind):
+            raise ValueError("driver gap kind must be a GapKind")
+
     def payload(self) -> dict[str, object]:
         return {
             "driver_id": self.driver_id,
@@ -99,10 +109,25 @@ class EvidenceGap:
     evidence_refs: tuple[str, ...] = ()
     reason: str = ""
 
+    def __post_init__(self) -> None:
+        _text(self.gap_id, "gap_id")
+        _text(self.driver_id, "driver_id")
+        if not isinstance(self.kind, GapKind):
+            raise ValueError("gap kind must be a GapKind")
+        if not isinstance(self.required_maturity, EvidenceMaturity):
+            raise ValueError("gap maturity must be an EvidenceMaturity")
+        if self.available_maturity is not None and not isinstance(
+            self.available_maturity, EvidenceMaturity
+        ):
+            raise ValueError("available maturity must be an EvidenceMaturity")
+        if any(not ref.strip() for ref in self.evidence_refs):
+            raise ValueError("gap evidence references must be non-empty")
+
     @property
     def critical(self) -> bool:
         return self.kind is GapKind.REQUIRED and (
-            self.available_maturity is None
+            not self.evidence_refs
+            or self.available_maturity is None
             or _maturity_rank(self.available_maturity) < _maturity_rank(self.required_maturity)
         )
 
@@ -293,12 +318,21 @@ class ResearchPlan:
     counter_thesis_questions: tuple[str, ...]
     horizons: tuple[str, ...]
     status: str
+    candidate_lineage: PlannerCandidateInput | None = None
+
+    @property
+    def content_id(self) -> str:
+        return _sha(self.payload())
 
     @property
     def blocked(self) -> bool:
         return bool(self.blockers) or any(gap.critical for gap in self.gaps)
 
     def payload(self) -> dict[str, object]:
+        lineage = None
+        if self.candidate_lineage is not None:
+            lineage = asdict(self.candidate_lineage)
+            lineage["evaluated_at"] = self.candidate_lineage.evaluated_at.isoformat()
         return {
             "schema_version": SCHEMA_VERSION,
             "candidate_id": self.candidate_id,
@@ -316,6 +350,7 @@ class ResearchPlan:
             "counter_thesis_questions": list(self.counter_thesis_questions),
             "horizons": list(self.horizons),
             "status": self.status,
+            "candidate_lineage": lineage,
         }
 
 
@@ -327,8 +362,16 @@ def build_research_plan(
 ) -> ResearchPlan:
     """Build a fail-closed plan from an exact R1-A handoff and optional pack."""
     available_evidence = available_evidence or {}
+    if pack is not None and candidate.domain_id != pack.domain_id:
+        raise ValueError("candidate and knowledge pack domain mismatch")
     reasons = candidate.measured_reasons
     blockers = list(candidate.blocked_evidence)
+    blocked_dimensions = {item.dimension_id for item in blockers}
+    blockers.extend(
+        EvidenceBlocker(dimension, "required candidate evidence is missing")
+        for dimension in candidate.missing_dimensions
+        if dimension in candidate.required_dimensions and dimension not in blocked_dimensions
+    )
     questions: list[str] = []
     required: list[str] = []
     gaps: list[EvidenceGap] = []
@@ -345,13 +388,16 @@ def build_research_plan(
         counter.append("What alternate domain explanation could produce this observed change?")
         status = "cold_start_model_required"
     else:
+        if pack.lifecycle in {PackLifecycle.SUPERSEDED, PackLifecycle.DEPRECATED}:
+            blockers.append(EvidenceBlocker("research_model", "knowledge pack is retired"))
         horizons = pack.supported_horizons
         counter.extend(pack.counter_thesis_questions)
         gaps.extend(pack.unresolved_gaps)
         for driver in pack.drivers:
             if driver.gap_kind is GapKind.EXPLORATORY:
                 continue
-            required.append(driver.driver_id)
+            if driver.gap_kind is GapKind.REQUIRED:
+                required.append(driver.driver_id)
             observed = available_evidence.get(driver.driver_id)
             if observed is None:
                 gaps.append(
@@ -366,7 +412,11 @@ def build_research_plan(
                 )
             else:
                 maturity, refs = observed
-                if _maturity_rank(maturity) < _maturity_rank(driver.required_maturity):
+                if (
+                    not refs
+                    or not all(ref.strip() for ref in refs)
+                    or (_maturity_rank(maturity) < _maturity_rank(driver.required_maturity))
+                ):
                     gaps.append(
                         EvidenceGap(
                             f"{pack.domain_id}:{pack.version}:{driver.driver_id}",
@@ -374,9 +424,9 @@ def build_research_plan(
                             driver.gap_kind,
                             f"Upgrade evidence for {driver.meaning}",
                             driver.required_maturity,
-                            maturity,
-                            refs,
-                            reason="available evidence maturity is insufficient",
+                            maturity if refs and all(ref.strip() for ref in refs) else None,
+                            tuple(ref for ref in refs if ref.strip()),
+                            reason="evidence maturity or source references are insufficient",
                         )
                     )
         source_tasks.extend(
@@ -385,15 +435,18 @@ def build_research_plan(
         questions.extend(pack.counter_thesis_questions)
         status = (
             "blocked_missing_critical_evidence"
-            if any(gap.critical for gap in gaps)
+            if blockers or any(gap.critical for gap in gaps)
             else "ready_for_research"
         )
     usable_refs = set(candidate.evidence_refs)
     if pack is not None:
         for driver in pack.drivers:
             observed = available_evidence.get(driver.driver_id)
-            if observed is not None and _maturity_rank(observed[0]) >= _maturity_rank(
-                driver.required_maturity
+            if (
+                observed is not None
+                and observed[1]
+                and all(ref.strip() for ref in observed[1])
+                and _maturity_rank(observed[0]) >= _maturity_rank(driver.required_maturity)
             ):
                 usable_refs.update(observed[1])
     return ResearchPlan(
@@ -412,6 +465,7 @@ def build_research_plan(
         tuple(dict.fromkeys(counter)),
         tuple(horizons),
         status,
+        candidate,
     )
 
 
