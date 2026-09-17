@@ -94,7 +94,9 @@ def test_same_cutoff_retry_preserves_successful_manifest_ancestry(tmp_path: Path
     prior = load_current_universe_state(tmp_path)
     persist_successful_universe_attempt(second, output_root=tmp_path, attempted_at=T1)
     selected = load_current_universe_state(tmp_path)
-    publish_failed_universe_attempt(output_root=tmp_path, attempted_at=T2, failure_code="offline")
+    publish_failed_universe_attempt(
+        output_root=tmp_path, attempted_at=T2, failure_code="offline", research_cutoff_at=T1
+    )
     persist_successful_universe_attempt(second, output_root=tmp_path, attempted_at=T3)
     retried = load_current_universe_state(tmp_path)
     assert prior is not None and selected is not None and retried is not None
@@ -193,6 +195,178 @@ def test_reader_recovers_abandoned_first_publication(
     persist_successful_universe_attempt(snapshot(cutoff=T1), output_root=tmp_path, attempted_at=T1)
     recovered = load_current_universe_state(tmp_path)
     assert recovered is not None and recovered.status is AttemptStatus.SUCCEEDED
+
+
+@pytest.mark.parametrize("prior_success", (False, True))
+def test_failed_target_cutoff_blocks_older_success_and_failed_retries(
+    tmp_path: Path,
+    prior_success: bool,
+) -> None:
+    if prior_success:
+        persist_successful_universe_attempt(snapshot(), output_root=tmp_path, attempted_at=T0)
+    publish_failed_universe_attempt(
+        output_root=tmp_path,
+        attempted_at=T2,
+        research_cutoff_at=T2,
+        failure_code="provider_offline",
+    )
+    failed = load_current_universe_state(tmp_path)
+    assert failed is not None and failed.research_cutoff_at == T2 and not failed.ready
+    with pytest.raises(ObservableUniverseError, match="regress.*research cutoff"):
+        persist_successful_universe_attempt(
+            snapshot(cutoff=T1), output_root=tmp_path, attempted_at=T3
+        )
+    with pytest.raises(ObservableUniverseError, match="regress.*research cutoff"):
+        publish_failed_universe_attempt(
+            output_root=tmp_path, attempted_at=T3, research_cutoff_at=T1, failure_code="old_retry"
+        )
+    assert load_current_universe_state(tmp_path) == failed
+    persist_successful_universe_attempt(snapshot(cutoff=T2), output_root=tmp_path, attempted_at=T3)
+    current = load_current_universe_state(tmp_path)
+    assert current is not None and current.ready
+
+
+def test_failed_target_cutoff_cannot_be_in_future(tmp_path: Path) -> None:
+    with pytest.raises(ObservableUniverseError, match="cutoff cannot follow"):
+        publish_failed_universe_attempt(
+            output_root=tmp_path, attempted_at=T0, research_cutoff_at=T1, failure_code="future"
+        )
+
+
+@pytest.mark.parametrize("start,end", ((0.5, float(2**53)), (float(2**53), 0.5)))
+def test_nonrepresentable_delta_retains_exact_ratio(start: float, end: float) -> None:
+    from fractions import Fraction
+
+    prior, current = snapshot(start), snapshot(end, cutoff=T1)
+    (change,) = compare_universe_snapshots(prior, current)
+    assert change.delta is None
+    assert change.exact_delta_numerator is not None and change.exact_delta_denominator is not None
+    assert Fraction(change.exact_delta_numerator, change.exact_delta_denominator) == (
+        Fraction(end) - Fraction(start)
+    )
+    assert "18014398509481983/2" in change.reason
+    rule = CandidateRule(
+        "exact",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ELEVATED,
+        "exact move",
+        minimum_absolute_delta=2**53 - 1,
+    )
+    assert surface_research_candidates(current, (change,), (rule,), prior_snapshot=prior)
+    assert not surface_research_candidates(
+        current, (change,), (replace(rule, minimum_absolute_delta=2**53),), prior_snapshot=prior
+    )
+
+
+@pytest.mark.parametrize("start,end", ((1, 3), ("weak", "strong"), (False, True)))
+def test_stale_observations_retain_comparable_value_changes(start: object, end: object) -> None:
+    prior = snapshot(obs=(observation(start),))
+    current = snapshot(cutoff=T3, obs=(observation(end, at=T1),))
+    window = timedelta(days=1)
+    (change,) = compare_universe_snapshots(prior, current, stale_after=window)
+    assert change.state is ChangeState.CHANGED and change.stale
+    assert change.prior_value == start and change.current_value == end
+    if type(start) is int:
+        assert change.delta == 2
+    for state in (ChangeState.CHANGED, ChangeState.STALE):
+        rule = CandidateRule(
+            "stale-changed",
+            "market_return",
+            (state,),
+            ResearchPriority.ELEVATED,
+            "measure and refresh",
+        )
+        (candidate,) = surface_research_candidates(
+            current, (change,), (rule,), prior_snapshot=prior, stale_after=window
+        )
+        assert (
+            EvidenceBlocker("market_return", "current evidence is stale")
+            in candidate.blocked_evidence
+        )
+        assert "staleness" in candidate.measured_reasons[0]
+
+
+@pytest.mark.parametrize("explicit_observation", (False, True))
+def test_removing_or_relaxing_required_gap_emits_scope_lifecycle(
+    explicit_observation: bool,
+) -> None:
+    gap = observation(
+        None,
+        dimension="consensus",
+        maturity=EvidenceMaturity.UNAVAILABLE,
+        unavailable_reason="no certified consensus",
+    )
+    prior = snapshot(obs=(observation(1), gap) if explicit_observation else (observation(1),))
+    for removed in (False, True):
+        current_member = replace(
+            member(),
+            required_dimensions=("market_return",),
+            unavailable_dimensions=() if removed else ("consensus",),
+        )
+        current = snapshot(cutoff=T1, members=(current_member,), obs=(observation(2, at=T1),))
+        changes = compare_universe_snapshots(prior, current)
+        change = next(item for item in changes if item.dimension_id == "consensus")
+        assert change.state is ChangeState.CHANGED
+        assert ("removed from research scope" if removed else "became optional") in change.reason
+        rule = CandidateRule(
+            "scope",
+            "consensus",
+            (ChangeState.CHANGED,),
+            ResearchPriority.ELEVATED,
+            "review model scope",
+        )
+        assert surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)
+
+
+def test_membership_source_lineage_survives_replay_and_planner_handoff(tmp_path: Path) -> None:
+    ref = evidence(
+        "membership-discovery",
+        at=T1,
+        maturity=EvidenceMaturity.CITED_CONTEXT,
+        authority="cited source for universe inclusion; no investment authority",
+    )
+    added = UniverseMember("NEW", MemberKind.DOMAIN, "cold_start", membership_evidence=(ref,))
+    prior = snapshot()
+    current = replace(
+        snapshot(cutoff=T1),
+        members=(member(), added),
+        source_evidence_refs=("market-000660-20260802", ref.reference_id),
+    )
+    persist_successful_universe_attempt(prior, output_root=tmp_path, attempted_at=T0)
+    persist_successful_universe_attempt(current, output_root=tmp_path, attempted_at=T1)
+    replay = load_current_universe_state(tmp_path)
+    assert replay is not None and replay.snapshot == current
+    changes = compare_universe_snapshots(prior, current)
+    addition = next(item for item in changes if item.member_id == "NEW")
+    assert addition.current_evidence_refs == (ref.reference_id,)
+    rule = CandidateRule(
+        "discovery",
+        "__membership__",
+        (ChangeState.NEWLY_AVAILABLE,),
+        ResearchPriority.ELEVATED,
+        "research newly included domain",
+    )
+    (candidate,) = surface_research_candidates(current, changes, (rule,), prior_snapshot=prior)
+    assert planner_input(candidate).evidence_refs == (ref.reference_id,)
+    with pytest.raises(ObservableUniverseError, match="future membership evidence"):
+        replace(
+            current,
+            members=(
+                member(),
+                replace(added, membership_evidence=(replace(ref, available_at=T2),)),
+            ),
+        )
+    conflicting = replace(
+        current,
+        research_cutoff_at=T2,
+        members=(
+            member(),
+            replace(added, membership_evidence=(replace(ref, semantic_authority="redefined"),)),
+        ),
+    )
+    with pytest.raises(ObservableUniverseError, match="reference_id cannot change"):
+        persist_successful_universe_attempt(conflicting, output_root=tmp_path, attempted_at=T2)
 
 
 def content_id(value: object) -> str:
@@ -1809,7 +1983,9 @@ def test_removed_dimension_does_not_emit_a_false_missing_change() -> None:
         research_model_status=ResearchModelStatus.DRAFT,
     )
     current = snapshot(cutoff=T1, version="2", members=(current_member,), obs=())
-    assert compare_universe_snapshots(prior, current) == ()
+    (removal,) = compare_universe_snapshots(prior, current)
+    assert removal.state is ChangeState.CHANGED
+    assert "removed from research scope" in removal.reason
 
 
 def test_negative_staleness_window_is_rejected() -> None:
@@ -2051,6 +2227,7 @@ def test_same_cutoff_rejects_conflicting_snapshot_but_allows_idempotent_replay(
             output_root=tmp_path,
             attempted_at=T1,
             failure_code="provider_timeout",
+            research_cutoff_at=T0,
         )
     attempted_at = T2 if after_failed_attempt else T1
     conflicting = snapshot(2.0, version="conflicting-same-cutoff")
@@ -2190,7 +2367,7 @@ def test_replay_rejects_attempt_that_predates_selected_snapshot_cutoff(
         encoding="utf-8",
     )
 
-    with pytest.raises(ObservableUniverseError, match="predates.*research cutoff"):
+    with pytest.raises(ObservableUniverseError, match="research cutoff.*attempt time"):
         load_current_universe_state(tmp_path)
 
 
@@ -2221,7 +2398,7 @@ def test_replay_rejects_failed_attempt_that_predates_success_watermark(
         encoding="utf-8",
     )
 
-    with pytest.raises(ObservableUniverseError, match="predates.*successful cutoff"):
+    with pytest.raises(ObservableUniverseError, match="research cutoff.*attempt time"):
         load_current_universe_state(tmp_path)
 
 

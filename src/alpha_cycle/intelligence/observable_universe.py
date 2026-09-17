@@ -94,6 +94,7 @@ class UniverseMember:
     available_dimensions: tuple[str, ...] = ()
     unavailable_dimensions: tuple[str, ...] = ()
     research_model_status: ResearchModelStatus = ResearchModelStatus.ABSENT
+    membership_evidence: tuple[EvidenceReference, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "aliases", tuple(sorted(self.aliases, key=_identity)))
@@ -104,6 +105,14 @@ class UniverseMember:
         )
         _text(self.member_id, "member_id")
         _optional_text(self.domain_id, "domain_id")
+        object.__setattr__(
+            self,
+            "membership_evidence",
+            tuple(sorted(self.membership_evidence, key=lambda ref: ref.reference_id)),
+        )
+        _unique_text(
+            tuple(ref.reference_id for ref in self.membership_evidence), "membership_evidence"
+        )
         _unique_text(self.aliases, "aliases", normalized=True)
         _unique_text(self.required_dimensions, "required_dimensions")
         _unique_text(self.available_dimensions, "available_dimensions")
@@ -136,6 +145,7 @@ class UniverseMember:
             "available_dimensions": list(self.available_dimensions),
             "unavailable_dimensions": list(self.unavailable_dimensions),
             "research_model_status": self.research_model_status.value,
+            "membership_evidence": [ref.payload() for ref in self.membership_evidence],
         }
 
 
@@ -338,24 +348,25 @@ class ObservableUniverseSnapshot:
                 raise ObservableUniverseError(
                     "every declared available dimension requires an available observation"
                 )
-        declared_refs = {
-            evidence.reference_id
-            for observation in self.observations
-            for evidence in observation.evidence
-        }
+        all_evidence = tuple(
+            ref for observation in self.observations for ref in observation.evidence
+        )
+        all_evidence += tuple(ref for member in self.members for ref in member.membership_evidence)
+        if any(ref.available_at > self.research_cutoff_at for ref in all_evidence):
+            raise ObservableUniverseError("future membership evidence exceeds the research cutoff")
+        declared_refs = {ref.reference_id for ref in all_evidence}
         if not declared_refs <= set(self.source_evidence_refs):
             raise ObservableUniverseError(
                 "snapshot source_evidence_refs must include every observation reference"
             )
         canonical_refs: dict[str, dict[str, object]] = {}
-        for observation in self.observations:
-            for evidence in observation.evidence:
-                payload = evidence.payload()
-                prior_payload = canonical_refs.setdefault(evidence.reference_id, payload)
-                if prior_payload != payload:
-                    raise ObservableUniverseError(
-                        "one evidence reference_id cannot have conflicting definitions"
-                    )
+        for evidence in all_evidence:
+            payload = evidence.payload()
+            prior_payload = canonical_refs.setdefault(evidence.reference_id, payload)
+            if prior_payload != payload:
+                raise ObservableUniverseError(
+                    "one evidence reference_id cannot have conflicting definitions"
+                )
 
     @property
     def snapshot_id(self) -> str:
@@ -398,6 +409,9 @@ class ObservationChange:
     current_evidence_refs: tuple[str, ...]
     comparison_stale_after_microseconds: int | None
     causal_claim: bool = False
+    stale: bool = False
+    exact_delta_numerator: int | None = None
+    exact_delta_denominator: int | None = None
 
     def __post_init__(self) -> None:
         _sha_text(self.prior_snapshot_id, "prior_snapshot_id")
@@ -415,6 +429,19 @@ class ObservationChange:
             raise ObservableUniverseError("comparison staleness policy cannot be negative")
         if self.causal_claim:
             raise ObservableUniverseError("change detection cannot make a causal claim")
+        if type(self.stale) is not bool:
+            raise ObservableUniverseError("stale must be a boolean")
+        if (self.exact_delta_numerator is None) != (self.exact_delta_denominator is None):
+            raise ObservableUniverseError("exact delta requires numerator and denominator together")
+        if self.exact_delta_numerator is not None:
+            numerator, denominator = self.exact_delta_numerator, self.exact_delta_denominator
+            if type(numerator) is not int or type(denominator) is not int or denominator <= 0:
+                raise ObservableUniverseError("exact delta requires an integer ratio")
+            ratio = Fraction(numerator, denominator)
+            if (ratio.numerator, ratio.denominator) != (numerator, denominator):
+                raise ObservableUniverseError("exact delta ratio must be canonical")
+            if self.delta is not None and Fraction(self.delta) != ratio:
+                raise ObservableUniverseError("scalar delta must equal its exact ratio")
 
     @property
     def change_id(self) -> str:
@@ -437,6 +464,9 @@ class ObservationChange:
             "prior_value": self.prior_value,
             "current_value": self.current_value,
             "delta": self.delta,
+            "exact_delta_numerator": self.exact_delta_numerator,
+            "exact_delta_denominator": self.exact_delta_denominator,
+            "stale": self.stale,
             "reason": self.reason,
             "prior_evidence_refs": list(self.prior_evidence_refs),
             "current_evidence_refs": list(self.current_evidence_refs),
@@ -622,10 +652,17 @@ class CurrentUniverseState:
     last_successful_cutoff_at: datetime | None
     last_successful_snapshot_id: str | None
     last_successful_manifest_id: str | None
+    research_cutoff_at: datetime
 
     @property
     def ready(self) -> bool:
         return self.status is AttemptStatus.SUCCEEDED and self.snapshot is not None
+
+
+def _snapshot_evidence(snapshot: ObservableUniverseSnapshot) -> tuple[EvidenceReference, ...]:
+    return tuple(
+        ref for observation in snapshot.observations for ref in observation.evidence
+    ) + tuple(ref for member in snapshot.members for ref in member.membership_evidence)
 
 
 def compare_universe_snapshots(
@@ -646,14 +683,10 @@ def compare_universe_snapshots(
         None if stale_after is None else stale_after // timedelta(microseconds=1)
     )
     prior_evidence = {
-        evidence.reference_id: evidence.payload()
-        for observation in prior.observations
-        for evidence in observation.evidence
+        evidence.reference_id: evidence.payload() for evidence in _snapshot_evidence(prior)
     }
     current_evidence = {
-        evidence.reference_id: evidence.payload()
-        for observation in current.observations
-        for evidence in observation.evidence
+        evidence.reference_id: evidence.payload() for evidence in _snapshot_evidence(current)
     }
     if any(
         prior_evidence[reference_id] != current_evidence[reference_id]
@@ -726,7 +759,7 @@ def compare_universe_snapshots(
                 delta=None,
                 reason="member was added to the observable universe",
                 prior_evidence_refs=(),
-                current_evidence_refs=(),
+                current_evidence_refs=tuple(ref.reference_id for ref in added.membership_evidence),
                 comparison_stale_after_microseconds=stale_after_microseconds,
             )
         )
@@ -746,7 +779,7 @@ def compare_universe_snapshots(
                 current_value=None,
                 delta=None,
                 reason="member was removed from the observable universe",
-                prior_evidence_refs=(),
+                prior_evidence_refs=tuple(ref.reference_id for ref in removed.membership_evidence),
                 current_evidence_refs=(),
                 comparison_stale_after_microseconds=stale_after_microseconds,
             )
@@ -754,7 +787,11 @@ def compare_universe_snapshots(
     for normalized_member_id in sorted(set(prior_members) & set(current_members)):
         old = prior_members[normalized_member_id]
         new = current_members[normalized_member_id]
-        if (old.kind, old.domain_id) == (new.kind, new.domain_id):
+        if (old.kind, old.domain_id, old.membership_evidence) == (
+            new.kind,
+            new.domain_id,
+            new.membership_evidence,
+        ):
             continue
         changes.append(
             ObservationChange(
@@ -769,15 +806,99 @@ def compare_universe_snapshots(
                 prior_value=f"{old.kind.value}:{old.domain_id or ''}",
                 current_value=f"{new.kind.value}:{new.domain_id or ''}",
                 delta=None,
-                reason="member research kind or domain classification changed",
-                prior_evidence_refs=(),
-                current_evidence_refs=(),
+                reason="member kind, domain classification, or membership evidence changed",
+                prior_evidence_refs=tuple(ref.reference_id for ref in old.membership_evidence),
+                current_evidence_refs=tuple(ref.reference_id for ref in new.membership_evidence),
                 comparison_stale_after_microseconds=stale_after_microseconds,
             )
         )
     for member in current.members:
         normalized_member_id = _identity(member.member_id)
         prior_member = prior_members.get(normalized_member_id)
+        if prior_member is not None:
+            changed_requirements = (
+                set(prior_member.required_dimensions) ^ set(member.required_dimensions)
+            ) & (set(member.available_dimensions) | set(member.unavailable_dimensions))
+            changed_requirements &= set(prior_member.available_dimensions) | set(
+                prior_member.unavailable_dimensions
+            )
+            changed_requirements -= (
+                set(member.required_dimensions) - set(prior_member.required_dimensions)
+            ) & set(member.unavailable_dimensions)
+            for dimension in sorted(changed_requirements):
+                reason = "dimension became " + (
+                    "required" if dimension in member.required_dimensions else "optional"
+                )
+                matching = [
+                    item
+                    for item in changes
+                    if _identity(item.member_id) == normalized_member_id
+                    and item.dimension_id == dimension
+                ]
+                if matching:
+                    changes = [
+                        replace(
+                            item,
+                            state=ChangeState.CHANGED
+                            if item.state is ChangeState.UNCHANGED
+                            else item.state,
+                            reason=item.reason + "; " + reason,
+                        )
+                        if item in matching
+                        else item
+                        for item in changes
+                    ]
+                else:
+                    changes.append(
+                        ObservationChange(
+                            prior.snapshot_id,
+                            current.snapshot_id,
+                            member.member_id,
+                            dimension,
+                            ChangeState.CHANGED,
+                            current.research_cutoff_at,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            reason,
+                            (),
+                            (),
+                            stale_after_microseconds,
+                        )
+                    )
+            removed_dimensions = (
+                set(prior_member.available_dimensions) | set(prior_member.unavailable_dimensions)
+            ) - (set(member.available_dimensions) | set(member.unavailable_dimensions))
+            for dimension in sorted(removed_dimensions):
+                old_observation = prior_by_slot.get((normalized_member_id, dimension))
+                changes.append(
+                    ObservationChange(
+                        prior.snapshot_id,
+                        current.snapshot_id,
+                        member.member_id,
+                        dimension,
+                        ChangeState.CHANGED,
+                        current.research_cutoff_at,
+                        old_observation.observation_id if old_observation else None,
+                        None,
+                        old_observation.value if old_observation else None,
+                        None,
+                        None,
+                        "tracked dimension removed from research scope"
+                        + (
+                            " (previously required)"
+                            if dimension in prior_member.required_dimensions
+                            else ""
+                        ),
+                        tuple(ref.reference_id for ref in old_observation.evidence)
+                        if old_observation
+                        else (),
+                        (),
+                        stale_after_microseconds,
+                    )
+                )
         prior_unavailable = (
             set(prior_member.unavailable_dimensions) if prior_member is not None else set()
         )
@@ -875,7 +996,12 @@ def surface_research_candidates(
         current_observation = current_observations_by_slot.get(
             (normalized_member_id, change.dimension_id)
         )
-        if change.current_observation_id is None:
+        if change.dimension_id == _MEMBERSHIP_DIMENSION:
+            if change.current_evidence_refs != tuple(
+                ref.reference_id for ref in member.membership_evidence
+            ):
+                raise ObservableUniverseError("membership change evidence lineage mismatch")
+        elif change.current_observation_id is None:
             if current_observation is not None or change.current_evidence_refs:
                 raise ObservableUniverseError(
                     "candidate change current lineage does not match its observation slot"
@@ -894,10 +1020,12 @@ def surface_research_candidates(
                 "candidate change evidence does not bind to its current observation"
             )
         for rule in rules:
-            if rule.dimension_id != change.dimension_id or change.state not in rule.states:
+            if rule.dimension_id != change.dimension_id or not (
+                change.state in rule.states or (change.stale and ChangeState.STALE in rule.states)
+            ):
                 continue
             if rule.minimum_absolute_delta is not None:
-                if change.delta is None:
+                if change.exact_delta_numerator is None:
                     continue
                 assert isinstance(change.prior_value, (int, float))
                 assert isinstance(change.current_value, (int, float))
@@ -934,6 +1062,22 @@ def surface_research_candidates(
                 for item in observations_by_member.get(member_id, [])
                 if item.maturity is EvidenceMaturity.UNAVAILABLE
                 and item.unavailable_reason is not None
+            )
+        )
+        blocked = tuple(
+            sorted(
+                set(blocked)
+                | {
+                    EvidenceBlocker(change.dimension_id, "current evidence is stale")
+                    for _, change in selected
+                    if change.stale
+                }
+                | {
+                    EvidenceBlocker(_MEMBERSHIP_DIMENSION, "membership source evidence unavailable")
+                    for _, change in selected
+                    if change.dimension_id == _MEMBERSHIP_DIMENSION
+                    and not member.membership_evidence
+                }
             )
         )
         candidates.append(
@@ -1057,6 +1201,7 @@ def _persist_successful_universe_attempt_locked(
         "last_successful_cutoff_at": _utc(snapshot.research_cutoff_at).isoformat(),
         "last_successful_snapshot_id": snapshot.snapshot_id,
         "last_successful_manifest_id": manifest_id,
+        "research_cutoff_at": _utc(snapshot.research_cutoff_at).isoformat(),
     }
     _validate_pointer_advance(root, pointer_without_id)
     prior_current = _load_current_universe_state_locked(root)
@@ -1127,38 +1272,38 @@ def _validate_persisted_evidence_identities(
     root: Path, snapshot: ObservableUniverseSnapshot
 ) -> None:
     """Evidence IDs remain canonical across all captures in a universe, even unselected ones."""
-    current_refs = {
-        ref.reference_id: ref.payload()
-        for observation in snapshot.observations
-        for ref in observation.evidence
-    }
+    current_refs = {ref.reference_id: ref.payload() for ref in _snapshot_evidence(snapshot)}
     for path in sorted((root / _SNAPSHOT_DIRECTORY).glob("*.json")):
         previous = load_universe_snapshot(path)
         if previous.universe_id != snapshot.universe_id:
             continue
-        for observation in previous.observations:
-            for ref in observation.evidence:
-                if (
-                    ref.reference_id in current_refs
-                    and current_refs[ref.reference_id] != ref.payload()
-                ):
-                    raise ObservableUniverseError(
-                        "one evidence reference_id cannot change definition across stored snapshots"
-                    )
+        for ref in _snapshot_evidence(previous):
+            if ref.reference_id in current_refs and current_refs[ref.reference_id] != ref.payload():
+                raise ObservableUniverseError(
+                    "one evidence reference_id cannot change definition across stored snapshots"
+                )
 
 
 def publish_failed_universe_attempt(
-    *, output_root: str | Path, attempted_at: datetime, failure_code: str
+    *,
+    output_root: str | Path,
+    attempted_at: datetime,
+    failure_code: str,
+    research_cutoff_at: datetime | None = None,
 ) -> Path:
-    """Publish a failed latest attempt so stale success cannot masquerade as current."""
+    """Record the failed target cutoff; omission conservatively uses the attempt time."""
 
     _text(failure_code, "failure_code")
     attempted = _utc(attempted_at)
+    cutoff = _utc(research_cutoff_at) if research_cutoff_at is not None else attempted
+    if cutoff > attempted:
+        raise ObservableUniverseError("failed research cutoff cannot follow its attempt time")
     attempt_id = _sha(
         {
             "status": AttemptStatus.FAILED.value,
             "attempted_at": attempted.isoformat(),
             "failure_code": failure_code,
+            "research_cutoff_at": cutoff.isoformat(),
         }
     )
     root = Path(output_root)
@@ -1173,6 +1318,7 @@ def publish_failed_universe_attempt(
             "snapshot_id": None,
             "manifest_id": None,
             "failure_code": failure_code,
+            "research_cutoff_at": cutoff.isoformat(),
             "last_successful_cutoff_at": (
                 _utc(prior_current.last_successful_cutoff_at).isoformat()
                 if prior_current is not None and prior_current.last_successful_cutoff_at is not None
@@ -1217,6 +1363,7 @@ def _load_current_universe_state_locked(output_root: str | Path) -> CurrentUnive
         "last_successful_snapshot_id",
         "last_successful_manifest_id",
         "pointer_id",
+        "research_cutoff_at",
     }
     _exact(pointer, expected, "current pointer")
     pointer_id = _required_text(pointer, "pointer_id")
@@ -1228,6 +1375,9 @@ def _load_current_universe_state_locked(output_root: str | Path) -> CurrentUnive
         raise ObservableUniverseError("unsupported current pointer schema")
     status = _enum(AttemptStatus, pointer, "status")
     attempted_at = _datetime(_required_text(pointer, "attempted_at"), "attempted_at")
+    research_cutoff = _datetime(_required_text(pointer, "research_cutoff_at"), "research_cutoff_at")
+    if research_cutoff > attempted_at:
+        raise ObservableUniverseError("research cutoff cannot follow its attempt time")
     attempt_id = _required_text(pointer, "attempt_id")
     failure_code = _nullable_text(pointer, "failure_code")
     last_cutoff_text = _nullable_text(pointer, "last_successful_cutoff_at")
@@ -1268,6 +1418,7 @@ def _load_current_universe_state_locked(output_root: str | Path) -> CurrentUnive
                 "status": status.value,
                 "attempted_at": attempted_at.isoformat(),
                 "failure_code": failure_code,
+                "research_cutoff_at": research_cutoff.isoformat(),
             }
         )
         if attempt_id != expected_attempt:
@@ -1277,6 +1428,10 @@ def _load_current_universe_state_locked(output_root: str | Path) -> CurrentUnive
             and last_snapshot_id is not None
             and last_manifest_id is not None
         ):
+            if research_cutoff < last_cutoff:
+                raise ObservableUniverseError(
+                    "failed research cutoff predates its successful cutoff"
+                )
             if attempted_at < last_cutoff:
                 raise ObservableUniverseError("failed attempt predates its last successful cutoff")
             last_snapshot = _load_manifest_bound_snapshot(
@@ -1302,6 +1457,7 @@ def _load_current_universe_state_locked(output_root: str | Path) -> CurrentUnive
             last_cutoff,
             last_snapshot_id,
             last_manifest_id,
+            research_cutoff,
         )
 
     if failure_code is not None:
@@ -1309,6 +1465,8 @@ def _load_current_universe_state_locked(output_root: str | Path) -> CurrentUnive
     snapshot_id = _required_text(pointer, "snapshot_id")
     manifest_id = _required_text(pointer, "manifest_id")
     snapshot = _load_manifest_bound_snapshot(root, snapshot_id, manifest_id, label="selected")
+    if research_cutoff != snapshot.research_cutoff_at:
+        raise ObservableUniverseError("successful target cutoff must match its snapshot")
     if (
         last_cutoff != snapshot.research_cutoff_at
         or last_snapshot_id != snapshot.snapshot_id
@@ -1345,6 +1503,7 @@ def _load_current_universe_state_locked(output_root: str | Path) -> CurrentUnive
         last_cutoff,
         last_snapshot_id,
         last_manifest_id,
+        research_cutoff,
     )
 
 
@@ -1403,12 +1562,11 @@ def _load_manifest_bound_snapshot(
             selected = current
         if later is not None:
             compare_universe_snapshots(current, later)
-        for observation in current.observations:
-            for ref in observation.evidence:
-                if references.setdefault(ref.reference_id, ref.payload()) != ref.payload():
-                    raise ObservableUniverseError(
-                        "one evidence reference_id cannot change across successful history"
-                    )
+        for ref in _snapshot_evidence(current):
+            if references.setdefault(ref.reference_id, ref.payload()) != ref.payload():
+                raise ObservableUniverseError(
+                    "one evidence reference_id cannot change across successful history"
+                )
         manifest = _load_json(root / _MANIFEST_DIRECTORY / f"{manifest_id}.json", label)
         parent = _nullable_text(manifest, "previous_successful_manifest_id")
         if parent is None:
@@ -1486,7 +1644,14 @@ def _compare_observations(
     prior_refs = tuple(sorted(item.reference_id for item in prior.evidence)) if prior else ()
     current_refs = tuple(sorted(item.reference_id for item in current.evidence)) if current else ()
 
+    current_is_stale = False
+    exact_delta: Fraction | None = None
+
     def make(state: ChangeState, delta: float | int | None, reason: str) -> ObservationChange:
+        if current_is_stale:
+            reason += "; current evidence exceeds the configured staleness window"
+            if state is ChangeState.UNCHANGED:
+                state = ChangeState.STALE
         return ObservationChange(
             prior_snapshot_id=prior_snapshot_id,
             current_snapshot_id=current_snapshot_id,
@@ -1503,6 +1668,9 @@ def _compare_observations(
             prior_evidence_refs=prior_refs,
             current_evidence_refs=current_refs,
             comparison_stale_after_microseconds=stale_after_microseconds,
+            stale=current_is_stale,
+            exact_delta_numerator=exact_delta.numerator if exact_delta is not None else None,
+            exact_delta_denominator=exact_delta.denominator if exact_delta is not None else None,
         )
 
     if (
@@ -1618,26 +1786,24 @@ def _compare_observations(
             None,
             "current upstream evidence authority or maturity differs from the prior observation",
         )
-    if current_is_stale:
-        return make(
-            ChangeState.STALE,
-            None,
-            "current evidence exceeds the configured staleness window",
-        )
     if type(prior.value) in (int, float) and type(current.value) in (int, float):
         exact_delta = Fraction(cast(float | int, current.value)) - Fraction(
             cast(float | int, prior.value)
         )
         try:
-            delta: float | int = (
+            delta: float | int | None = (
                 exact_delta.numerator if exact_delta.denominator == 1 else float(exact_delta)
             )
         except OverflowError:
             return make(ChangeState.INCOMPARABLE, None, "numeric delta exceeds finite range")
         if isinstance(delta, float) and not math.isfinite(delta):
             return make(ChangeState.INCOMPARABLE, None, "numeric delta exceeds finite range")
+        if isinstance(delta, float) and Fraction(delta) != exact_delta:
+            delta = (
+                None  # Exact rational fields are authoritative; do not publish a rounded scalar.
+            )
         state = ChangeState.UNCHANGED if exact_delta == 0 else ChangeState.CHANGED
-        delta_text = str(delta) if isinstance(delta, int) else f"{delta:g}"
+        delta_text = str(exact_delta)
         reason = (
             f"{current.metric_id} changed by {delta_text} {current.unit}"
             if exact_delta
@@ -1688,6 +1854,9 @@ def _parse_member(raw: object) -> UniverseMember:
         available_dimensions=_text_tuple(value, "available_dimensions"),
         unavailable_dimensions=_text_tuple(value, "unavailable_dimensions"),
         research_model_status=_enum(ResearchModelStatus, value, "research_model_status"),
+        membership_evidence=tuple(
+            _parse_evidence(item) for item in _required_list(value, "membership_evidence")
+        ),
     )
 
 
@@ -1807,6 +1976,9 @@ def _validate_pointer_advance(root: Path, without_id: dict[str, object]) -> None
         raise ObservableUniverseError("current attempt time cannot move backward")
     if next_at == prior.attempted_at and prior.attempt_id != without_id["attempt_id"]:
         raise ObservableUniverseError("one attempt time cannot identify different attempts")
+    next_cutoff = _datetime(cast(str, without_id["research_cutoff_at"]), "research_cutoff_at")
+    if next_cutoff < prior.research_cutoff_at:
+        raise ObservableUniverseError("publication cannot regress the attempted research cutoff")
 
 
 def _bind_universe_identity(root: Path, universe_id: str) -> None:
