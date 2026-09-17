@@ -111,6 +111,65 @@ def test_same_cutoff_retry_preserves_successful_manifest_ancestry(tmp_path: Path
     assert manifest["previous_successful_manifest_id"] == prior.last_successful_manifest_id
 
 
+def test_bound_store_missing_current_pointer_is_corruption(tmp_path: Path) -> None:
+    state = snapshot()
+    persist_successful_universe_attempt(state, output_root=tmp_path, attempted_at=T0)
+    (tmp_path / "observable_universe_v1/current.json").unlink()
+    with pytest.raises(ObservableUniverseError, match="missing its current pointer"):
+        load_current_universe_state(tmp_path)
+    with pytest.raises(ObservableUniverseError, match="missing its current pointer"):
+        persist_successful_universe_attempt(
+            snapshot(2, cutoff=T1), output_root=tmp_path, attempted_at=T1
+        )
+
+
+def test_manifest_ancestry_uses_validated_manifest_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second = snapshot(), snapshot(2, cutoff=T1)
+    persist_successful_universe_attempt(first, output_root=tmp_path, attempted_at=T0)
+    persist_successful_universe_attempt(second, output_root=tmp_path, attempted_at=T1)
+    original = observable_module._load_single_manifest_bound_snapshot
+    calls = 0
+
+    def replace_parent(root: Path, snapshot_id: str, manifest_id: str, *, label: str):
+        nonlocal calls
+        result = original(root, snapshot_id, manifest_id, label=label)
+        calls += 1
+        if calls == 1:
+            manifest_path = root / observable_module._MANIFEST_DIRECTORY / f"{manifest_id}.json"
+            manifest_path.write_bytes(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "snapshot_id": snapshot_id,
+                        "snapshot_bytes_sha256": "0" * 64,
+                        "manifest_id": manifest_id,
+                        "previous_successful_manifest_id": None,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            )
+        return result
+
+    monkeypatch.setattr(observable_module, "_load_single_manifest_bound_snapshot", replace_parent)
+    loaded = load_current_universe_state(tmp_path)
+    assert loaded is not None and loaded.ready
+
+
+def test_research_model_status_transition_emits_membership_lifecycle_change() -> None:
+    prior = snapshot()
+    updated = replace(
+        snapshot(1, cutoff=T1),
+        members=(replace(member(), research_model_status=ResearchModelStatus.SOURCE_BOUND),),
+    )
+    changes = compare_universe_snapshots(prior, updated)
+    lifecycle = next(item for item in changes if item.dimension_id == "__membership__")
+    assert lifecycle.state is ChangeState.CHANGED
+    assert "research model status" in lifecycle.reason
+
+
 @pytest.mark.parametrize("failure_first", (False, True))
 @pytest.mark.parametrize("abort", (False, True))
 def test_reader_cannot_observe_partial_first_identity_binding(

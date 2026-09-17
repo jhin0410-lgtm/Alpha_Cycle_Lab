@@ -787,10 +787,11 @@ def compare_universe_snapshots(
     for normalized_member_id in sorted(set(prior_members) & set(current_members)):
         old = prior_members[normalized_member_id]
         new = current_members[normalized_member_id]
-        if (old.kind, old.domain_id, old.membership_evidence) == (
+        if (old.kind, old.domain_id, old.membership_evidence, old.research_model_status) == (
             new.kind,
             new.domain_id,
             new.membership_evidence,
+            new.research_model_status,
         ):
             continue
         changes.append(
@@ -806,7 +807,10 @@ def compare_universe_snapshots(
                 prior_value=f"{old.kind.value}:{old.domain_id or ''}",
                 current_value=f"{new.kind.value}:{new.domain_id or ''}",
                 delta=None,
-                reason="member kind, domain classification, or membership evidence changed",
+                reason=(
+                    "member kind, domain classification, evidence, or "
+                    "research model status changed"
+                ),
                 prior_evidence_refs=tuple(ref.reference_id for ref in old.membership_evidence),
                 current_evidence_refs=tuple(ref.reference_id for ref in new.membership_evidence),
                 comparison_stale_after_microseconds=stale_after_microseconds,
@@ -1347,6 +1351,8 @@ def _load_current_universe_state_locked(output_root: str | Path) -> CurrentUnive
     root = Path(output_root)
     pointer_path = root / _CURRENT_PATH
     if not os.path.lexists(pointer_path):
+        if os.path.lexists(root / _IDENTITY_PATH):
+            raise ObservableUniverseError("bound universe store is missing its current pointer")
         return None
     if pointer_path.is_symlink() or not pointer_path.is_file():
         raise ObservableUniverseError("current pointer path must be a regular file")
@@ -1557,7 +1563,9 @@ def _load_manifest_bound_snapshot(
         if manifest_id in seen:
             raise ObservableUniverseError("successful manifest ancestry contains a cycle")
         seen.add(manifest_id)
-        current = _load_single_manifest_bound_snapshot(root, snapshot_id, manifest_id, label=label)
+        current, manifest = _load_single_manifest_bound_snapshot(
+            root, snapshot_id, manifest_id, label=label
+        )
         if selected is None:
             selected = current
         if later is not None:
@@ -1567,7 +1575,6 @@ def _load_manifest_bound_snapshot(
                 raise ObservableUniverseError(
                     "one evidence reference_id cannot change across successful history"
                 )
-        manifest = _load_json(root / _MANIFEST_DIRECTORY / f"{manifest_id}.json", label)
         parent = _nullable_text(manifest, "previous_successful_manifest_id")
         if parent is None:
             return selected
@@ -1586,7 +1593,7 @@ def _load_single_manifest_bound_snapshot(
     manifest_id: str,
     *,
     label: str,
-) -> ObservableUniverseSnapshot:
+) -> tuple[ObservableUniverseSnapshot, dict[str, object]]:
     _sha_text(snapshot_id, "snapshot_id")
     _sha_text(manifest_id, "manifest_id")
     snapshot_path = root / _SNAPSHOT_DIRECTORY / f"{snapshot_id}.json"
@@ -1623,7 +1630,7 @@ def _load_single_manifest_bound_snapshot(
         raise ObservableUniverseError(f"cannot read {label} snapshot") from exc
     if _digest(snapshot_bytes) != manifest.get("snapshot_bytes_sha256"):
         raise ObservableUniverseError("persisted snapshot bytes do not match manifest")
-    return load_universe_snapshot(snapshot_path)
+    return load_universe_snapshot(snapshot_path), manifest
 
 
 def _compare_observations(
