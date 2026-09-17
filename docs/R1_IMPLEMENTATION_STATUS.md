@@ -27,7 +27,7 @@ source references or establish source availability from captured provider data.
 | Milestone | Implemented foundation | Still required |
 | --- | --- | --- |
 | R1-A | Universe/change/candidate store and planner handoff | Reuse in full-loop acceptance |
-| R1-B | In-memory pack/planner/revision contracts | Declarative loading, immutable version replay, governed promotion, cold-start proposal round trip, source-bound evidence |
+| R1-B | Pack/planner/revision contracts; strict JSON interchange and transactional immutable domain/version replay | Governed promotion, cold-start proposal research round, source-bound evidence |
 | R1-C | Transmission observations and horizon package | Existing authority/source adapters, dated catalysts, company mapping, valuation/expectations integration, reproducible evidence views |
 | R1-D | Challenge/hypothesis/gap contracts | Persisted challenge state, new missing-driver gaps, reasoning-model exchange and mandatory mature-round challenge |
 | R1-E | Existing decision/forecast/outcome foundations | Connect authenticated outcomes and supported error analysis to prospective pack revisions |
@@ -36,3 +36,18 @@ source references or establish source availability from captured provider data.
 External code review is waived by the user's later instruction. Local regression
 checks, CI, source authority, protected artifacts, and acceptance requirements
 remain applicable. No real user decision or trade is synthesized for testing.
+
+## Knowledge-pack repository
+
+`knowledge_pack_repository_v1` imports/exports the complete JSON pack schema and
+stores exact `(domain_id, version)` bindings in SQLite. Identical retries succeed;
+conflicting content for an installed version fails. Revisions require an existing
+same-domain parent and rationale, and historical versions remain selectable.
+Loading verifies schema, content identity, and row identity. There is no implicit
+latest-pack selection or lifecycle promotion. Lifecycle labels in stored drafts
+do not certify operational acceptance or source authority.
+
+Writer-backed tests cover four synthetic domain identities, fresh-process-style
+reopen, retained ancestors, tampering, duplicate keys, unknown fields/endpoints,
+and concurrent identical/conflicting writes. These prove generic interchange,
+not the required four-domain real-data R1-F acceptance.
