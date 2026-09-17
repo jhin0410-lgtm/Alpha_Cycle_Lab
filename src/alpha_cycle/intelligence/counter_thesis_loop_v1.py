@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Any
 
@@ -72,6 +72,15 @@ class CounterThesisPackage:
             raise ValueError("duplicate unexplained observation IDs")
         if len({item.hypothesis_id for item in self.hypotheses}) != len(self.hypotheses):
             raise ValueError("duplicate alternate hypothesis IDs")
+        observation_ids = {item.observation_id for item in self.observations}
+        if any(item.candidate_id != self.candidate_id for item in self.observations):
+            raise ValueError("counter-thesis observation candidate mismatch")
+        if any(item.observation_id not in observation_ids for item in self.hypotheses):
+            raise ValueError("hypothesis references unknown observation")
+        gap_ids = {gap.gap_id for gap in self.reopened_gaps}
+        requested_ids = {gap_id for item in self.observations for gap_id in item.reopened_gap_ids}
+        if len(gap_ids) != len(self.reopened_gaps) or gap_ids != requested_ids:
+            raise ValueError("reopened gaps must exactly match observation requests")
         expected = _sha(self.payload_without_id())
         if self.content_id and self.content_id != expected:
             raise ValueError("counter-thesis content identity mismatch")
@@ -112,7 +121,14 @@ def build_counter_thesis_package(
         plan.current_snapshot_id,
         observations,
         hypotheses,
-        tuple(known[gap_id] for gap_id in sorted(reopened_ids)),
+        tuple(
+            replace(
+                known[gap_id],
+                available_maturity=None,
+                reason="reopened by counter-thesis observation; requires revalidation",
+            )
+            for gap_id in sorted(reopened_ids)
+        ),
     )
 
 

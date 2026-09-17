@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 import alpha_cycle.intelligence.observable_universe as observable_module
+from alpha_cycle.intelligence.deep_research_integration_v1 import build_deep_research_package
 from alpha_cycle.intelligence.investor_flow_evidence import (
     FlowWindowSummary,
     InvestorFlowEvidence,
@@ -39,6 +40,7 @@ from alpha_cycle.intelligence.observable_universe import (
     publish_failed_universe_attempt,
     surface_research_candidates,
 )
+from alpha_cycle.intelligence.research_model_runtime_v1 import build_research_plan
 
 T0 = datetime(2026, 8, 1, tzinfo=UTC)
 T1 = datetime(2026, 8, 2, tzinfo=UTC)
@@ -1240,6 +1242,34 @@ def test_real_upstream_evidence_types_fit_envelope_without_authority_promotion()
     )
     assert flow_observation.evidence[0].reference_id == flow_evidence.snapshot_id
     assert macro_observation.evidence[0].reference_id == macro_evidence.evidence_id
+
+
+def test_persisted_candidate_retains_blockers_and_exact_plan_identity(tmp_path: Path) -> None:
+    prior, current = snapshot(1.0), snapshot(3.0, cutoff=T1, version="2")
+    persist_successful_universe_attempt(prior, output_root=tmp_path, attempted_at=T0)
+    persist_successful_universe_attempt(current, output_root=tmp_path, attempted_at=T1)
+    replay = load_current_universe_state(tmp_path)
+    assert replay.snapshot is not None
+    changes = compare_universe_snapshots(prior, replay.snapshot)
+    rule = CandidateRule(
+        "change",
+        "market_return",
+        (ChangeState.CHANGED,),
+        ResearchPriority.ELEVATED,
+        "research measured change",
+    )
+    candidates = surface_research_candidates(
+        replay.snapshot, changes, (rule,), prior_snapshot=prior
+    )
+    plan = build_research_plan(planner_input(candidates[0]))
+    package = build_deep_research_package(plan, cutoff=T1.isoformat())
+    assert package.plan_content_id == plan.content_id
+    assert plan.candidate_lineage is not None
+    assert plan.candidate_lineage.prior_snapshot_id == prior.snapshot_id
+    assert plan.candidate_lineage.current_snapshot_id == replay.snapshot.snapshot_id
+    assert plan.candidate_lineage.triggering_rule_policy_ids == (rule.policy_id,)
+    assert plan.blocked
+    assert all(view.status == "blocked" for view in package.horizons)
 
 
 def test_candidate_is_deterministic_explainable_and_non_authoritative() -> None:

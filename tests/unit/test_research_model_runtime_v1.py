@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
@@ -137,7 +138,8 @@ def test_planner_accepts_only_sufficient_maturity_and_keeps_refs() -> None:
     }
     plan = build_research_plan(candidate(), pack(), available_evidence=available)
     assert not any(gap.critical for gap in plan.gaps)
-    assert plan.status == "ready_for_research"
+    assert plan.status == "blocked_missing_critical_evidence"
+    assert plan.blocked
     assert plan.usable_evidence_refs == ("inventory-ref", "market-ref", "price-ref")
     assert plan.source_tasks == ("industry price source",)
 
@@ -167,3 +169,52 @@ def test_revision_proposal_preserves_parent_and_is_content_addressed() -> None:
     assert isinstance(proposal, ModelRevisionProposal)
     assert proposal.parent_content_id == pack().content_id
     assert proposal.payload()["content_id"] == proposal.content_id
+
+
+def test_wrong_domain_pack_rejected() -> None:
+    with pytest.raises(ValueError, match="domain mismatch"):
+        build_research_plan(candidate(), replace(pack(), domain_id="defense", content_id=""))
+
+
+@pytest.mark.parametrize("refs", [(), ("",), ("   ",)])
+def test_claimed_maturity_without_references_does_not_close_gap(refs: tuple[str, ...]) -> None:
+    plan = build_research_plan(
+        candidate(),
+        pack(),
+        available_evidence={
+            "inventory": (EvidenceMaturity.INDEPENDENTLY_VALIDATED_AUTHORITY, refs),
+        },
+    )
+    assert next(g for g in plan.gaps if g.driver_id == "inventory").critical
+    assert plan.status != "ready_for_research"
+
+
+def test_plan_identity_binds_full_candidate_lineage() -> None:
+    first = build_research_plan(candidate(), pack())
+    other = build_research_plan(replace(candidate(), prior_snapshot_id="f" * 64), pack())
+    assert first.content_id != other.content_id
+    assert first.payload()["candidate_lineage"] is not None
+
+
+def test_optional_driver_not_listed_as_required() -> None:
+    source = pack()
+    source = replace(
+        source, drivers=(replace(source.drivers[0], gap_kind=GapKind.OPTIONAL),), content_id=""
+    )
+    plan = build_research_plan(candidate(), source)
+    assert "price" not in plan.required_evidence
+    assert plan.gaps[0].kind is GapKind.OPTIONAL
+
+
+@pytest.mark.parametrize("lifecycle", [PackLifecycle.SUPERSEDED, PackLifecycle.DEPRECATED])
+def test_retired_model_cannot_be_ready(lifecycle: PackLifecycle) -> None:
+    plan = build_research_plan(
+        replace(candidate(), blocked_evidence=()),
+        pack(lifecycle),
+        available_evidence={
+            "price": (EvidenceMaturity.STRUCTURED_OBSERVATION, ("p",)),
+            "inventory": (EvidenceMaturity.REPLAYABLE_PROVIDER_EVIDENCE, ("i",)),
+        },
+    )
+    assert plan.blocked
+    assert plan.status != "ready_for_research"

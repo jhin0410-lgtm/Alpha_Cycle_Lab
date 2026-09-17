@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 
@@ -39,8 +40,20 @@ class TransmissionObservation:
     evidence_refs: tuple[str, ...]
     cutoff: str
     caveats: tuple[str, ...] = ()
+    horizons: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        _cutoff(self.cutoff)
+        if not isinstance(self.state, EvidenceState) or not isinstance(
+            self.maturity, EvidenceMaturity
+        ):
+            raise ValueError("observation requires typed state and maturity")
+        if len(set(self.horizons)) != len(self.horizons) or set(self.horizons) - {
+            "3m",
+            "6m",
+            "12m",
+        }:
+            raise ValueError("invalid observation horizons")
         for name, value in (
             ("observation_id", self.observation_id),
             ("driver_id", self.driver_id),
@@ -53,6 +66,13 @@ class TransmissionObservation:
                 raise ValueError(f"{name} must be non-empty")
         if not self.evidence_refs and self.state is not EvidenceState.MISSING_CRITICAL:
             raise ValueError("non-missing transmission evidence requires source references")
+        if any(not ref.strip() for ref in self.evidence_refs):
+            raise ValueError("source references must be non-empty")
+        if self.maturity is EvidenceMaturity.UNAVAILABLE and self.state in {
+            EvidenceState.SUPPORTING,
+            EvidenceState.CONTRADICTING,
+        }:
+            raise ValueError("unavailable evidence cannot support or contradict a thesis")
 
     def payload(self) -> dict[str, object]:
         return {
@@ -66,6 +86,7 @@ class TransmissionObservation:
             "evidence_refs": list(self.evidence_refs),
             "cutoff": self.cutoff,
             "caveats": list(self.caveats),
+            "horizons": list(self.horizons),
         }
 
 
@@ -105,10 +126,40 @@ class DeepResearchPackage:
     content_id: str = ""
 
     def __post_init__(self) -> None:
+        cutoff = _cutoff(self.cutoff)
+        for status, refs in (
+            (self.expectation_status, self.expectation_evidence_refs),
+            (self.technical_flow_status, self.technical_flow_evidence_refs),
+        ):
+            if status not in {"unavailable", "cited_context"}:
+                raise ValueError("unvalidated references cannot establish certified status")
+            if status == "cited_context" and not refs:
+                raise ValueError("cited context requires evidence references")
+            if any(not ref.strip() for ref in refs):
+                raise ValueError("evidence references must be non-empty")
+        if any(_cutoff(item.cutoff) > cutoff for item in self.observations):
+            raise ValueError("observation cutoff is after package cutoff")
         if len({item.observation_id for item in self.observations}) != len(self.observations):
             raise ValueError("duplicate transmission observation IDs")
-        if {item.horizon for item in self.horizons} != {"3m", "6m", "12m"}:
+        if len(self.horizons) != 3 or {item.horizon for item in self.horizons} != {
+            "3m",
+            "6m",
+            "12m",
+        }:
             raise ValueError("deep research package requires 3m, 6m, and 12m views")
+        by_id = {item.observation_id: item for item in self.observations}
+        for view in self.horizons:
+            for ids, state in (
+                (view.supporting_observation_ids, EvidenceState.SUPPORTING),
+                (view.contradicting_observation_ids, EvidenceState.CONTRADICTING),
+            ):
+                if any(
+                    ref not in by_id
+                    or by_id[ref].state is not state
+                    or view.horizon not in by_id[ref].horizons
+                    for ref in ids
+                ):
+                    raise ValueError("horizon references incompatible observation")
         expected = _sha(self.payload_without_id())
         if self.content_id and self.content_id != expected:
             raise ValueError("deep research package content identity mismatch")
@@ -146,22 +197,39 @@ def build_deep_research_package(
     technical_flow_evidence_refs: tuple[str, ...] = (),
 ) -> DeepResearchPackage:
     """Assemble a lineage-preserving package; gaps remain visible, never neutralized."""
-    supporting = tuple(
-        item.observation_id for item in observations if item.state is EvidenceState.SUPPORTING
-    )
-    contradicting = tuple(
-        item.observation_id for item in observations if item.state is EvidenceState.CONTRADICTING
-    )
+    if plan.candidate_lineage is not None:
+        if _cutoff(cutoff) != plan.candidate_lineage.evaluated_at:
+            raise ValueError("package cutoff must match candidate evaluation cutoff")
     unresolved = tuple(plan.questions) + tuple(gap.question for gap in plan.gaps)
-    status = "blocked" if plan.blocked else "evidence_incomplete"
+    status = (
+        "blocked"
+        if plan.blocked
+        or any(item.state is EvidenceState.MISSING_CRITICAL for item in observations)
+        else "evidence_incomplete"
+    )
     views = tuple(
-        HorizonView(horizon, supporting, contradicting, unresolved, catalyst_ids, status)
+        HorizonView(
+            horizon,
+            tuple(
+                item.observation_id
+                for item in observations
+                if item.state is EvidenceState.SUPPORTING and horizon in item.horizons
+            ),
+            tuple(
+                item.observation_id
+                for item in observations
+                if item.state is EvidenceState.CONTRADICTING and horizon in item.horizons
+            ),
+            unresolved,
+            (),  # Undated catalyst IDs do not establish horizon relevance.
+            status,
+        )
         for horizon in ("3m", "6m", "12m")
     )
     return DeepResearchPackage(
         plan.candidate_id,
         plan.current_snapshot_id,
-        plan.pack_content_id,
+        plan.content_id,
         cutoff,
         observations,
         expectation_status,
@@ -177,3 +245,13 @@ def _sha(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     ).hexdigest()
+
+
+def _cutoff(value: str) -> datetime:
+    """Legacy date-only cutoffs mean UTC midnight, never local end-of-day."""
+    if len(value) == 10:
+        return datetime.combine(date.fromisoformat(value), datetime.min.time(), UTC)
+    result = datetime.fromisoformat(value)
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError("cutoff must include a timezone")
+    return result.astimezone(UTC)
