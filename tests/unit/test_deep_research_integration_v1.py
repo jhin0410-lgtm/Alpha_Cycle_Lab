@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from alpha_cycle.intelligence.deep_research_integration_v1 import (
@@ -8,9 +10,74 @@ from alpha_cycle.intelligence.deep_research_integration_v1 import (
     TransmissionObservation,
     build_deep_research_package,
 )
-from alpha_cycle.intelligence.observable_universe import EvidenceMaturity
-from alpha_cycle.intelligence.research_model_runtime_v1 import build_research_plan
-from tests.unit.test_research_model_runtime_v1 import candidate, pack
+from alpha_cycle.intelligence.observable_universe import (
+    EvidenceBlocker,
+    EvidenceMaturity,
+    MemberKind,
+    PlannerCandidateInput,
+    ResearchModelStatus,
+    ResearchPriority,
+)
+from alpha_cycle.intelligence.research_model_runtime_v1 import (
+    KnowledgePack,
+    PackLifecycle,
+    ResearchDriver,
+    TransmissionHypothesis,
+    TransmissionKind,
+    build_research_plan,
+)
+
+
+def candidate() -> PlannerCandidateInput:
+    return PlannerCandidateInput(
+        "a" * 64,
+        "b" * 64,
+        "c" * 64,
+        "000660",
+        MemberKind.SECURITY,
+        "memory_semiconductor",
+        ResearchPriority.ELEVATED,
+        datetime(2026, 9, 1, tzinfo=UTC),
+        ("d" * 64,),
+        ("e" * 64,),
+        ("market changed",),
+        ("market-ref",),
+        ("price", "inventory"),
+        ("inventory",),
+        (EvidenceBlocker("inventory", "missing"),),
+        ResearchModelStatus.DRAFT,
+        86400000000,
+    )
+
+
+def pack() -> KnowledgePack:
+    return KnowledgePack(
+        "memory_semiconductor",
+        "2026.09.1",
+        PackLifecycle.SOURCE_BOUND,
+        ("demand", "inventory", "price", "company earnings"),
+        (
+            ResearchDriver(
+                "price", "contract pricing", "leading", EvidenceMaturity.STRUCTURED_OBSERVATION
+            ),
+            ResearchDriver(
+                "inventory",
+                "channel inventory",
+                "coincident",
+                EvidenceMaturity.REPLAYABLE_PROVIDER_EVIDENCE,
+            ),
+        ),
+        (
+            TransmissionHypothesis(
+                "edge-1",
+                "price",
+                "company earnings",
+                TransmissionKind.HYPOTHESIS,
+                "1-2 quarters",
+                "pricing changes transmit through ASP",
+            ),
+        ),
+    )
 
 
 def test_r1c_package_preserves_lineage_and_three_horizons() -> None:
