@@ -191,6 +191,7 @@ class KnowledgePackRepository:
             if existing is not None:
                 if existing != (pack.content_id, content):
                     raise ValueError("knowledge pack version is immutable")
+                self._load_chain(connection, pack.domain_id, pack.version)
                 return pack.content_id
             if pack.parent_version is not None:
                 parent = connection.execute(
@@ -200,13 +201,7 @@ class KnowledgePackRepository:
                 ).fetchone()
                 if parent is None:
                     raise ValueError("parent knowledge pack version is not installed")
-                parsed = load_knowledge_pack_json(parent[1])
-                if (parsed.domain_id, parsed.version, parsed.content_id) != (
-                    pack.domain_id,
-                    pack.parent_version,
-                    parent[0],
-                ):
-                    raise ValueError("parent knowledge pack identity mismatch")
+                self._load_chain(connection, pack.domain_id, pack.parent_version)
             connection.execute(
                 "INSERT INTO knowledge_packs VALUES (?, ?, ?, ?)",
                 (pack.domain_id, pack.version, pack.content_id, content),
@@ -214,14 +209,30 @@ class KnowledgePackRepository:
         return pack.content_id
 
     def load(self, domain_id: str, version: str) -> KnowledgePack:
-        with closing(sqlite3.connect(self.path)) as connection:
+        with closing(sqlite3.connect(self.path)) as connection, connection:
+            connection.execute("BEGIN")
+            return self._load_chain(connection, domain_id, version)
+
+    @staticmethod
+    def _load_chain(connection: sqlite3.Connection, domain_id: str, version: str) -> KnowledgePack:
+        seen: set[str] = set()
+        selected: KnowledgePack | None = None
+        current: str | None = version
+        while current is not None:
+            if current in seen:
+                raise ValueError("cyclic knowledge pack ancestry")
+            seen.add(current)
             row = connection.execute(
                 "SELECT content_id, payload FROM knowledge_packs WHERE domain_id=? AND version=?",
-                (domain_id, version),
+                (domain_id, current),
             ).fetchone()
-        if row is None:
-            raise ValueError("knowledge pack version not found")
-        pack = load_knowledge_pack_json(row[1])
-        if (pack.domain_id, pack.version, pack.content_id) != (domain_id, version, row[0]):
-            raise ValueError("stored knowledge pack identity mismatch")
-        return pack
+            if row is None:
+                raise ValueError("knowledge pack version or ancestor not found")
+            pack = load_knowledge_pack_json(row[1])
+            if (pack.domain_id, pack.version, pack.content_id) != (domain_id, current, row[0]):
+                raise ValueError("stored knowledge pack identity mismatch")
+            if selected is None:
+                selected = pack
+            current = pack.parent_version
+        assert selected is not None
+        return selected

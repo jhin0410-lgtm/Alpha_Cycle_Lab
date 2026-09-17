@@ -115,6 +115,30 @@ def test_duplicate_json_keys_rejected() -> None:
         load_knowledge_pack_json('{"schema_version":1,"schema_version":1}')
 
 
+def test_missing_ancestor_blocks_load_retry_and_new_child(tmp_path: Path) -> None:
+    repository = KnowledgePackRepository(tmp_path / "packs.sqlite")
+    first = pack()
+    second = replace(
+        first,
+        version="2",
+        parent_version=first.version,
+        revision_rationale="revision",
+        content_id="",
+    )
+    third = replace(second, version="3", parent_version="2", content_id="")
+    repository.publish(first)
+    repository.publish(second)
+    with sqlite3.connect(repository.path) as connection:
+        connection.execute("DELETE FROM knowledge_packs WHERE version=?", (first.version,))
+    for action in (
+        lambda: repository.load(second.domain_id, second.version),
+        lambda: repository.publish(second),
+        lambda: repository.publish(third),
+    ):
+        with pytest.raises(ValueError, match="ancestor not found"):
+            action()
+
+
 def test_unknown_transmission_endpoint_rejected() -> None:
     original = pack()
     invalid = replace(
