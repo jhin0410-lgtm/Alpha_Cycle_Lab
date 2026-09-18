@@ -14,6 +14,7 @@ from alpha_cycle.intelligence.counter_thesis_loop_v1 import CounterThesisPackage
 from alpha_cycle.intelligence.deep_research_integration_v1 import DeepResearchPackage
 from alpha_cycle.intelligence.outcome_learning_v1 import OutcomeLearningRecord
 from alpha_cycle.intelligence.persisted_research_plan_v1 import PersistedResearchPlan
+from alpha_cycle.intelligence.r1_source_authority_v1 import R1SourceAuthorityManifest
 from alpha_cycle.intelligence.research_model_runtime_v1 import ResearchPlan
 
 
@@ -153,4 +154,42 @@ def build_r1_acceptance_matrix(
     """Build the final report from independently evaluated domain results."""
     return R1AcceptanceMatrix(
         tuple(sorted(domains, key=lambda item: item.domain_id)), protected_state_unchanged
+    )
+
+
+def evaluate_domain_with_evidence_manifest(
+    *,
+    domain_id: str,
+    plan: ResearchPlan | PersistedResearchPlan,
+    research: DeepResearchPackage,
+    challenge: CounterThesisPackage | None,
+    learning: OutcomeLearningRecord | None,
+    evidence: R1SourceAuthorityManifest,
+    cold_start: bool = False,
+) -> DomainAcceptance:
+    """Evaluate acceptance using a snapshot-bound authority manifest.
+
+    The manifest is checked against the plan's snapshot identity before its
+    derived PIT and authority flags are passed into the compatibility evaluator.
+    """
+
+    actual_plan = plan.plan if isinstance(plan, PersistedResearchPlan) else plan
+    if evidence.snapshot_id != actual_plan.current_snapshot_id:
+        return DomainAcceptance(
+            domain_id,
+            AcceptanceStatus.FAILED_CONTRACT,
+            tuple((name, "contract_failed") for name in CAPABILITIES),
+            ("acceptance_evidence_snapshot_mismatch",),
+            (actual_plan.candidate_id, actual_plan.current_snapshot_id, research.content_id),
+            cold_start,
+        )
+    return evaluate_domain(
+        domain_id=domain_id,
+        plan=plan,
+        research=research,
+        challenge=challenge,
+        learning=learning,
+        real_pit_evidence=evidence.real_pit_evidence,
+        source_authority_established=evidence.source_authority_established,
+        cold_start=cold_start,
     )
