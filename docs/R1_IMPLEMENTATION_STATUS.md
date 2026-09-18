@@ -30,7 +30,7 @@ source references or establish source availability from captured provider data.
 | R1-B | Pack/planner/revision contracts; immutable version replay, cold-start exchange, persisted-observation evidence adapter | Governed promotion, real cold-start research round, additional source bindings |
 | R1-C | Transmission observations and horizon package | Existing authority/source adapters, dated catalysts, company mapping, valuation/expectations integration, reproducible evidence views |
 | R1-D | Challenge/hypothesis/gap contracts | Persisted challenge state, new missing-driver gaps, reasoning-model exchange and mandatory mature-round challenge |
-| R1-E | Existing decision/forecast/outcome foundations | Connect authenticated outcomes and supported error analysis to prospective pack revisions |
+| R1-E | Existing decision/forecast/outcome foundations plus immutable outcome-learning bridge | Persisted decision ledger integration, authenticated source adapter and supported error analysis across real research rounds |
 | R1-F | Not accepted | Real PIT acceptance for memory, policy/backlog, long-cycle CAPEX, and cold-start domains; final twelve-capability matrix |
 
 External code review is waived by the user's later instruction. Local regression
@@ -97,3 +97,25 @@ Its payload retains the full resolution details for persistence by the caller.
 This adapter uses the existing observation/replay trust boundary; it does not
 independently re-fetch provider sources or authenticate a manually asserted
 upstream authority level. Acceptance fixtures remain synthetic.
+
+## Decision memory and outcome learning
+
+`DecisionMemory` is an optional, immutable user-action record bound to candidate,
+current snapshot, research package and pack identities. The action enum includes
+`observe` for a recorded research choice without implying a trade. Rationale,
+invalidation conditions, thesis state and horizon are required; cost basis and
+portfolio advice are outside this bridge.
+
+`AuthenticatedOutcomeLink` requires registration, outcome and evaluation snapshot
+identities plus SHA-256 source evidence IDs and an explicit authenticated flag.
+The bridge validates the linkage shape but does not authenticate those IDs; the
+existing forecast/source authority system remains responsible for producing them.
+`ErrorContribution` preserves demand, supply, pricing, transmission, earnings,
+catalyst timing, expectation/valuation, missing-variable and model-insufficiency
+domains without converting one outcome into causality.
+
+`build_outcome_learning_record` retains all historical inputs and optionally emits
+a `ModelRevisionProposal` with the outcome evidence as trigger. A proposal has a
+new version, parent content identity, rationale and a small-sample risk. It never
+mutates the old decision, forecast, outcome or pack. Synthetic tests prove this
+linkage and fail-closed behavior; they do not establish authenticated live data.
