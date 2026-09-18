@@ -4,15 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 from alpha_cycle.intelligence.observable_universe import (
     EvidenceMaturity,
     ObservableUniverseSnapshot,
 )
+from alpha_cycle.live_typed_source_manifest_v2_1 import (
+    LiveTypedSourceManifest,
+    verify_live_typed_source_manifest,
+)
 
 _VALIDATION_METHODS = frozenset({"official_filing_reconciliation", "independent_provider_replay"})
+_VERIFIED_TOKEN = object()
 
 
 def _utc(value: datetime) -> datetime:
@@ -38,6 +44,7 @@ class PITReplayBinding:
     replay_manifest_id: str
     cutoff_at: datetime
     validation_method: str
+    _verification_token: object = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self.provider_id or not self.provider_snapshot_id:
@@ -46,6 +53,31 @@ class PITReplayBinding:
         object.__setattr__(self, "cutoff_at", _utc(self.cutoff_at))
         if self.validation_method not in _VALIDATION_METHODS:
             raise ValueError("unsupported PIT validation method")
+
+    @classmethod
+    def from_verified_source_manifest(
+        cls,
+        manifest: LiveTypedSourceManifest,
+        *,
+        artifact_root: str | Path,
+        provider_id: str,
+        provider_snapshot_id: str,
+    ) -> PITReplayBinding:
+        """Create a real PIT binding only after replaying persisted source bytes."""
+
+        verify_live_typed_source_manifest(manifest, artifact_root=artifact_root)
+        return cls(
+            provider_id=provider_id,
+            provider_snapshot_id=provider_snapshot_id,
+            replay_manifest_id=manifest.manifest_id,
+            cutoff_at=manifest.research_cutoff_at,
+            validation_method="independent_provider_replay",
+            _verification_token=_VERIFIED_TOKEN,
+        )
+
+    @property
+    def replay_verified(self) -> bool:
+        return self._verification_token is _VERIFIED_TOKEN
 
     def payload(self) -> dict[str, object]:
         return {
@@ -74,7 +106,7 @@ class AuthorityArtifact:
     replay_binding_id: str
 
     def __post_init__(self) -> None:
-        for value, field in (
+        for value, field_name in (
             (self.provider_id, "provider_id"),
             (self.evidence_reference_id, "evidence_reference_id"),
             (self.semantic_authority, "semantic_authority"),
@@ -82,7 +114,7 @@ class AuthorityArtifact:
             (self.period_or_window, "period_or_window"),
         ):
             if not value:
-                raise ValueError(f"{field} cannot be empty")
+                raise ValueError(f"{field_name} cannot be empty")
         _sha(self.provenance_identity, "provenance_identity")
         _sha(self.replay_binding_id, "replay_binding_id")
         object.__setattr__(self, "cutoff_at", _utc(self.cutoff_at))
@@ -136,7 +168,11 @@ class R1SourceAuthorityManifest:
 
     @property
     def real_pit_evidence(self) -> bool:
-        return bool(self.pit_binding.binding_id and self.decision_critical_reference_ids)
+        return bool(
+            self.pit_binding.replay_verified
+            and self.pit_binding.binding_id
+            and self.decision_critical_reference_ids
+        )
 
     @property
     def source_authority_established(self) -> bool:
