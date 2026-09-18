@@ -27,7 +27,7 @@ source references or establish source availability from captured provider data.
 | Milestone | Implemented foundation | Still required |
 | --- | --- | --- |
 | R1-A | Universe/change/candidate store and planner handoff | Reuse in full-loop acceptance |
-| R1-B | Pack/planner/revision contracts; strict JSON interchange, immutable version replay, request-bound cold-start proposal exchange | Governed promotion, real cold-start research round, source-bound evidence |
+| R1-B | Pack/planner/revision contracts; immutable version replay, cold-start exchange, persisted-observation evidence adapter | Governed promotion, real cold-start research round, additional source bindings |
 | R1-C | Transmission observations and horizon package | Existing authority/source adapters, dated catalysts, company mapping, valuation/expectations integration, reproducible evidence views |
 | R1-D | Challenge/hypothesis/gap contracts | Persisted challenge state, new missing-driver gaps, reasoning-model exchange and mandatory mature-round challenge |
 | R1-E | Existing decision/forecast/outcome foundations | Connect authenticated outcomes and supported error analysis to prospective pack revisions |
@@ -76,3 +76,24 @@ The module does not select or call an external model, authenticate suggested
 sources, or promote a pack. Tests use explicitly synthetic model responses and
 prove request -> response -> storage -> replay -> draft -> blocked plan, not
 operational cold-start research or R1-F real-data acceptance.
+
+## Persisted observations to research plan
+
+`build_persisted_research_plan` reads the current successful R1-A store generation
+and checks the candidate snapshot, cutoff, member scope and dimension metadata.
+Each `DriverObservationBinding` explicitly identifies the source member,
+dimension, metric, unit, basis, window, semantics and maximum source age.
+The adapter inherits observation maturity; it cannot increase upstream authority.
+
+Resolutions expose exact observation identities and `usable`, `missing`, `stale`,
+`semantic_mismatch` or `insufficient_maturity` states. Missing/stale/mismatched
+material drivers retain critical gaps. Failed current publication cannot reuse
+an older successful snapshot. Different binding policies have different content
+identities even when they select the same references.
+
+Pass the complete `PersistedResearchPlan` to `build_deep_research_package` to bind
+both the research plan and evidence-resolution policy into downstream identity.
+Its payload retains the full resolution details for persistence by the caller.
+This adapter uses the existing observation/replay trust boundary; it does not
+independently re-fetch provider sources or authenticate a manually asserted
+upstream authority level. Acceptance fixtures remain synthetic.

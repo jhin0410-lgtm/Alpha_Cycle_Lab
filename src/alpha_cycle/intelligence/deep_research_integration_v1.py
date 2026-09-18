@@ -15,6 +15,7 @@ from enum import StrEnum
 from typing import Any
 
 from alpha_cycle.intelligence.observable_universe import EvidenceMaturity
+from alpha_cycle.intelligence.persisted_research_plan_v1 import PersistedResearchPlan
 from alpha_cycle.intelligence.research_model_runtime_v1 import ResearchPlan
 
 
@@ -186,7 +187,7 @@ class DeepResearchPackage:
 
 
 def build_deep_research_package(
-    plan: ResearchPlan,
+    plan: ResearchPlan | PersistedResearchPlan,
     *,
     cutoff: str,
     observations: tuple[TransmissionObservation, ...] = (),
@@ -197,6 +198,9 @@ def build_deep_research_package(
     technical_flow_evidence_refs: tuple[str, ...] = (),
 ) -> DeepResearchPackage:
     """Assemble a lineage-preserving package; gaps remain visible, never neutralized."""
+    plan_id = plan.content_id
+    if isinstance(plan, PersistedResearchPlan):
+        plan = plan.plan
     if plan.candidate_lineage is not None:
         if _cutoff(cutoff) != plan.candidate_lineage.evaluated_at:
             raise ValueError("package cutoff must match candidate evaluation cutoff")
@@ -229,7 +233,7 @@ def build_deep_research_package(
     return DeepResearchPackage(
         plan.candidate_id,
         plan.current_snapshot_id,
-        plan.content_id,
+        plan_id,
         cutoff,
         observations,
         expectation_status,
