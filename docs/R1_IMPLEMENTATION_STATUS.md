@@ -1,6 +1,79 @@
 # Product R1 implementation checkpoint
 
-Verified baseline: `21967e408e0fcfc2b547bf6235e405dc8249bf5a`.
+Audit baseline: `578236bf` (2026-09-18). Product conclusion remains
+`PRODUCT_R1_INCOMPLETE`. The rows below are working findings, not acceptance.
+
+## Closure audit: important corrections
+
+PRs #339/#341/#343 do not establish provider authority. A hash identifies
+content; it does not authenticate its origin. `LiveTypedSourceManifest`
+explicitly promises provenance-only byte replay. A locally generated fixture
+can pass that replay. The R1 wrapper currently mistakes that for real PIT,
+accepts caller-authored authority artifacts, and still permits boolean inputs
+to accept a domain with missing capabilities. These are internal defects,
+not external provider blockers.
+
+The current process has OpenDART, BOK ECOS, KOSIS, KIS and Toss credential
+variables. Values were not inspected or printed. Their presence is not proof
+of access, but absence of credentials cannot currently be asserted. This
+checkout initially contained only `data/sample/prices.csv`; that says nothing
+about archives in other checkouts. New live checks use a separate ignored
+`data/private/r1-closure-20260918` directory.
+
+## Twelve-capability working gap matrix
+
+Paths in this table are module names under `src/alpha_cycle`; `intelligence/`
+contains the R1 modules unless otherwise noted. Runtime tests are synthetic
+unless a separate live execution receipt is recorded.
+
+| Capability | Actual code | Existing real-source path | Synthetic-only R1 proof | Dependency / missing integration | Next action |
+| --- | --- | --- | --- | --- | --- |
+| Macro/market | `fundamental_macro`, `market` | OpenDART/ECOS/Toss collectors and snapshot writers | R1 universe fixtures | Source snapshots not mapped into R1 universe | Capture and replay current official observations; bind fields |
+| Universe/change/flow | `observable_universe`, `investor_flow_evidence` | Existing market/flow artifacts | Two-snapshot change tests | Provider-to-dimension mapping | Preserve raw/adjusted basis and source availability |
+| Discovery | `surface_research_candidates` | Candidate engine can consume measured universe | Threshold candidates | Actual source-driven candidate execution | Run from persisted real observations |
+| Planning | `persisted_research_plan_v1` | Validated current universe store | Driver binding tests | Real source bindings | Feed actual candidate into persisted planner |
+| Packs | `research_model_runtime_v1`, `knowledge_pack_repository_v1`, `cold_start_research_v1` | No operational R1 live pack shown | Four-domain drafts/replay | Governed promotion and material driver evidence | Version source-bound packs and challenge them |
+| Transmission | `deep_research_integration_v1`, semiconductor transmission modules | Existing accounting/product sources | Supplied observation objects | Company exposure and actual source joins | Bind hypothesis, assumptions, horizons to observations |
+| Expectations/valuation | root `provider_forward_authority_v2_1`, `valuation_authority_v2_1` | KIS capture and OpenDART/market reconstruction | R1 only free-text availability state | Numeric authority and adapter into package | Reuse method eligibility; keep KIS consensus blocked |
+| Catalysts/technical/flow | `catalyst_horizon`, technical and flow modules | Official disclosures and market capture | R1 IDs/status strings | Dated evidence and horizon integration | Attach dated source-backed state |
+| Counter-thesis | `counter_thesis_loop_v1` | No live challenge demonstrated | Empty and supplied hypotheses | Persistent challenge and real contradiction search | Require evidence-bearing challenge in mature run |
+| Forecast | `forecast_ledger`, root `forecast_tournament_opportunity_v2_1` | Protected prospective experiment | R1 infers forecast from learning object | Registration-to-research linkage | Reuse immutable registration and later-outcome contract |
+| Synthesis/decision | research package v2.1, `DecisionMemory`, `prospective_decision_ledger_v2_1` | Existing typed research runner | Manual R1 object assembly | One integrated interface and full optional human record | Produce structured packet and append-only decision record |
+| Learning | `outcome_learning_v1` | Existing forecast scoring foundations | Caller asserts authenticated IDs | Outcome source verification, lineage and supported attribution | Reconstruct outcome; preserve unknown error components |
+
+## Existing source audit (scope, not blanket certification)
+
+| Source | Acquisition/replay code | Provenance and safe semantic scope | Remaining check |
+| --- | --- | --- | --- |
+| OpenDART statements | `providers/opendart`, `fundamental_macro`, source revalidation | Receipt/company/account/period/raw payload; consolidated reported actuals only | Bind raw account/value to R1; capture time cannot recreate old vintages |
+| OpenDART provisional | provisional earnings collector/loader | Registered receipt and normalized text; provisional company totals; archive bytes explicitly not retained | Live 2026-09-18 attempt failed on ambiguous net-income period marker; inspect parser, do not guess |
+| OpenDART product revenue | product certification verifier and parser contract | Archived ZIP, receipt, period, independent parsing and amount reconciliation | Existing narrow SK hynix source contract; do not widen to forecasts |
+| SEC company actual | SEC acquisition/decision loader; dual-official crosscheck | Pinned accession, issuer, period and company totals | Crosscheck object alone is not upstream authentication |
+| ECOS | `providers/ecos`, macro collector/revalidation | Official series/item/cycle/unit; conservative retrieval availability | `BOK_ECOS_API_KEY` needs mapping to expected ECOS credential name; current vintage only |
+| KOSIS | discovery/parameter/semiconductor history CLIs | Pinned table/item/classification/unit and revision-sensitive captures | Verify release availability and current API access; no historical vintage claim |
+| Toss/Kiwoom | market writer, consistency and adjustment modules | Quotes/candles with exact adjustment basis | Live access and cross-provider comparability; no earnings/consensus authority |
+| Investor flow | flow evidence/market-session modules | Provider-specific flow unit/window/session | Actual capture and scope check; no universal positioning claim |
+| KIS estimates | provider-forward authority replay | Captured opaque cells, explicit uncertified numeric/consensus semantics | Missing independent field/forecast/consensus authority; credential presence cannot resolve semantics |
+| Catalysts/disclosures | disclosure and catalyst evidence modules | Receipt/known-at/event windows | Integrate dates and uncertainty into R1 horizons |
+
+No item in this table has yet met the user's irreducible-external-blocker proof
+standard. Source verification, acceptance corrections and workflow integration
+remain internally actionable. Completion and C1 planning must wait for that work.
+
+### Live execution receipt, 2026-09-18
+
+`FundamentalMacroCollector` fetched 2026 half-year CFS statements and disclosures
+for 000660/005930 plus 30 days of ECOS base-rate/USD-KRW data using the existing
+official clients. `write_fundamental_macro_snapshot` persisted the response and
+`revalidate_research_snapshot` reproduced the identity:
+
+`f0ea8c0dbdb94a263e8cb8e45de985761c821b2ba47617ab70a77f02d69856a6`
+
+Capture time: `2026-09-18T09:36:26.705010+00:00`. Rows: 462 financial, 52 macro.
+Local artifact: `data/private/r1-closure-20260918/research-intelligence/20260918T093626705010Z__f0ea8c0dbdb9`.
+This is a current capture with exact byte/reconstruction evidence, not a
+reconstructed historical vintage or a claim of independent numeric authority.
+The next integration must use a research cutoff at or after this capture.
 
 PRs #317, #319, and #321 added initial B/C/D contracts. Their merged/closed
 status does **not** establish milestone acceptance. R1 remains incomplete.
