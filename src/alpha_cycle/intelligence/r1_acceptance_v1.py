@@ -24,6 +24,15 @@ class AcceptanceStatus(StrEnum):
     FAILED_CONTRACT = "failed_contract"
 
 
+class CapabilityStatus(StrEnum):
+    IMPLEMENTED = "implemented"
+    REAL_ACCEPTANCE_PASSED = "real_acceptance_passed"
+    CONTRACT_ONLY = "contract_only"
+    EVIDENCE_BLOCKED = "evidence_blocked"
+    MISSING = "missing"
+    FAILED_CONTRACT = "failed_contract"
+
+
 CAPABILITIES: tuple[str, ...] = (
     "macro_market_observatory",
     "universe_change_detection",
@@ -115,13 +124,52 @@ def evaluate_domain(
         blockers.append("real_pit_evidence_unavailable")
     if not source_authority_established:
         blockers.append("source_authority_unestablished")
-    statuses = {name: "implemented" for name in CAPABILITIES}
+    statuses: dict[str, str] = {
+        name: CapabilityStatus.CONTRACT_ONLY.value for name in CAPABILITIES
+    }
+    statuses["opportunity_discovery"] = CapabilityStatus.IMPLEMENTED.value
+    statuses["research_planning"] = CapabilityStatus.IMPLEMENTED.value
+    statuses["adaptive_knowledge_packs"] = CapabilityStatus.IMPLEMENTED.value
     statuses["company_transmission"] = (
-        "evidence_blocked" if not research.observations else "implemented"
+        CapabilityStatus.EVIDENCE_BLOCKED.value
+        if not research.observations
+        else CapabilityStatus.IMPLEMENTED.value
     )
-    statuses["counter_thesis"] = "implemented" if challenge is not None else "missing"
-    statuses["outcome_learning"] = "implemented" if learning is not None else "missing"
-    statuses["prospective_forecast"] = "implemented" if learning is not None else "contract_only"
+    statuses["counter_thesis"] = (
+        CapabilityStatus.IMPLEMENTED.value
+        if challenge is not None
+        else CapabilityStatus.MISSING.value
+    )
+    statuses["outcome_learning"] = (
+        CapabilityStatus.IMPLEMENTED.value
+        if learning is not None
+        else CapabilityStatus.MISSING.value
+    )
+    statuses["prospective_forecast"] = (
+        CapabilityStatus.IMPLEMENTED.value
+        if learning is not None
+        else CapabilityStatus.CONTRACT_ONLY.value
+    )
+    if real_pit_evidence and source_authority_established:
+        for capability in (
+            "macro_market_observatory",
+            "universe_change_detection",
+            "company_transmission",
+        ):
+            if statuses[capability] == CapabilityStatus.IMPLEMENTED.value:
+                statuses[capability] = CapabilityStatus.REAL_ACCEPTANCE_PASSED.value
+    if blockers and any(
+        item
+        in {
+            "plan_domain_mismatch",
+            "research_candidate_lineage_mismatch",
+            "research_plan_identity_mismatch",
+            "challenge_candidate_lineage_mismatch",
+            "decision_candidate_lineage_mismatch",
+        }
+        for item in blockers
+    ):
+        statuses = {name: CapabilityStatus.FAILED_CONTRACT.value for name in CAPABILITIES}
     if blockers and any(
         item
         in {
