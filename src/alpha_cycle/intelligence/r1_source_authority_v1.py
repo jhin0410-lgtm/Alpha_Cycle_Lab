@@ -113,11 +113,11 @@ def build_r1_source_authority_manifest(
     if any(reference_id not in evidence_by_id for reference_id in authenticated):
         raise ValueError("authenticated references must have snapshot definitions")
     if any(
-        evidence_by_id[reference_id].maturity is EvidenceMaturity.UNAVAILABLE
+        evidence_by_id[reference_id].maturity
+        is not EvidenceMaturity.INDEPENDENTLY_VALIDATED_AUTHORITY
         for reference_id in authenticated
-        if reference_id in evidence_by_id
     ):
-        raise ValueError("unavailable evidence cannot be authenticated")
+        raise ValueError("authenticated references require independently validated authority")
     return R1SourceAuthorityManifest(
         snapshot_id=snapshot.snapshot_id,
         research_cutoff_at=cutoff,

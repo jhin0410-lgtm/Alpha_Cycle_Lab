@@ -8,6 +8,10 @@ from test_observable_universe import snapshot
 from test_research_model_runtime_v1 import candidate, pack
 
 from alpha_cycle.intelligence.deep_research_integration_v1 import build_deep_research_package
+from alpha_cycle.intelligence.observable_universe import (
+    EvidenceMaturity,
+    ObservableUniverseSnapshot,
+)
 from alpha_cycle.intelligence.r1_acceptance_v1 import evaluate_domain_with_evidence_manifest
 from alpha_cycle.intelligence.r1_source_authority_v1 import (
     build_r1_source_authority_manifest,
@@ -16,7 +20,19 @@ from alpha_cycle.intelligence.research_model_runtime_v1 import build_research_pl
 
 
 def test_manifest_binds_exact_pit_cutoff_and_authority() -> None:
-    current = snapshot(cutoff=datetime(2026, 9, 1, tzinfo=UTC))
+    base = snapshot(cutoff=datetime(2026, 9, 1, tzinfo=UTC))
+    observation = base.observations[0]
+    authority_ref = replace(
+        observation.evidence[0], maturity=EvidenceMaturity.INDEPENDENTLY_VALIDATED_AUTHORITY
+    )
+    current = ObservableUniverseSnapshot(
+        universe_id=base.universe_id,
+        version=base.version,
+        research_cutoff_at=base.research_cutoff_at,
+        members=base.members,
+        observations=(replace(observation, evidence=(authority_ref,)),),
+        source_evidence_refs=(authority_ref.reference_id,),
+    )
     reference_id = current.source_evidence_refs[0]
     manifest = build_r1_source_authority_manifest(
         current,
@@ -42,6 +58,17 @@ def test_manifest_rejects_cutoff_or_undefined_authenticated_reference() -> None:
             current,
             research_cutoff_at=current.research_cutoff_at,
             authenticated_reference_ids=("missing",),
+        )
+
+
+def test_manifest_rejects_non_authority_maturity_as_authenticated() -> None:
+    current = snapshot()
+    with pytest.raises(ValueError, match="independently validated authority"):
+        build_r1_source_authority_manifest(
+            current,
+            research_cutoff_at=current.research_cutoff_at,
+            authenticated_reference_ids=(current.source_evidence_refs[0],),
+            authority_ids=("provider:fixture",),
         )
 
 
