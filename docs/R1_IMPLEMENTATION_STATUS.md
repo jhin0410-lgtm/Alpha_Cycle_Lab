@@ -31,7 +31,7 @@ source references or establish source availability from captured provider data.
 | R1-C | Transmission observations and horizon package | Existing authority/source adapters, dated catalysts, company mapping, valuation/expectations integration, reproducible evidence views |
 | R1-D | Challenge/hypothesis/gap contracts | Persisted challenge state, new missing-driver gaps, reasoning-model exchange and mandatory mature-round challenge |
 | R1-E | Existing decision/forecast/outcome foundations plus immutable outcome-learning bridge | Persisted decision ledger integration, authenticated source adapter and supported error analysis across real research rounds |
-| R1-F | Not accepted | Real PIT acceptance for memory, policy/backlog, long-cycle CAPEX, and cold-start domains; final twelve-capability matrix |
+| R1-F | Common four-domain/twelve-capability acceptance matrix and explicit blocker reporting | Real PIT/source-authority acceptance for memory, policy/backlog, long-cycle CAPEX, and cold-start domains |
 
 External code review is waived by the user's later instruction. Local regression
 checks, CI, source authority, protected artifacts, and acceptance requirements
