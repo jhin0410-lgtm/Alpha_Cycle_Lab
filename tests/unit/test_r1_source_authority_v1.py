@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from test_observable_universe import snapshot
@@ -15,6 +17,7 @@ from alpha_cycle.intelligence.r1_source_authority_v1 import (
     PITReplayBinding,
     build_r1_source_authority_manifest,
 )
+from alpha_cycle.live_typed_source_manifest_v2_1 import freeze_live_typed_source_manifest
 
 
 def authoritative_snapshot() -> ObservableUniverseSnapshot:
@@ -68,7 +71,7 @@ def test_manifest_requires_claim_specific_authority_and_pit_binding() -> None:
         decision_critical_reference_ids=(current.source_evidence_refs[0],),
         authority_artifacts=(authority,),
     )
-    assert manifest.real_pit_evidence
+    assert not manifest.real_pit_evidence
     assert manifest.source_authority_established
     assert len(manifest.content_id) == 64
 
@@ -104,3 +107,34 @@ def test_manifest_rejects_wrong_cutoff_or_non_authority_maturity() -> None:
             decision_critical_reference_ids=(current.source_evidence_refs[0],),
             authority_artifacts=(),
         )
+
+
+def test_verified_source_manifest_is_required_for_real_pit(tmp_path: Path) -> None:
+    source = tmp_path / "market"
+    source.mkdir()
+    (source / "data.json").write_text('{"price": 1}', encoding="utf-8")
+    (source / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "snapshot_id": "c" * 64,
+                "captured_at": "2026-08-01T00:00:00+00:00",
+                "files": ["data.json"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    replay = freeze_live_typed_source_manifest(
+        artifact_root=tmp_path,
+        source_directories={"market": source},
+        evaluation_date=datetime(2026, 8, 1, tzinfo=UTC).date(),
+        research_cutoff_at=datetime(2026, 8, 1, tzinfo=UTC),
+        frozen_at=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    verified = PITReplayBinding.from_verified_source_manifest(
+        replay,
+        artifact_root=tmp_path,
+        provider_id="market_writer",
+        provider_snapshot_id="provider-snapshot-1",
+    )
+    assert verified.replay_verified
