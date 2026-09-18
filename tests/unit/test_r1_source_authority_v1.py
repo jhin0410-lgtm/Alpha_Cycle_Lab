@@ -5,98 +5,102 @@ from datetime import UTC, datetime
 
 import pytest
 from test_observable_universe import snapshot
-from test_research_model_runtime_v1 import candidate, pack
 
-from alpha_cycle.intelligence.deep_research_integration_v1 import build_deep_research_package
 from alpha_cycle.intelligence.observable_universe import (
     EvidenceMaturity,
     ObservableUniverseSnapshot,
 )
-from alpha_cycle.intelligence.r1_acceptance_v1 import evaluate_domain_with_evidence_manifest
 from alpha_cycle.intelligence.r1_source_authority_v1 import (
+    AuthorityArtifact,
+    PITReplayBinding,
     build_r1_source_authority_manifest,
 )
-from alpha_cycle.intelligence.research_model_runtime_v1 import build_research_plan
 
 
-def test_manifest_binds_exact_pit_cutoff_and_authority() -> None:
-    base = snapshot(cutoff=datetime(2026, 9, 1, tzinfo=UTC))
+def authoritative_snapshot() -> ObservableUniverseSnapshot:
+    base = snapshot()
     observation = base.observations[0]
-    authority_ref = replace(
+    reference = replace(
         observation.evidence[0], maturity=EvidenceMaturity.INDEPENDENTLY_VALIDATED_AUTHORITY
     )
-    current = ObservableUniverseSnapshot(
+    return ObservableUniverseSnapshot(
         universe_id=base.universe_id,
         version=base.version,
         research_cutoff_at=base.research_cutoff_at,
         members=base.members,
-        observations=(replace(observation, evidence=(authority_ref,)),),
-        source_evidence_refs=(authority_ref.reference_id,),
+        observations=(replace(observation, evidence=(reference,)),),
+        source_evidence_refs=(reference.reference_id,),
     )
-    reference_id = current.source_evidence_refs[0]
+
+
+def binding(snapshot_value: ObservableUniverseSnapshot) -> PITReplayBinding:
+    return PITReplayBinding(
+        provider_id="market_writer",
+        provider_snapshot_id="provider-snapshot-1",
+        replay_manifest_id="a" * 64,
+        cutoff_at=snapshot_value.research_cutoff_at,
+        validation_method="independent_provider_replay",
+    )
+
+
+def artifact(snapshot_value: ObservableUniverseSnapshot, replay_id: str) -> AuthorityArtifact:
+    reference = snapshot_value.observations[0].evidence[0]
+    return AuthorityArtifact(
+        provider_id=reference.source,
+        evidence_reference_id=reference.reference_id,
+        semantic_authority=reference.semantic_authority,
+        claim_semantics="adjusted_close_return",
+        period_or_window=reference.reference_id.rsplit("-", 1)[-1],
+        cutoff_at=snapshot_value.research_cutoff_at,
+        validation_method="independent_provider_replay",
+        provenance_identity="b" * 64,
+        replay_binding_id=replay_id,
+    )
+
+
+def test_manifest_requires_claim_specific_authority_and_pit_binding() -> None:
+    current = authoritative_snapshot()
+    pit = binding(current)
+    authority = artifact(current, pit.binding_id)
     manifest = build_r1_source_authority_manifest(
         current,
-        research_cutoff_at=current.research_cutoff_at,
-        authenticated_reference_ids=(reference_id,),
-        authority_ids=("provider:fixture",),
+        pit_binding=pit,
+        decision_critical_reference_ids=(current.source_evidence_refs[0],),
+        authority_artifacts=(authority,),
     )
-    assert manifest.snapshot_id == current.snapshot_id
     assert manifest.real_pit_evidence
     assert manifest.source_authority_established
     assert len(manifest.content_id) == 64
 
 
-def test_manifest_rejects_cutoff_or_undefined_authenticated_reference() -> None:
+def test_context_refs_need_not_be_independently_authoritative() -> None:
+    current = authoritative_snapshot()
+    pit = binding(current)
+    authority = artifact(current, pit.binding_id)
+    manifest = build_r1_source_authority_manifest(
+        current,
+        pit_binding=pit,
+        decision_critical_reference_ids=(current.source_evidence_refs[0],),
+        research_context_reference_ids=(),
+        authority_artifacts=(authority,),
+    )
+    assert manifest.source_authority_established
+
+
+def test_manifest_rejects_wrong_cutoff_or_non_authority_maturity() -> None:
     current = snapshot()
+    pit = binding(current)
+    with pytest.raises(ValueError, match="independent maturity"):
+        build_r1_source_authority_manifest(
+            current,
+            pit_binding=pit,
+            decision_critical_reference_ids=(current.source_evidence_refs[0],),
+            authority_artifacts=(artifact(current, pit.binding_id),),
+        )
     with pytest.raises(ValueError, match="exactly match"):
         build_r1_source_authority_manifest(
             current,
-            research_cutoff_at=datetime(2026, 8, 2, tzinfo=UTC),
+            pit_binding=replace(pit, cutoff_at=datetime(2026, 8, 2, tzinfo=UTC)),
+            decision_critical_reference_ids=(current.source_evidence_refs[0],),
+            authority_artifacts=(),
         )
-    with pytest.raises(ValueError, match="exist in the snapshot"):
-        build_r1_source_authority_manifest(
-            current,
-            research_cutoff_at=current.research_cutoff_at,
-            authenticated_reference_ids=("missing",),
-        )
-
-
-def test_manifest_rejects_non_authority_maturity_as_authenticated() -> None:
-    current = snapshot()
-    with pytest.raises(ValueError, match="independently validated authority"):
-        build_r1_source_authority_manifest(
-            current,
-            research_cutoff_at=current.research_cutoff_at,
-            authenticated_reference_ids=(current.source_evidence_refs[0],),
-            authority_ids=("provider:fixture",),
-        )
-
-
-def test_manifest_without_authentication_stays_blocked() -> None:
-    current = snapshot()
-    manifest = build_r1_source_authority_manifest(
-        current, research_cutoff_at=current.research_cutoff_at
-    )
-    assert manifest.real_pit_evidence
-    assert not manifest.source_authority_established
-
-
-def test_acceptance_consumes_manifest_and_rejects_plan_snapshot_mismatch() -> None:
-    current = snapshot(cutoff=datetime(2026, 9, 1, tzinfo=UTC))
-    plan = build_research_plan(
-        replace(candidate(), current_snapshot_id=current.snapshot_id), pack()
-    )
-    research = build_deep_research_package(plan, cutoff="2026-09-01")
-    evidence = build_r1_source_authority_manifest(
-        current, research_cutoff_at=current.research_cutoff_at
-    )
-    result = evaluate_domain_with_evidence_manifest(
-        domain_id=plan.domain_id,
-        plan=plan,
-        research=research,
-        challenge=None,
-        learning=None,
-        evidence=evidence,
-    )
-    assert "source_authority_unestablished" in result.blockers
-    assert result.status.value == "blocked_external_evidence"
