@@ -27,7 +27,7 @@ source references or establish source availability from captured provider data.
 | Milestone | Implemented foundation | Still required |
 | --- | --- | --- |
 | R1-A | Universe/change/candidate store and planner handoff | Reuse in full-loop acceptance |
-| R1-B | Pack/planner/revision contracts; strict JSON interchange and transactional immutable domain/version replay | Governed promotion, cold-start proposal research round, source-bound evidence |
+| R1-B | Pack/planner/revision contracts; strict JSON interchange, immutable version replay, request-bound cold-start proposal exchange | Governed promotion, real cold-start research round, source-bound evidence |
 | R1-C | Transmission observations and horizon package | Existing authority/source adapters, dated catalysts, company mapping, valuation/expectations integration, reproducible evidence views |
 | R1-D | Challenge/hypothesis/gap contracts | Persisted challenge state, new missing-driver gaps, reasoning-model exchange and mandatory mature-round challenge |
 | R1-E | Existing decision/forecast/outcome foundations | Connect authenticated outcomes and supported error analysis to prospective pack revisions |
@@ -51,3 +51,28 @@ Writer-backed tests cover four synthetic domain identities, fresh-process-style
 reopen, retained ancestors, tampering, duplicate keys, unknown fields/endpoints,
 and concurrent identical/conflicting writes. These prove generic interchange,
 not the required four-domain real-data R1-F acceptance.
+
+## Cold-start reasoning-model exchange
+
+`ColdStartRequest(candidate, proposed_version, requested_at).message()` exports
+the full candidate-bound request for a reasoning model or connector. A response
+contains `request_id`, `proposed_at`, `model_label`, and a declarative
+`knowledge_pack` without `content_id`; the runtime calculates the hash.
+
+`ColdStartProposalRepository.record(request, response_json)` checks the exact
+request/domain/version, timestamps, source acquisition plans, material drivers,
+transmissions and counter-thesis. Only root DRAFT packs are accepted. Established
+models must use revision ancestry. AI-supplied evidence clearance is rejected;
+required material-driver gaps are opened even when the response omits them.
+
+`replay(request, proposal_id)` reconstructs the proposal from the stored original
+response and verifies both request and resulting draft. The caller then selects
+the draft for `KnowledgePackRepository.publish` and `build_research_plan`.
+Recording proposals and installing versions are distinct operations: a failed
+version installation retains the original proposal for examination and never
+overwrites the installed version.
+
+The module does not select or call an external model, authenticate suggested
+sources, or promote a pack. Tests use explicitly synthetic model responses and
+prove request -> response -> storage -> replay -> draft -> blocked plan, not
+operational cold-start research or R1-F real-data acceptance.
