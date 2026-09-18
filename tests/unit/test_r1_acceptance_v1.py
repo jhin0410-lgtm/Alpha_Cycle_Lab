@@ -11,6 +11,7 @@ from alpha_cycle.intelligence.deep_research_integration_v1 import build_deep_res
 from alpha_cycle.intelligence.r1_acceptance_v1 import (
     CAPABILITIES,
     AcceptanceStatus,
+    CapabilityStatus,
     build_r1_acceptance_matrix,
     evaluate_domain,
 )
@@ -47,6 +48,11 @@ def test_four_domains_share_one_matrix_and_external_blocks_are_explicit() -> Non
     assert all(
         tuple(name for name, _ in item.capability_status) == CAPABILITIES for item in results
     )
+    first_statuses = dict(results[0].capability_status)
+    assert first_statuses["research_planning"] == CapabilityStatus.IMPLEMENTED.value
+    assert first_statuses["expectations_valuation"] == CapabilityStatus.CONTRACT_ONLY.value
+    assert first_statuses["macro_market_observatory"] == CapabilityStatus.CONTRACT_ONLY.value
+    assert len(set(first_statuses.values())) > 1
 
 
 def test_mismatched_domain_is_contract_failure() -> None:
