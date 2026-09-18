@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -199,6 +199,17 @@ def build_persisted_research_plan(
                 EvidenceMaturity.UNAVAILABLE if observation is None else observation.maturity,
             )
         )
-    return PersistedResearchPlan(
-        build_research_plan(candidate, pack, available_evidence=available), tuple(resolved)
+    plan = build_research_plan(candidate, pack, available_evidence=available)
+    # Trigger references remain in candidate_lineage for explanation. Only
+    # references passing this binding policy are usable driver evidence.
+    usable_refs = tuple(
+        sorted(
+            {
+                ref
+                for resolution in resolved
+                if resolution.status == "usable"
+                for ref in resolution.evidence_refs
+            }
+        )
     )
+    return PersistedResearchPlan(replace(plan, usable_evidence_refs=usable_refs), tuple(resolved))

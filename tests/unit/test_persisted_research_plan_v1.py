@@ -107,6 +107,7 @@ def test_semantic_mismatch_cannot_close_driver_gap(tmp_path: Path, field: str) -
     )
     assert result.resolutions[0].status == "semantic_mismatch"
     assert result.plan.gaps[0].critical
+    assert not result.plan.usable_evidence_refs
 
 
 def test_stale_source_does_not_gain_freshness_from_snapshot(tmp_path: Path) -> None:
@@ -116,6 +117,9 @@ def test_stale_source_does_not_gain_freshness_from_snapshot(tmp_path: Path) -> N
     )
     assert result.resolutions[0].status == "stale"
     assert result.plan.gaps[0].critical
+    assert not result.plan.usable_evidence_refs
+    assert result.plan.candidate_lineage is not None
+    assert result.plan.candidate_lineage.evidence_refs
 
 
 def test_failed_new_attempt_cannot_reuse_last_success_as_current(tmp_path: Path) -> None:
@@ -164,6 +168,7 @@ def test_insufficient_maturity_stays_visible(tmp_path: Path) -> None:
         candidate, pack, universe_store=tmp_path, bindings=(binding(),)
     )
     assert result.resolutions[0].status == "insufficient_maturity"
+    assert not result.plan.usable_evidence_refs
     assert result.plan.gaps[0].critical
     assert result.plan.gaps[0].available_maturity is EvidenceMaturity.REPLAYABLE_PROVIDER_EVIDENCE
 
