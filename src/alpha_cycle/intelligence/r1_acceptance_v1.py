@@ -20,6 +20,7 @@ from alpha_cycle.intelligence.research_model_runtime_v1 import ResearchPlan
 
 class AcceptanceStatus(StrEnum):
     ACCEPTED = "accepted"
+    INCOMPLETE = "incomplete"
     BLOCKED_EXTERNAL_EVIDENCE = "blocked_external_evidence"
     FAILED_CONTRACT = "failed_contract"
 
@@ -61,6 +62,8 @@ class DomainAcceptance:
     def __post_init__(self) -> None:
         if tuple(name for name, _ in self.capability_status) != CAPABILITIES:
             raise ValueError("acceptance must report every R1 capability exactly once")
+        for _, status in self.capability_status:
+            CapabilityStatus(status)
         if len(set(self.lineage_ids)) != len(self.lineage_ids) or any(
             not item for item in self.lineage_ids
         ):
@@ -68,7 +71,17 @@ class DomainAcceptance:
 
     @property
     def product_ready(self) -> bool:
-        return self.status is AcceptanceStatus.ACCEPTED
+        return (
+            self.status is AcceptanceStatus.ACCEPTED
+            and not self.blockers
+            and bool(self.lineage_ids)
+            and all(status in {
+                CapabilityStatus.IMPLEMENTED.value,
+                CapabilityStatus.REAL_ACCEPTANCE_PASSED.value,
+            } for _, status in self.capability_status)
+            and any(status == CapabilityStatus.REAL_ACCEPTANCE_PASSED.value
+                    for _, status in self.capability_status)
+        )
 
 
 @dataclass(frozen=True)
@@ -104,6 +117,12 @@ def evaluate_domain(
     source_authority_established: bool,
     cold_start: bool = False,
 ) -> DomainAcceptance:
+    """Report supplied runtime artifacts, never certify origin from caller flags.
+
+    The legacy booleans are retained as assertions for diagnostics only. This
+    entry point has no source-specific authentication or forecast-replay input,
+    so it cannot establish full real Product R1 acceptance.
+    """
     actual_plan = plan.plan if isinstance(plan, PersistedResearchPlan) else plan
     blockers: list[str] = []
     if actual_plan.domain_id != domain_id:
@@ -112,80 +131,86 @@ def evaluate_domain(
         blockers.append("research_candidate_lineage_mismatch")
     if research.plan_content_id != plan.content_id:
         blockers.append("research_plan_identity_mismatch")
+    if research.current_snapshot_id != actual_plan.current_snapshot_id:
+        blockers.append("research_snapshot_lineage_mismatch")
     if challenge is not None and challenge.candidate_id != actual_plan.candidate_id:
         blockers.append("challenge_candidate_lineage_mismatch")
+    if challenge is not None and challenge.current_snapshot_id != actual_plan.current_snapshot_id:
+        blockers.append("challenge_snapshot_lineage_mismatch")
     if (
         learning is not None
         and learning.decision is not None
         and learning.decision.candidate_id != actual_plan.candidate_id
     ):
         blockers.append("decision_candidate_lineage_mismatch")
-    if not real_pit_evidence:
-        blockers.append("real_pit_evidence_unavailable")
-    if not source_authority_established:
-        blockers.append("source_authority_unestablished")
+    blockers.append(
+        "real_pit_assertion_unverified" if real_pit_evidence else "real_pit_evidence_unavailable"
+    )
+    blockers.append(
+        "source_authority_assertion_unverified" if source_authority_established
+        else "source_authority_unestablished"
+    )
     statuses: dict[str, str] = {
-        name: CapabilityStatus.CONTRACT_ONLY.value for name in CAPABILITIES
+        name: CapabilityStatus.MISSING.value for name in CAPABILITIES
     }
-    statuses["opportunity_discovery"] = CapabilityStatus.IMPLEMENTED.value
+    statuses["opportunity_discovery"] = (
+        CapabilityStatus.IMPLEMENTED.value if actual_plan.candidate_lineage is not None
+        else CapabilityStatus.CONTRACT_ONLY.value
+    )
     statuses["research_planning"] = CapabilityStatus.IMPLEMENTED.value
-    statuses["adaptive_knowledge_packs"] = CapabilityStatus.IMPLEMENTED.value
+    statuses["adaptive_knowledge_packs"] = (
+        CapabilityStatus.CONTRACT_ONLY.value if actual_plan.pack_content_id is not None
+        else CapabilityStatus.MISSING.value
+    )
     statuses["company_transmission"] = (
         CapabilityStatus.EVIDENCE_BLOCKED.value
         if not research.observations
-        else CapabilityStatus.IMPLEMENTED.value
+        else CapabilityStatus.CONTRACT_ONLY.value
     )
     statuses["counter_thesis"] = (
-        CapabilityStatus.IMPLEMENTED.value
+        CapabilityStatus.IMPLEMENTED.value if challenge is not None
+        and challenge.observations and challenge.hypotheses and challenge.reopened_gaps
+        and all(item.evidence_refs for item in challenge.observations)
+        and all(item.tests and item.evidence_refs for item in challenge.hypotheses)
+        else CapabilityStatus.CONTRACT_ONLY.value
         if challenge is not None
         else CapabilityStatus.MISSING.value
     )
     statuses["outcome_learning"] = (
-        CapabilityStatus.IMPLEMENTED.value
+        CapabilityStatus.CONTRACT_ONLY.value
         if learning is not None
         else CapabilityStatus.MISSING.value
     )
-    statuses["prospective_forecast"] = (
-        CapabilityStatus.IMPLEMENTED.value
-        if learning is not None
-        else CapabilityStatus.CONTRACT_ONLY.value
+    statuses["expectations_valuation"] = CapabilityStatus.EVIDENCE_BLOCKED.value
+    statuses["catalyst_technical_flow"] = CapabilityStatus.EVIDENCE_BLOCKED.value
+    statuses["research_synthesis_decision"] = CapabilityStatus.CONTRACT_ONLY.value
+    # A learning-link ID is not an immutable prospective registration receipt.
+    # A pack hash is not pack replay; observations alone do not prove transmission.
+    contract_failed = any(
+        item
+        in {
+            "plan_domain_mismatch",
+            "research_candidate_lineage_mismatch",
+            "research_plan_identity_mismatch",
+            "research_snapshot_lineage_mismatch",
+            "challenge_candidate_lineage_mismatch",
+            "challenge_snapshot_lineage_mismatch",
+            "decision_candidate_lineage_mismatch",
+        }
+        for item in blockers
     )
-    if real_pit_evidence and source_authority_established:
-        for capability in (
-            "macro_market_observatory",
-            "universe_change_detection",
-            "company_transmission",
-        ):
-            if statuses[capability] == CapabilityStatus.IMPLEMENTED.value:
-                statuses[capability] = CapabilityStatus.REAL_ACCEPTANCE_PASSED.value
-    if blockers and any(
-        item
-        in {
-            "plan_domain_mismatch",
-            "research_candidate_lineage_mismatch",
-            "research_plan_identity_mismatch",
-            "challenge_candidate_lineage_mismatch",
-            "decision_candidate_lineage_mismatch",
-        }
-        for item in blockers
-    ):
+    if contract_failed:
         statuses = {name: CapabilityStatus.FAILED_CONTRACT.value for name in CAPABILITIES}
-    if blockers and any(
-        item
-        in {
-            "plan_domain_mismatch",
-            "research_candidate_lineage_mismatch",
-            "research_plan_identity_mismatch",
-            "challenge_candidate_lineage_mismatch",
-            "decision_candidate_lineage_mismatch",
-        }
-        for item in blockers
-    ):
         status = AcceptanceStatus.FAILED_CONTRACT
-    elif blockers:
-        status = AcceptanceStatus.BLOCKED_EXTERNAL_EVIDENCE
     else:
-        status = AcceptanceStatus.ACCEPTED
+        status = AcceptanceStatus.INCOMPLETE
+        blockers.extend(
+            f"{name}:{value}" for name, value in statuses.items()
+            if value not in {CapabilityStatus.IMPLEMENTED.value,
+                             CapabilityStatus.REAL_ACCEPTANCE_PASSED.value}
+        )
+        if actual_plan.blocked:
+            blockers.append("research_plan_has_open_critical_gaps")
     return DomainAcceptance(
         domain_id,
         status,
@@ -226,7 +251,7 @@ def evaluate_domain_with_evidence_manifest(
         return DomainAcceptance(
             domain_id,
             AcceptanceStatus.FAILED_CONTRACT,
-            tuple((name, "contract_failed") for name in CAPABILITIES),
+            tuple((name, CapabilityStatus.FAILED_CONTRACT.value) for name in CAPABILITIES),
             ("acceptance_evidence_snapshot_mismatch",),
             (actual_plan.candidate_id, actual_plan.current_snapshot_id, research.content_id),
             cold_start,

@@ -173,6 +173,22 @@ upstream authority level. Acceptance fixtures remain synthetic.
 
 ## OpenDART observation-to-plan interface (partial R1 integration)
 
+### Acceptance correction
+
+The legacy `evaluate_domain` boolean inputs are assertions, not proof. They no
+longer promote synthetic research to real acceptance. Its available inputs do not
+include source-specific authentication, immutable forecast replay, or independently
+verified outcome evidence, so this compatibility evaluator reports `incomplete`.
+It does not describe internally missing integrations as external provider blockers.
+Missing capability execution remains `missing`; a pack ID or outcome-link object
+alone remains `contract_only`. An empty counter-thesis object does not prove a
+contradiction search. Research and challenge snapshots must match the plan, not
+only its candidate ID. Product readiness also requires complete capability states,
+no blockers, and real acceptance evidence rather than a top-level accepted label.
+
+This fixes the false-positive completion path; provider-specific acceptance and
+the actual missing execution integrations remain required work.
+
 `python -m alpha_cycle.r1_research_cli` now connects an existing research-intelligence
 writer directory to the persistent observable universe, change detection, research
 candidates and partial research packets. This is not the complete R1 walkthrough.
