@@ -171,6 +171,44 @@ This adapter uses the existing observation/replay trust boundary; it does not
 independently re-fetch provider sources or authenticate a manually asserted
 upstream authority level. Acceptance fixtures remain synthetic.
 
+## OpenDART observation-to-plan interface (partial R1 integration)
+
+`python -m alpha_cycle.r1_research_cli` now connects an existing research-intelligence
+writer directory to the persistent observable universe, change detection, research
+candidates and partial research packets. This is not the complete R1 walkthrough.
+
+Example (replace the source and output paths with your local artifact directories):
+
+```powershell
+python -m alpha_cycle.r1_research_cli --research-source SOURCE --store STORE --universe-id reported-actuals --version 1 --field '000660|memory_semiconductor|reported_revenue|CIS:ifrs-full_Revenue#34|2026-06-30|H1'
+```
+
+Repeat `--field` for additional securities or dimensions. Each selection binds
+security, domain, dimension, exact account, period end and fiscal period. The CLI
+uses consolidated statements; the Python adapter also supports explicit OFS.
+Raw OpenDART company/request/account/receipt/value/currency reconstruction must
+match the normalized field. `thstrm_amount` remains explicitly distinct from
+`thstrm_add_amount`; no annualization or cumulative-period inference is performed.
+Availability is no earlier than acquisition, not backdated to filing publication.
+
+The first successful run establishes a baseline. Later measured changes produce
+research candidates and JSON packets on stdout. With `--pack PACK.json`, exact
+dimension-to-driver matches are resolved through the persisted observation store;
+other material driver gaps remain open. Without a pack, the planner exposes model
+acquisition requirements. No empty contradiction search, forecast or human decision
+is invented. A failed new attempt hides the previous successful state; recovery
+establishes a new explicit baseline, without a comparison across the failed gap.
+
+On 2026-09-18 the CLI replayed the real OpenDART/ECOS receipt recorded above and
+stored two reported-revenue observations for 000660 and 005930. Baseline snapshot:
+`32640de5b530b08539749ac9b4043f4135df0d35298998a641d0da0b488cdff0`.
+It emitted no change/candidate because this was the first acquisition baseline.
+Changed-value and planning tests use explicitly synthetic writer fixtures; they
+are not real-data change-detection or independent-authority acceptance.
+
+The adapter supplies replayable evidence only. Replay cannot authenticate remote
+origin, and this interface never sets Product R1 accepted or independent authority.
+
 ## Decision memory and outcome learning
 
 `DecisionMemory` is an optional, immutable user-action record bound to candidate,
