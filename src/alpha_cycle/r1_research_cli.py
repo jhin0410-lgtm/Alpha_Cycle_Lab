@@ -12,6 +12,7 @@ from alpha_cycle.intelligence.knowledge_pack_repository_v1 import load_knowledge
 from alpha_cycle.intelligence.observable_universe import (
     CandidateRule,
     ChangeState,
+    ConcurrentUniverseUpdateError,
     ResearchPriority,
     compare_universe_snapshots,
     load_current_universe_state,
@@ -27,6 +28,11 @@ from alpha_cycle.intelligence.persisted_research_plan_v1 import (
 from alpha_cycle.intelligence.r1_opendart_observations import (
     OpenDartFieldSelection,
     load_opendart_universe,
+)
+from alpha_cycle.intelligence.r1_opendart_reconciliation import (
+    persist_opendart_reconciliation,
+    require_reconciled_universe,
+    verify_opendart_reported_fields,
 )
 from alpha_cycle.intelligence.research_model_runtime_v1 import build_research_plan
 
@@ -54,16 +60,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--field", required=True, action="append", type=_selection)
     parser.add_argument("--pack", type=Path)
     parser.add_argument("--maximum-age-days", type=int, default=365)
+    parser.add_argument("--verify-official", action="store_true")
     args = parser.parse_args(argv)
     now = datetime.now(UTC)
+    previous = load_current_universe_state(args.store)
+    expected_attempt = None if previous is None else previous.attempt_id
     try:
         if args.maximum_age_days < 0:
             raise ValueError("maximum age must be nonnegative")
-        previous = load_current_universe_state(args.store)
+        reconciliation: dict[str, object] | None = None
+        if args.verify_official:
+            verified = verify_opendart_reported_fields(
+                args.research_source, selections=tuple(args.field)
+            )
+            receipt = persist_opendart_reconciliation(verified, args.store / "reconciliations")
+            reconciliation = {
+                "content_id": verified.content_id,
+                "artifact": str(receipt.resolve()),
+                "fresh_official_verification": verified.fresh_official_verification,
+                "verified_at": verified.verified_at.isoformat(),
+                "claims": json.loads(verified.claims_json),
+            }
+            # Fresh verification must not be backdated to the original capture.
+            now = datetime.now(UTC)
         current = load_opendart_universe(
             args.research_source, selections=tuple(args.field),
             universe_id=args.universe_id, version=args.version, cutoff_at=now,
         )
+        if args.verify_official:
+            require_reconciled_universe(verified, current)
         pack = None if args.pack is None else load_knowledge_pack_json(
             args.pack.read_text(encoding="utf-8")
         )
@@ -87,7 +112,14 @@ def main(argv: list[str] | None = None) -> int:
         candidates = () if prior is None else surface_research_candidates(
             current, changes, rules, prior_snapshot=prior
         )
-        persist_successful_universe_attempt(current, output_root=args.store, attempted_at=now)
+        persist_successful_universe_attempt(
+            current, output_root=args.store, attempted_at=now,
+            expected_current_attempt_id=expected_attempt,
+        )
+        published = load_current_universe_state(args.store)
+        if published is None or published.snapshot != current:
+            raise ConcurrentUniverseUpdateError("current generation changed after publication")
+        expected_attempt = published.attempt_id
         rounds: list[dict[str, object]] = []
         for candidate in candidates:
             handoff = planner_input(candidate)
@@ -131,16 +163,25 @@ def main(argv: list[str] | None = None) -> int:
             "observations": [item.payload() for item in current.observations],
             "changes": [item.payload() for item in changes],
             "rounds": rounds,
+            "official_field_reconciliation": reconciliation,
             "provider_origin_authenticated": False,
             "independent_authority_established": False,
             "product_r1_accepted": False,
         }, ensure_ascii=False, sort_keys=True))
         return 0
+    except ConcurrentUniverseUpdateError as exc:
+        print(json.dumps({"status": "superseded", "error": str(exc)}, ensure_ascii=False))
+        return 2
     except (OSError, ValueError) as exc:
-        publish_failed_universe_attempt(
-            output_root=args.store, attempted_at=datetime.now(UTC),
-            research_cutoff_at=now, failure_code="r1_source_or_planning_failure",
-        )
+        try:
+            publish_failed_universe_attempt(
+                output_root=args.store, attempted_at=datetime.now(UTC),
+                research_cutoff_at=now, failure_code="r1_source_or_planning_failure",
+                expected_current_attempt_id=expected_attempt,
+            )
+        except ConcurrentUniverseUpdateError:
+            print(json.dumps({"status": "superseded", "error": str(exc)}, ensure_ascii=False))
+            return 2
         print(json.dumps({"status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 2
 
