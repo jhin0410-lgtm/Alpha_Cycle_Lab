@@ -225,6 +225,42 @@ are not real-data change-detection or independent-authority acceptance.
 The adapter supplies replayable evidence only. Replay cannot authenticate remote
 origin, and this interface never sets Product R1 accepted or independent authority.
 
+### Fresh official reported-field reconciliation
+
+Add `--verify-official` to the R1 research command to independently retrieve the
+selected company/filing fields from OpenDART's pinned HTTPS origin. Redirects are
+rejected. Issuer, account, report period, CFS/OFS, receipt, currency and exact raw
+`thstrm_amount` must agree with the archived selection. The verification timestamp
+is generated after acquisition and cannot be backdated to the original capture.
+Different receipts or restated values fail closed rather than altering history.
+
+The CLI stores a content-addressed raw reconciliation receipt under
+`STORE/reconciliations` and reports its exact field coverage. A live result can
+validate only those observed fields at or after its own verification time. Copied,
+manually constructed, altered or offline-replayed results do not inherit live
+verification. Offline replay reconstructs the agreement, not remote origin.
+This is not authority for forecasts, consensus, valuation assumptions or the
+whole source archive. Existing observation maturity is not silently promoted.
+
+The consumer binds exact observation/reference IDs; source changes during the
+network call or between verification and publication are rejected. Publication
+also compares the expected current attempt while holding the existing writer
+lock. A competing success or failure causes `superseded`, preserving the winner
+instead of comparing against a stale baseline or overwriting newer failure state.
+
+Real execution on 2026-09-22 re-fetched the two 2026 H1 reported-revenue fields:
+000660 receipt `20260814003509`, 005930 receipt `20260814003699`. Verification at
+`2026-09-22T04:49:47.536662+00:00` produced reconciliation ID
+`1d64b058ad8ca39be71c770dd4d93fd44bdeba01b0d81a7dee9461ef94e7ae2e`
+and universe snapshot
+`b5b8b68cbc1fb38333f95466bf556ec0dc91dcfa9efbb0d1c9ed56ef5708d3aa`.
+Both fields were unchanged against the actual September 18 baseline. No research
+candidate, forecast, human decision or Product R1 acceptance was fabricated.
+
+Remaining internal work includes consuming this narrow verification in R1's
+claim-specific authority/acceptance path and authenticated outcome learning.
+The legacy generic manifest still must not substitute for this verification.
+
 ## Decision memory and outcome learning
 
 `DecisionMemory` is an optional, immutable user-action record bound to candidate,

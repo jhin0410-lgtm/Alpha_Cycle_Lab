@@ -39,6 +39,17 @@ class ObservableUniverseError(ValueError):
     """Raised when an observable-universe contract fails closed."""
 
 
+class ConcurrentUniverseUpdateError(ObservableUniverseError):
+    """The current attempt changed since the caller selected its research baseline."""
+
+
+class _ExpectedAttemptOmitted:
+    """Distinguish legacy unchecked publication from an explicitly absent parent."""
+
+
+_EXPECTED_ATTEMPT_OMITTED = _ExpectedAttemptOmitted()
+
+
 class MemberKind(StrEnum):
     SECURITY = "security"
     ASSET = "asset"
@@ -1142,8 +1153,13 @@ def persist_successful_universe_attempt(
     *,
     output_root: str | Path,
     attempted_at: datetime,
+    expected_current_attempt_id: str | None | _ExpectedAttemptOmitted = _EXPECTED_ATTEMPT_OMITTED,
 ) -> Path:
-    """Persist immutable payload+manifest and atomically select this successful attempt."""
+    """Persist a successful attempt, optionally comparing its current parent under lock.
+
+    Omission preserves unchecked publication. Explicit ``None`` requires an empty
+    store; a string requires that exact current attempt, whether successful or failed.
+    """
 
     root = Path(output_root)
     attempted = _utc(attempted_at)
@@ -1156,7 +1172,8 @@ def persist_successful_universe_attempt(
     with _exclusive_universe_write_lock(root):
         _recover_interrupted_identity_binding(root)
         return _persist_successful_universe_attempt_locked(
-            root, snapshot, attempted, snapshot_path, snapshot_bytes
+            root, snapshot, attempted, snapshot_path, snapshot_bytes,
+            expected_current_attempt_id=expected_current_attempt_id,
         )
 
 
@@ -1166,8 +1183,11 @@ def _persist_successful_universe_attempt_locked(
     attempted: datetime,
     snapshot_path: Path,
     snapshot_bytes: bytes,
+    *,
+    expected_current_attempt_id: str | None | _ExpectedAttemptOmitted = _EXPECTED_ATTEMPT_OMITTED,
 ) -> Path:
     prior_current = _load_current_universe_state_locked(root)
+    _require_expected_current_attempt(prior_current, expected_current_attempt_id)
     parent_manifest_id = (
         prior_current.last_successful_manifest_id if prior_current is not None else None
     )
@@ -1294,8 +1314,13 @@ def publish_failed_universe_attempt(
     attempted_at: datetime,
     failure_code: str,
     research_cutoff_at: datetime | None = None,
+    expected_current_attempt_id: str | None | _ExpectedAttemptOmitted = _EXPECTED_ATTEMPT_OMITTED,
 ) -> Path:
-    """Record the failed target cutoff; omission conservatively uses the attempt time."""
+    """Record a failure, optionally requiring an exact parent attempt under lock.
+
+    An omitted research cutoff uses the attempt time. An omitted expected parent
+    preserves unchecked publication; explicit ``None`` requires no current attempt.
+    """
 
     _text(failure_code, "failure_code")
     attempted = _utc(attempted_at)
@@ -1314,6 +1339,7 @@ def publish_failed_universe_attempt(
     with _exclusive_universe_write_lock(root):
         _recover_interrupted_identity_binding(root)
         prior_current = _load_current_universe_state_locked(root)
+        _require_expected_current_attempt(prior_current, expected_current_attempt_id)
         pointer_without_id = {
             "schema_version": SCHEMA_VERSION,
             "status": AttemptStatus.FAILED.value,
@@ -1337,6 +1363,20 @@ def publish_failed_universe_attempt(
         }
         _publish_pointer(root, pointer_without_id)
         return root / _CURRENT_PATH
+
+
+def _require_expected_current_attempt(
+    current: CurrentUniverseState | None,
+    expected: str | None | _ExpectedAttemptOmitted,
+) -> None:
+    """Compare only while the publication lock protects the selected current state."""
+    if isinstance(expected, _ExpectedAttemptOmitted):
+        return
+    if expected is not None:
+        _sha_text(expected, "expected_current_attempt_id")
+    actual = None if current is None else current.attempt_id
+    if actual != expected:
+        raise ConcurrentUniverseUpdateError("current universe attempt changed before publication")
 
 
 def load_current_universe_state(output_root: str | Path) -> CurrentUniverseState | None:
@@ -1908,7 +1948,7 @@ def _exclusive_universe_write_lock(root: Path) -> Iterator[None]:
     _mkdir_durable(root)
     lock_path = root / _WRITE_LOCK_PATH
     if not os.path.lexists(lock_path):
-        _write_immutable(lock_path, b"observable-universe-write-lock-v1\n")
+        _initialize_universe_write_lock(lock_path)
     lock_fd = _open_regular_file(lock_path, "observable-universe write lock", os.O_RDWR)
     deadline = time.monotonic() + _LOCK_WAIT_SECONDS
     acquired = False
@@ -1933,6 +1973,32 @@ def _exclusive_universe_write_lock(root: Path) -> Iterator[None]:
                 _release_universe_write_lock(lock_fd)
     finally:
         os.close(lock_fd)
+
+
+def _initialize_universe_write_lock(path: Path) -> None:
+    """Publish a complete sentinel without reading a competing holder's locked bytes.
+
+    A Windows byte-range lock can deny reading even for another initializer. The
+    sentinel is synchronization infrastructure, not a content-addressed artifact;
+    its regular-file identity is checked when opened for lock acquisition.
+    """
+    _mkdir_durable(path.parent)
+    fd, name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(b"observable-universe-write-lock-v1\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            # Another creator may already hold the Windows byte-range lock.
+            # Opening below checks identity without reading or replacing it.
+            pass
+        _fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _try_acquire_universe_write_lock(fd: int) -> None:

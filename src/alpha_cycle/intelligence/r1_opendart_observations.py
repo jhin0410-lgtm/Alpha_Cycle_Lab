@@ -15,6 +15,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from alpha_cycle.intelligence.fundamental_macro import FundamentalMacroSnapshot
 from alpha_cycle.intelligence.observable_universe import (
     EvidenceMaturity,
     EvidenceReference,
@@ -65,13 +66,27 @@ def load_opendart_universe(
     semantic label: a half-year filing does not make this field a six-month sum.
     The earliest allowed cutoff is capture time, even for an older filing.
     """
+    if len({(s.security_id, s.dimension_id) for s in selections}) != len(selections):
+        raise ValueError("duplicate security/dimension selection")
+    source = revalidate_research_snapshot(research_directory)
+    return _build_opendart_universe(
+        source, selections=selections, universe_id=universe_id, version=version,
+        cutoff_at=cutoff_at,
+    )
+
+
+def _build_opendart_universe(
+    source: FundamentalMacroSnapshot,
+    *, selections: tuple[OpenDartFieldSelection, ...], universe_id: str,
+    version: str, cutoff_at: datetime,
+) -> ObservableUniverseSnapshot:
+    """Build from one revalidated generation, without reopening mutable paths."""
     if cutoff_at.tzinfo is None or cutoff_at.utcoffset() is None:
         raise ValueError("research cutoff must be timezone-aware")
     if not selections:
         raise ValueError("at least one field selection is required")
     if len({(s.security_id, s.dimension_id) for s in selections}) != len(selections):
         raise ValueError("duplicate security/dimension selection")
-    source = revalidate_research_snapshot(research_directory)
     if source.captured_at > cutoff_at:
         raise ValueError("source capture exceeds research cutoff")
     observations: list[MeasuredObservation] = []
