@@ -216,6 +216,14 @@ Fail closed when a downstream conclusion explicitly requires stronger authority 
 
 A lower-maturity evidence item may still exist in the package as research context if its semantics are labeled honestly.
 
+R1's OpenDART integration applies this boundary through a separate claim-specific
+manifest derived from fresh official field reconciliation. It covers exact
+reported fields at the verification cutoff, not an entire provider or research
+package. Stored receipt replay proves reproducible agreement but does not restore
+live remote-origin authentication. Generic byte-replay manifests and caller-authored
+authority labels cannot issue real PIT/source authority; lower-maturity contextual
+references may coexist without being promoted.
+
 ## 7. Change Detection and Opportunity Discovery
 
 ACL must do more than answer questions the user already asks.

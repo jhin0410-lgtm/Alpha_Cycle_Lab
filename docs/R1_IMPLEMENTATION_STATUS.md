@@ -8,10 +8,11 @@ Audit baseline: `578236bf` (2026-09-18). Product conclusion remains
 PRs #339/#341/#343 do not establish provider authority. A hash identifies
 content; it does not authenticate its origin. `LiveTypedSourceManifest`
 explicitly promises provenance-only byte replay. A locally generated fixture
-can pass that replay. The R1 wrapper currently mistakes that for real PIT,
-accepts caller-authored authority artifacts, and still permits boolean inputs
-to accept a domain with missing capabilities. These are internal defects,
-not external provider blockers.
+can pass that replay. The original R1 wrapper mistook that for real PIT,
+accepted caller-authored authority artifacts, and permitted boolean inputs
+to accept a domain with missing capabilities. The boolean completion defect
+was corrected in #349. The claim-specific consumption correction is described
+below. These were internal defects, not external provider blockers.
 
 The current process has OpenDART, BOK ECOS, KOSIS, KIS and Toss credential
 variables. Values were not inspected or printed. Their presence is not proof
@@ -222,8 +223,10 @@ It emitted no change/candidate because this was the first acquisition baseline.
 Changed-value and planning tests use explicitly synthetic writer fixtures; they
 are not real-data change-detection or independent-authority acceptance.
 
-The adapter supplies replayable evidence only. Replay cannot authenticate remote
-origin, and this interface never sets Product R1 accepted or independent authority.
+The observation adapter supplies replayable evidence only. Replay cannot
+authenticate remote origin. Optional live verification now supplies a separate
+claim-specific authority manifest; it never sets Product R1 accepted or blanket
+provider authority.
 
 ### Fresh official reported-field reconciliation
 
@@ -257,9 +260,40 @@ and universe snapshot
 Both fields were unchanged against the actual September 18 baseline. No research
 candidate, forecast, human decision or Product R1 acceptance was fabricated.
 
-Remaining internal work includes consuming this narrow verification in R1's
-claim-specific authority/acceptance path and authenticated outcome learning.
-The legacy generic manifest still must not substitute for this verification.
+### Claim-specific authority consumption
+
+`build_opendart_source_authority_manifest` consumes the live-issued reconciliation
+and the exact current observations. It derives provider/account/security/basis/
+field/period/provenance scope from the verified claims rather than caller-supplied
+authority strings. It can cover selected decision-critical references in a broader
+universe while explicitly retaining lower-maturity research context. Original
+observation maturity remains unchanged.
+
+Generic source-byte replay and caller-authored authority artifacts establish no
+remote origin, even with an official-looking provider label. Process-local live
+issuance is bound to object identity and content: copying, reconstruction, nested
+replacement or alteration cannot carry it to a different object or claim. Offline
+receipt replay remains reproducible agreement, not reauthentication of origin.
+
+The acceptance consumer requires matching snapshot/cutoff/candidate lineage and
+decision-critical references used by the plan. A valid narrow manifest removes
+only the corresponding source assertion blockers. Missing forecasts, learning,
+counter-thesis and other capability executions still prevent product acceptance.
+
+Real execution on 2026-09-23 verified the same two reported fields at
+`2026-09-23T10:16:01.957195+00:00`. Reconciliation:
+`e661333131d28d14e4508faf6e208d13e0f7221aa20ccd8bb00eb29934c3e7f8`.
+Universe: `7e18fef9a7ce9d6b783d7c999d589afa20f704c58c1844e57eb16fabf3daf6f6`.
+The CLI emitted claim manifest
+`8f24b3a712624ba4223232fbf2e027be11d1c647e0029d92211bf94ada89ea65`
+with real PIT/source authority for only those fields. Blanket provider authority
+and Product R1 acceptance remained false. An earlier mismatched universe argument
+failed closed; this successful run explicitly recovered a new baseline rather
+than comparing across the failed attempt. No candidate or human decision was
+fabricated.
+
+Remaining internal work includes durable research-session replay, prospective
+registration linkage, source-authenticated outcomes and full R1-E/R1-F execution.
 
 ## Decision memory and outcome learning
 
