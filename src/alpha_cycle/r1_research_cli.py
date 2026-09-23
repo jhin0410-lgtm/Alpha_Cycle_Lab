@@ -34,6 +34,7 @@ from alpha_cycle.intelligence.r1_opendart_reconciliation import (
     require_reconciled_universe,
     verify_opendart_reported_fields,
 )
+from alpha_cycle.intelligence.r1_source_authority_v1 import build_opendart_source_authority_manifest
 from alpha_cycle.intelligence.research_model_runtime_v1 import build_research_plan
 
 
@@ -69,6 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.maximum_age_days < 0:
             raise ValueError("maximum age must be nonnegative")
         reconciliation: dict[str, object] | None = None
+        claim_authority: dict[str, object] | None = None
         if args.verify_official:
             verified = verify_opendart_reported_fields(
                 args.research_source, selections=tuple(args.field)
@@ -89,6 +91,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.verify_official:
             require_reconciled_universe(verified, current)
+            authority = build_opendart_source_authority_manifest(
+                current, verified,
+                decision_critical_reference_ids=tuple(sorted(current.source_evidence_refs)),
+            )
+            claim_authority = {
+                "manifest_id": authority.content_id,
+                "manifest": authority.payload(),
+                "real_pit_evidence": authority.real_pit_evidence,
+                "source_authority_established": authority.source_authority_established,
+                "scope": "selected_reported_fields_only_at_current_cutoff",
+            }
         pack = None if args.pack is None else load_knowledge_pack_json(
             args.pack.read_text(encoding="utf-8")
         )
@@ -164,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
             "changes": [item.payload() for item in changes],
             "rounds": rounds,
             "official_field_reconciliation": reconciliation,
+            "claim_authority": claim_authority,
             "provider_origin_authenticated": False,
             "independent_authority_established": False,
             "product_r1_accepted": False,

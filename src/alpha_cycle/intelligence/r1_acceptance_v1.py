@@ -7,11 +7,11 @@ source-authority acceptance claim by itself.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 
 from alpha_cycle.intelligence.counter_thesis_loop_v1 import CounterThesisPackage
-from alpha_cycle.intelligence.deep_research_integration_v1 import DeepResearchPackage
+from alpha_cycle.intelligence.deep_research_integration_v1 import DeepResearchPackage, _cutoff
 from alpha_cycle.intelligence.outcome_learning_v1 import OutcomeLearningRecord
 from alpha_cycle.intelligence.persisted_research_plan_v1 import PersistedResearchPlan
 from alpha_cycle.intelligence.r1_source_authority_v1 import R1SourceAuthorityManifest
@@ -242,21 +242,35 @@ def evaluate_domain_with_evidence_manifest(
 ) -> DomainAcceptance:
     """Evaluate acceptance using a snapshot-bound authority manifest.
 
-    The manifest is checked against the plan's snapshot identity before its
-    derived PIT and authority flags are passed into the compatibility evaluator.
+    Only issued, content-bound provider verification can remove source blockers.
+    It does not establish missing research/tournament/learning execution.
     """
 
     actual_plan = plan.plan if isinstance(plan, PersistedResearchPlan) else plan
+    mismatch = None
     if evidence.snapshot_id != actual_plan.current_snapshot_id:
+        mismatch = "acceptance_evidence_snapshot_mismatch"
+    elif evidence.research_cutoff_at != _cutoff(research.cutoff):
+        mismatch = "acceptance_evidence_cutoff_mismatch"
+    elif not set(evidence.decision_critical_reference_ids) <= set(
+        actual_plan.usable_evidence_refs
+    ):
+        mismatch = "acceptance_authority_not_used_by_plan"
+    elif actual_plan.candidate_lineage is not None and (
+        actual_plan.candidate_lineage.evaluated_at != evidence.research_cutoff_at
+        or actual_plan.candidate_lineage.current_snapshot_id != evidence.snapshot_id
+    ):
+        mismatch = "acceptance_candidate_evidence_mismatch"
+    if mismatch is not None:
         return DomainAcceptance(
             domain_id,
             AcceptanceStatus.FAILED_CONTRACT,
             tuple((name, CapabilityStatus.FAILED_CONTRACT.value) for name in CAPABILITIES),
-            ("acceptance_evidence_snapshot_mismatch",),
+            (mismatch,),
             (actual_plan.candidate_id, actual_plan.current_snapshot_id, research.content_id),
             cold_start,
         )
-    return evaluate_domain(
+    result = evaluate_domain(
         domain_id=domain_id,
         plan=plan,
         research=research,
@@ -265,4 +279,14 @@ def evaluate_domain_with_evidence_manifest(
         real_pit_evidence=evidence.real_pit_evidence,
         source_authority_established=evidence.source_authority_established,
         cold_start=cold_start,
+    )
+    cleared = set()
+    if evidence.real_pit_evidence:
+        cleared.add("real_pit_assertion_unverified")
+    if evidence.source_authority_established:
+        cleared.add("source_authority_assertion_unverified")
+    return replace(
+        result,
+        blockers=tuple(item for item in result.blockers if item not in cleared),
+        lineage_ids=(*result.lineage_ids, evidence.content_id),
     )
