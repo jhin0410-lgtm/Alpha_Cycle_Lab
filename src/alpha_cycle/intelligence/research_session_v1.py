@@ -34,6 +34,7 @@ from alpha_cycle.intelligence.observable_universe import (
     _exclusive_universe_write_lock,
     _load_current_universe_state_locked,
     _load_manifest_bound_snapshot,
+    _open_regular_file,
     _read_regular_file,
     _sha,
     _sha_text,
@@ -652,25 +653,35 @@ def persist_research_session(
                 ) as temp:
                     staged = Path(temp) / destination.name
                     _write_immutable(staged, session.content)
-                    fd = os.open(staged, os.O_RDONLY | os.O_NOFOLLOW)
-                    try:
-                        repository_fd = int(repository.name)
+                    with _child_directory(repository, Path(temp).name) as stage_directory:
+                        fd = _open_regular_file(
+                            stage_directory / destination.name,
+                            "staged session",
+                            os.O_RDONLY | os.O_NONBLOCK,
+                        )
                         try:
-                            _link_open_file_at(fd, repository_fd, destination.name)
-                        except FileExistsError:
+                            with os.fdopen(os.dup(fd), "rb") as handle:
+                                if handle.read() != session.content:
+                                    raise ValueError("staged session changed before publication")
+                            repository_fd = int(repository.name)
+                            try:
+                                _link_open_file_at(fd, repository_fd, destination.name)
+                            except FileExistsError:
+                                if (
+                                    _read_regular_file(repository / destination.name, "session")
+                                    != session.content
+                                ):
+                                    raise ValueError(
+                                        "immutable session publication conflict"
+                                    ) from None
+                            os.fsync(repository_fd)
                             if (
                                 _read_regular_file(repository / destination.name, "session")
                                 != session.content
                             ):
-                                raise ValueError("immutable session publication conflict") from None
-                        os.fsync(repository_fd)
-                        if (
-                            _read_regular_file(repository / destination.name, "session")
-                            != session.content
-                        ):
-                            raise ValueError("session publication verification failed")
-                    finally:
-                        os.close(fd)
+                                raise ValueError("session publication verification failed")
+                        finally:
+                            os.close(fd)
             return session, destination
 
 

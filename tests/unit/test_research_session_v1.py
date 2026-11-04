@@ -448,3 +448,28 @@ def test_semantic_input_mix_is_recomputed_not_trusted(tmp_path, component):
         payload["schema_version"] = True
     with pytest.raises(ValueError):
         sessions.replay_research_session(forged(path, payload))
+
+
+@pytest.mark.parametrize("replacement", ["bytes", "symlink", "fifo"])
+def test_stage_substitution_is_rejected_before_final_link(tmp_path, monkeypatch, replacement):
+    options = setup(tmp_path)
+    original = sessions._write_immutable
+
+    def substituted(path, content):
+        original(path, content)
+        if "acl-session-write-" not in str(path):
+            return
+        path.unlink()
+        if replacement == "bytes":
+            path.write_bytes(b"substituted bytes")
+        elif replacement == "symlink":
+            alternate = tmp_path / "external.json"
+            alternate.write_bytes(content)
+            path.symlink_to(alternate)
+        else:
+            os.mkfifo(path)
+
+    monkeypatch.setattr(sessions, "_write_immutable", substituted)
+    with pytest.raises((ValueError, OSError)):
+        sessions.persist_research_session(**options)
+    assert not list((tmp_path / sessions.REPOSITORY).glob("*.json"))
