@@ -316,3 +316,18 @@ a `ModelRevisionProposal` with the outcome evidence as trigger. A proposal has a
 new version, parent content identity, rationale and a small-sample risk. It never
 mutates the old decision, forecast, outcome or pack. Synthetic tests prove this
 linkage and fail-closed behavior; they do not establish authenticated live data.
+
+## Exact research-session persistence (#354)
+
+The R1 CLI now persists the complete computation in an immutable, self-contained
+session before reporting success. Exact manifest ancestry, rule and pack payloads,
+binding policies, candidate/request identities, plans and research packages can be
+reconstructed without the live store or its current pointer. Explicit baseline or
+unchanged research is separate from measured discovery. Recovery retains the
+failed predecessor and does not compare across a failed gap.
+
+See [R1_RESEARCH_SESSIONS_V1.md](R1_RESEARCH_SESSIONS_V1.md) for the v1 schema,
+commands, POSIX publication requirements, trust boundaries and archive-size limits.
+The earlier stdout-only limitation is superseded by this implementation; financial
+source acceptance and forecast/outcome linkage remain separate unfinished work.
+Stored source receipts do not reissue live authority. Product R1 remains incomplete.

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from alpha_cycle.intelligence.observable_universe import (
     EvidenceMaturity,
+    ObservableUniverseSnapshot,
     PlannerCandidateInput,
     load_current_universe_state,
 )
@@ -127,6 +128,21 @@ def build_persisted_research_plan(
     snapshot = current.snapshot
     if not current.ready or snapshot is None:
         raise ValueError("current universe attempt is not ready")
+    return resolve_research_plan(candidate, pack, snapshot=snapshot, bindings=bindings)
+
+
+def resolve_research_plan(
+    candidate: PlannerCandidateInput,
+    pack: KnowledgePack,
+    *,
+    snapshot: ObservableUniverseSnapshot,
+    bindings: tuple[DriverObservationBinding, ...],
+) -> PersistedResearchPlan:
+    """Pure resolution against an already validated, explicitly selected snapshot.
+
+    Historical callers must validate manifest ancestry first. This function does
+    not read a current pointer or grant source authority.
+    """
     if snapshot.snapshot_id != candidate.current_snapshot_id:
         raise ValueError("candidate does not reference current universe snapshot")
     if snapshot.research_cutoff_at != candidate.evaluated_at:
