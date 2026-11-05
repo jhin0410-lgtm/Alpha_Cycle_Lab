@@ -1942,10 +1942,13 @@ def _parse_evidence(raw: object) -> EvidenceReference:
 
 
 @contextmanager
-def _exclusive_universe_write_lock(root: Path) -> Iterator[None]:
+def _exclusive_universe_write_lock(
+    root: Path, *, directory_prepared: bool = False,
+) -> Iterator[None]:
     """Hold an automatically released cross-process advisory lock through commit."""
 
-    _mkdir_durable(root)
+    if not directory_prepared:
+        _mkdir_durable(root)
     lock_path = root / _WRITE_LOCK_PATH
     if not os.path.lexists(lock_path):
         _initialize_universe_write_lock(lock_path)
