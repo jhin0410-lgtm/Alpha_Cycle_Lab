@@ -76,8 +76,10 @@ unknown fields in interpreted contracts, and noncanonical outputs are rejected.
 
 The snapshot loader validates every archived manifest's content address, snapshot
 byte digest, typed snapshot identity, complete parent ancestry and chronology.
-The comparison prior must match the current manifest's exact parent and preceding
-successful attempt. Recovery after a failed attempt retains the failed predecessor
+The preceding attempt may select either the exact parent manifest or the
+current manifest reused by an identical-snapshot retry. Reuse requires the exact
+same snapshot identity and does not manufacture a comparison across equal cutoffs.
+The comparison generation remains bound to the preceding successful attempt. Recovery after a failed attempt retains the failed predecessor
 and historical success chain, but deliberately makes no comparison across the gap.
 Omitting a predecessor cannot disguise a measured change as an initial baseline.
 
@@ -124,3 +126,14 @@ current-pointer independence, latest failure, recovery, concurrent publication,
 partial writes, symlink substitution, and non-escalation of recorded authority.
 No fresh financial-data acceptance, forecast accuracy, investment conclusion,
 portfolio action, or protected 2026Q3 outcome scoring is claimed by this milestone.
+
+## Review follow-up: attempt reuse and input failures
+
+Attempt predecessors and manifest parents are distinct: the universe writer
+reuses a manifest on a same-snapshot retry, including recovery using the last
+successful snapshot. Sessions preserve that attempt while producing no invented
+change. Other snapshot/parent mixtures remain rejected. Descriptor-link RuntimeError
+is translated only at that publication call into a handled failure; unrelated
+RuntimeError exceptions are not suppressed. Replay opens with O_NONBLOCK, validates
+the opened regular-file descriptor, and checks path identity after reading, so FIFO
+inputs and last-moment substitution cannot block the reader.

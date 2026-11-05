@@ -192,9 +192,14 @@ def _validate_predecessor(payload: dict[str, Any], parent: str | None) -> None:
     current_time = datetime.fromisoformat(payload["current_generation"]["attempted_at"])
     if attempted.tzinfo is None or cutoff.tzinfo is None or not cutoff <= attempted <= current_time:
         raise ValueError("preceding attempt chronology mismatch")
-    if (previous["last_successful_snapshot_id"] is None) != (parent is None):
+    current = payload["current_generation"]
+    reused = previous["last_successful_manifest_id"] == current["manifest_id"]
+    expected_manifest = current["manifest_id"] if reused else parent
+    if reused and previous["last_successful_snapshot_id"] != current["snapshot_id"]:
+        raise ValueError("reused manifest selects a different snapshot")
+    if (previous["last_successful_snapshot_id"] is None) != (expected_manifest is None):
         raise ValueError("preceding snapshot and manifest must be present together")
-    if previous["last_successful_manifest_id"] != parent:
+    if previous["last_successful_manifest_id"] != expected_manifest:
         raise ValueError("preceding attempt does not bind the parent manifest")
     if previous["status"] == "succeeded":
         generation = {
@@ -403,12 +408,15 @@ def _reconstruct(payload: dict[str, Any]) -> dict[str, object]:
             raise ValueError("session cutoff regresses its preceding attempt")
         prior = None if prior_gen is None else _load_generation(root, prior_gen)
         previous = payload["preceding_attempt"]
-        if parent is not None:
-            manifest = _json((root / _MANIFEST_DIRECTORY / f"{parent}.json").read_bytes())
+        previous_manifest = None if previous is None else previous["last_successful_manifest_id"]
+        if previous_manifest is not None:
+            manifest = _json(
+                (root / _MANIFEST_DIRECTORY / f"{previous_manifest}.json").read_bytes()
+            )
             parent_snapshot = _load_manifest_bound_snapshot(
                 root,
                 manifest["snapshot_id"],
-                parent,
+                previous_manifest,
                 label="preceding session",
             )
             if previous["last_successful_snapshot_id"] != parent_snapshot.snapshot_id:
@@ -421,10 +429,13 @@ def _reconstruct(payload: dict[str, Any]) -> dict[str, object]:
         # A fresh baseline after failure is explicitly not a comparison with the
         # last historical success. Its older ancestors are retained, not used.
         rules = _rules(payload["candidate_rules"])
-        changes = () if prior is None else compare_universe_snapshots(prior, current)
+        compare = prior is not None and prior.snapshot_id != current.snapshot_id
+        changes = (
+            compare_universe_snapshots(prior, current) if compare and prior is not None else ()
+        )
         candidates = (
             ()
-            if prior is None
+            if not compare or prior is None
             else surface_research_candidates(
                 current,
                 changes,
@@ -666,6 +677,10 @@ def persist_research_session(
                             repository_fd = int(repository.name)
                             try:
                                 _link_open_file_at(fd, repository_fd, destination.name)
+                            except RuntimeError as exc:
+                                raise ValueError(
+                                    "descriptor-link session publication failed"
+                                ) from exc
                             except FileExistsError:
                                 if (
                                     _read_regular_file(repository / destination.name, "session")
@@ -688,7 +703,18 @@ def persist_research_session(
 def replay_research_session(path: Path) -> ResearchSession:
     """Replay from one portable bundle without a store, network or live issuance."""
     with _directory(path.parent) as directory:
-        content = _read_regular_file(directory / path.name, "research session")
+        fd = _open_regular_file(
+            directory / path.name,
+            "research session",
+            os.O_RDONLY | os.O_NONBLOCK,
+        )
+        with os.fdopen(fd, "rb") as handle:
+            content = handle.read()
+            if not os.path.samestat(
+                os.fstat(handle.fileno()),
+                os.stat(directory / path.name, follow_symlinks=False),
+            ):
+                raise ValueError("research session changed while reading")
     payload = _json(content)
     if path.name != f"{payload.get('session_id')}.json":
         raise ValueError("session filename differs from content identity")

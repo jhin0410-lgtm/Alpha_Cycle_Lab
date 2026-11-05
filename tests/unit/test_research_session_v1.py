@@ -473,3 +473,82 @@ def test_stage_substitution_is_rejected_before_final_link(tmp_path, monkeypatch,
     with pytest.raises((ValueError, OSError)):
         sessions.persist_research_session(**options)
     assert not list((tmp_path / sessions.REPOSITORY).glob("*.json"))
+
+
+@pytest.mark.parametrize("recovery", [False, True])
+def test_p2_same_snapshot_attempt_reuses_manifest(tmp_path, recovery):
+    options = setup(tmp_path)
+    previous = options["current"]
+    if recovery:
+        publish_failed_universe_attempt(
+            output_root=tmp_path, attempted_at=T2, research_cutoff_at=T1, failure_code="offline"
+        )
+        previous = load_current_universe_state(tmp_path)
+    from datetime import timedelta
+
+    persist_successful_universe_attempt(
+        options["current"].snapshot, output_root=tmp_path, attempted_at=T2 + timedelta(hours=1)
+    )
+    options.update(
+        current=load_current_universe_state(tmp_path),
+        preceding_attempt=previous,
+        comparison_prior=None if recovery else previous,
+    )
+    session, path = sessions.persist_research_session(**options)
+    assert session.payload["changes"] == []
+    assert sessions.replay_research_session(path).content == session.content
+
+
+def test_p2_link_runtime_failure_records_failed_attempt(tmp_path, capsys, monkeypatch):
+    def unavailable(*_):
+        raise RuntimeError("descriptor-stable pointer linking is unavailable")
+
+    monkeypatch.setattr(sessions, "_link_open_file_at", unavailable)
+    store = tmp_path / "store"
+    assert cli.main(args(source(tmp_path / "source"), store)) == 2
+    assert json.loads(capsys.readouterr().out)["status"] == "failed"
+    assert not load_current_universe_state(store).ready
+
+
+@pytest.mark.parametrize("replacement", [False, True])
+def test_p2_fifo_replay_is_nonblocking(tmp_path, replacement):
+    path = tmp_path / ("a" * 64 + ".json")
+    if replacement:
+        path.write_text("{}")
+        path.unlink()
+    os.mkfifo(path)
+    result = subprocess.run(
+        [
+            os.sys.executable,
+            "-m",
+            "alpha_cycle.intelligence.research_session_v1",
+            "--session",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=2,
+    )
+    assert result.returncode == 2
+
+
+def test_p2_fifo_substitution_immediately_before_open(tmp_path):
+    path = tmp_path / ("b" * 64 + ".json")
+    path.write_text("{}")
+    program = """
+import os, sys
+from pathlib import Path
+import alpha_cycle.intelligence.research_session_v1 as sessions
+path = Path(sys.argv[1])
+original = sessions._open_regular_file
+def replaced(selected, label, flags):
+    path.unlink()
+    os.mkfifo(path)
+    return original(selected, label, flags)
+sessions._open_regular_file = replaced
+raise SystemExit(sessions.main(['--session', str(path)]))
+"""
+    result = subprocess.run(
+        [os.sys.executable, "-c", program, str(path)], capture_output=True, text=True, timeout=2
+    )
+    assert result.returncode == 2
